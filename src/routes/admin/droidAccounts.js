@@ -606,6 +606,8 @@ router.post('/droid-accounts/:id/refresh-token', authenticateAdmin, async (req, 
 router.post('/droid-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
   const { model = 'claude-sonnet-4-20250514' } = req.body
+  const { sanitizeTestPrompt } = require('../../utils/testPayloadHelper')
+  const prompt = sanitizeTestPrompt(req.body?.prompt)
   const startTime = Date.now()
 
   try {
@@ -634,7 +636,7 @@ router.post('/droid-accounts/:accountId/test', authenticateAdmin, async (req, re
     const payload = {
       model,
       max_tokens: 100,
-      messages: [{ role: 'user', content: 'Say "Hello" in one word.' }]
+      messages: [{ role: 'user', content: prompt }]
     }
 
     const requestConfig = {

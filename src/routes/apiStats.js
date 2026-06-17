@@ -16,6 +16,7 @@ const serviceRatesService = require('../services/serviceRatesService')
 const claudeRelayConfigService = require('../services/claudeRelayConfigService')
 const {
   createClaudeTestPayload,
+  OPENAI_CODEX_TEST_INSTRUCTIONS,
   extractErrorMessage,
   sanitizeErrorMsg
 } = require('../utils/testPayloadHelper')
@@ -1602,7 +1603,7 @@ router.post('/api-key/test-gemini', async (req, res) => {
             }
           }
           res.write(
-            `data: ${JSON.stringify({ type: 'test_complete', success: false, error: sanitizeErrorMsg(errorMsg) })}\n\n`
+            `data: ${JSON.stringify({ type: 'test_complete', success: false, error: sanitizeErrorMsg(errorMsg, response.status) })}\n\n`
           )
           res.end()
         })
@@ -1726,14 +1727,19 @@ router.post('/api-key/test-openai', async (req, res) => {
     res.write(`data: ${JSON.stringify({ type: 'test_start', message: 'Test started' })}\n\n`)
 
     const axios = require('axios')
-    const payload = createOpenAITestPayload(model, { prompt, maxTokens })
+    const payload = createOpenAITestPayload(model, {
+      prompt,
+      maxTokens,
+      instructions: OPENAI_CODEX_TEST_INSTRUCTIONS,
+      includeMaxOutputTokens: false
+    })
 
     try {
       const response = await axios.post(apiUrl, payload, {
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
-          'User-Agent': 'claude-relay-admin-test/1.0.0'
+          'User-Agent': 'codex_cli_rs/0.0.0'
         },
         timeout: 60000,
         responseType: 'stream',
@@ -1755,7 +1761,7 @@ router.post('/api-key/test-openai', async (req, res) => {
             }
           }
           res.write(
-            `data: ${JSON.stringify({ type: 'test_complete', success: false, error: sanitizeErrorMsg(errorMsg) })}\n\n`
+            `data: ${JSON.stringify({ type: 'test_complete', success: false, error: sanitizeErrorMsg(errorMsg, response.status) })}\n\n`
           )
           res.end()
         })

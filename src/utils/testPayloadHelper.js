@@ -1,9 +1,15 @@
 const crypto = require('crypto')
 const { mapToErrorCode } = require('./errorSanitizer')
 
+const OPENAI_CODEX_TEST_INSTRUCTIONS = 'You are a helpful assistant.'
+
 // 将原始错误信息映射为安全的标准错误码消息
-const sanitizeErrorMsg = (msg) => {
-  const mapped = mapToErrorCode({ message: msg }, { logOriginal: false })
+const sanitizeErrorMsg = (msg, status) => {
+  const error = { message: msg }
+  if (status) {
+    error.status = status
+  }
+  const mapped = mapToErrorCode(error, { logOriginal: false })
   return `[${mapped.code}] ${mapped.message}`
 }
 
@@ -24,6 +30,14 @@ function generateSessionString() {
   const hex64 = randomHex(32) // 32 bytes => 64 hex characters
   const uuid = crypto.randomUUID()
   return `user_${hex64}_account__session_${uuid}`
+}
+
+function sanitizeTestPrompt(value, fallback = 'hi') {
+  const prompt = typeof value === 'string' ? value.trim() : ''
+  if (!prompt) {
+    return fallback
+  }
+  return prompt.slice(0, 2000)
 }
 
 /**
@@ -180,7 +194,7 @@ async function sendStreamTestRequest(options) {
               errorMsg = errorData || errorMsg
             }
           }
-          endTest(false, sanitize ? sanitizeErrorMsg(errorMsg) : errorMsg)
+          endTest(false, sanitize ? sanitizeErrorMsg(errorMsg, response.status) : errorMsg)
           resolve()
         })
         response.data.on('error', (err) => {
@@ -275,11 +289,19 @@ function createGeminiTestPayload(_model = 'gemini-2.5-pro', options = {}) {
  * @param {object} options - 可选配置
  * @param {string} options.prompt - 自定义提示词（默认 'hi'）
  * @param {number} options.maxTokens - 最大输出 token（默认 100）
+ * @param {string} options.instructions - 可选 instructions，用于 Codex-like 测试
+ * @param {boolean} options.includeMaxOutputTokens - 是否包含 max_output_tokens（默认 true）
  * @returns {object} 测试请求体
  */
 function createOpenAITestPayload(model = 'gpt-5', options = {}) {
-  const { prompt = 'hi', maxTokens = 100, stream = true } = options
-  return {
+  const {
+    prompt = 'hi',
+    maxTokens = 100,
+    stream = true,
+    instructions = '',
+    includeMaxOutputTokens = true
+  } = options
+  const payload = {
     model,
     input: [
       {
@@ -287,9 +309,18 @@ function createOpenAITestPayload(model = 'gpt-5', options = {}) {
         content: prompt
       }
     ],
-    max_output_tokens: maxTokens,
     stream
   }
+
+  if (instructions) {
+    payload.instructions = instructions
+  }
+
+  if (includeMaxOutputTokens) {
+    payload.max_output_tokens = maxTokens
+  }
+
+  return payload
 }
 
 /**
@@ -314,6 +345,97 @@ function createChatCompletionsTestPayload(model = 'gpt-4o-mini', options = {}) {
   }
 }
 
+function extractOpenAIResponsesTextFromObject(data) {
+  if (!data || typeof data !== 'object') {
+    return ''
+  }
+
+  if (typeof data.output_text === 'string') {
+    return data.output_text
+  }
+
+  let responseText = ''
+  const output = data.output || data.response?.output
+  if (Array.isArray(output)) {
+    for (const item of output) {
+      if (typeof item?.text === 'string') {
+        responseText += item.text
+      }
+      if (typeof item?.output_text === 'string') {
+        responseText += item.output_text
+      }
+      if (Array.isArray(item?.content)) {
+        for (const block of item.content) {
+          if (typeof block?.text === 'string') {
+            responseText += block.text
+          }
+          if (typeof block?.output_text === 'string') {
+            responseText += block.output_text
+          }
+        }
+      }
+    }
+  }
+
+  return responseText
+}
+
+function extractOpenAIResponsesTextFromSSE(sseText) {
+  let deltaText = ''
+  let completedText = ''
+
+  for (const line of sseText.split('\n')) {
+    if (!line.startsWith('data:')) {
+      continue
+    }
+
+    const jsonStr = line.slice(5).trim()
+    if (!jsonStr || jsonStr === '[DONE]') {
+      continue
+    }
+
+    try {
+      const data = JSON.parse(jsonStr)
+      if (data.type === 'response.output_text.delta' && typeof data.delta === 'string') {
+        deltaText += data.delta
+      } else if (data.type === 'response.content_part.delta' && data.delta?.text) {
+        deltaText += data.delta.text
+      } else if (typeof data.delta === 'string') {
+        deltaText += data.delta
+      } else if (data.delta?.text) {
+        deltaText += data.delta.text
+      }
+
+      if (data.response) {
+        completedText = extractOpenAIResponsesTextFromObject(data.response) || completedText
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  return deltaText || completedText
+}
+
+function extractOpenAIResponsesText(data) {
+  if (!data) {
+    return ''
+  }
+
+  if (typeof data === 'string') {
+    if (data.includes('data:')) {
+      return extractOpenAIResponsesTextFromSSE(data)
+    }
+    try {
+      return extractOpenAIResponsesTextFromObject(JSON.parse(data))
+    } catch {
+      return ''
+    }
+  }
+
+  return extractOpenAIResponsesTextFromObject(data)
+}
+
 /**
  * 从各种格式的错误响应中提取可读错误信息
  * 支持格式: {message}, {error:{message}}, {msg:{error:{message}}}, {error:"string"} 等
@@ -333,12 +455,22 @@ function extractErrorMessage(json, fallback) {
   if (json.error?.message) {
     return json.error.message
   }
+  // OpenAI Responses failed format: {response:{error:{message:"..."}}}
+  if (json.response?.error?.message) {
+    return json.response.error.message
+  }
+  if (json.response?.error?.code) {
+    return json.response.error.code
+  }
   // {msg: {error: {message: "..."}}} (relay 包装格式)
   if (json.msg?.error?.message) {
     return json.msg.error.message
   }
   if (json.msg?.message) {
     return json.msg.message
+  }
+  if (json.detail && typeof json.detail === 'string') {
+    return json.detail
   }
   // {error: "string"}
   if (typeof json.error === 'string') {
@@ -354,10 +486,13 @@ function extractErrorMessage(json, fallback) {
 module.exports = {
   randomHex,
   generateSessionString,
+  OPENAI_CODEX_TEST_INSTRUCTIONS,
+  sanitizeTestPrompt,
   createClaudeTestPayload,
   createGeminiTestPayload,
   createOpenAITestPayload,
   createChatCompletionsTestPayload,
+  extractOpenAIResponsesText,
   extractErrorMessage,
   sanitizeErrorMsg,
   sendStreamTestRequest

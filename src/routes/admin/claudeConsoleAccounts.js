@@ -488,6 +488,8 @@ router.post('/claude-console-accounts/reset-all-usage', authenticateAdmin, async
 router.post('/claude-console-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
   const model = typeof req.body?.model === 'string' ? req.body.model.trim() : ''
+  const { sanitizeTestPrompt } = require('../../utils/testPayloadHelper')
+  const prompt = sanitizeTestPrompt(req.body?.prompt)
 
   if (!model) {
     return res.status(400).json({ error: 'model is required' })
@@ -495,7 +497,7 @@ router.post('/claude-console-accounts/:accountId/test', authenticateAdmin, async
 
   try {
     // 直接调用服务层的测试方法
-    await claudeConsoleRelayService.testAccountConnection(accountId, res, model)
+    await claudeConsoleRelayService.testAccountConnection(accountId, res, model, prompt)
   } catch (error) {
     logger.error(`❌ Failed to test Claude Console account:`, error)
     // 错误已在服务层处理，这里仅做日志记录

@@ -960,10 +960,16 @@ router.put(
 // 测试Claude OAuth账户连通性（流式响应）- 复用 claudeRelayService
 router.post('/claude-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
+  const { sanitizeTestPrompt } = require('../../utils/testPayloadHelper')
+  const model =
+    typeof req.body?.model === 'string' && req.body.model.trim()
+      ? req.body.model.trim()
+      : 'claude-sonnet-4-5-20250929'
+  const prompt = sanitizeTestPrompt(req.body?.prompt)
 
   try {
     // 直接调用服务层的测试方法
-    await claudeRelayService.testAccountConnection(accountId, res)
+    await claudeRelayService.testAccountConnection(accountId, res, model, prompt)
   } catch (error) {
     logger.error(`❌ Failed to test Claude OAuth account:`, error)
     // 错误已在服务层处理，这里仅做日志记录

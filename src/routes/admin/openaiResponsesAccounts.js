@@ -13,7 +13,13 @@ const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const webhookNotifier = require('../../utils/webhookNotifier')
 const { formatAccountExpiry, mapExpiryField } = require('./utils')
-const { createOpenAITestPayload, extractErrorMessage } = require('../../utils/testPayloadHelper')
+const {
+  createOpenAITestPayload,
+  OPENAI_CODEX_TEST_INSTRUCTIONS,
+  extractOpenAIResponsesText,
+  extractErrorMessage,
+  sanitizeTestPrompt
+} = require('../../utils/testPayloadHelper')
 const { getProxyAgent } = require('../../utils/proxyHelper')
 
 const router = express.Router()
@@ -484,6 +490,7 @@ router.post('/openai-responses-accounts/:id/reset-usage', authenticateAdmin, asy
 router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
   const { model = 'gpt-4o-mini' } = req.body
+  const prompt = sanitizeTestPrompt(req.body?.prompt)
   const startTime = Date.now()
 
   try {
@@ -509,12 +516,18 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
       endpointPath = `/v1${endpointPath}`
     }
     const apiUrl = `${baseUrl}${endpointPath}`
-    const payload = createOpenAITestPayload(model, { stream: false })
+    const payload = createOpenAITestPayload(model, {
+      stream: false,
+      prompt,
+      instructions: OPENAI_CODEX_TEST_INSTRUCTIONS,
+      includeMaxOutputTokens: false
+    })
 
     const requestConfig = {
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${account.apiKey}`
+        Authorization: `Bearer ${account.apiKey}`,
+        'User-Agent': 'codex_cli_rs/0.0.0'
       },
       timeout: 30000
     }
@@ -532,20 +545,8 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
     const response = await axios.post(apiUrl, payload, requestConfig)
     const latency = Date.now() - startTime
 
-    // 提取响应文本（Responses API 格式）
-    let responseText = ''
-    const output = response.data?.output
-    if (Array.isArray(output)) {
-      for (const item of output) {
-        if (item.type === 'message' && Array.isArray(item.content)) {
-          for (const block of item.content) {
-            if (block.type === 'output_text' && block.text) {
-              responseText += block.text
-            }
-          }
-        }
-      }
-    }
+    // 提取响应文本，兼容标准 JSON 和部分上游即使 stream=false 仍返回 SSE 文本的情况
+    const responseText = extractOpenAIResponsesText(response.data)
 
     logger.success(
       `✅ OpenAI-Responses account test passed: ${account.name} (${accountId}), latency: ${latency}ms`

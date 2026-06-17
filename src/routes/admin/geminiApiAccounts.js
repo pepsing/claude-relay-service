@@ -459,9 +459,14 @@ const sanitizeMaxTokens = (value) =>
 
 router.post('/gemini-api-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
-  const { model = 'gemini-2.5-flash', prompt = 'hi' } = req.body
+  const { model = 'gemini-2.5-flash' } = req.body
   const maxTokens = sanitizeMaxTokens(req.body.maxTokens)
-  const { createGeminiTestPayload, extractErrorMessage } = require('../../utils/testPayloadHelper')
+  const {
+    createGeminiTestPayload,
+    extractErrorMessage,
+    sanitizeTestPrompt
+  } = require('../../utils/testPayloadHelper')
+  const prompt = sanitizeTestPrompt(req.body?.prompt)
   const { buildGeminiApiUrl } = require('../../handlers/geminiHandlers')
   const ProxyHelper = require('../../utils/proxyHelper')
   const axios = require('axios')

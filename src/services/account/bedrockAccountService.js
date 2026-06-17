@@ -525,8 +525,9 @@ class BedrockAccountService {
    * @param {Object} res - Express response 对象
    * @param {string} model - 测试使用的模型
    */
-  async testAccountConnection(accountId, res, model = null) {
+  async testAccountConnection(accountId, res, model = null, prompt = 'hi') {
     const { InvokeModelWithResponseStreamCommand } = require('@aws-sdk/client-bedrock-runtime')
+    const { sanitizeTestPrompt } = require('../../utils/testPayloadHelper')
 
     try {
       // 获取账户信息
@@ -564,8 +565,7 @@ class BedrockAccountService {
         messages: [
           {
             role: 'user',
-            content:
-              'Hello! Please respond with a simple greeting to confirm the connection is working. And tell me who are you?'
+            content: sanitizeTestPrompt(prompt)
           }
         ]
       }

@@ -420,8 +420,10 @@ router.post('/azure-openai-accounts/:accountId/test', authenticateAdmin, async (
   const startTime = Date.now()
   const {
     createChatCompletionsTestPayload,
-    extractErrorMessage
+    extractErrorMessage,
+    sanitizeTestPrompt
   } = require('../../utils/testPayloadHelper')
+  const prompt = sanitizeTestPrompt(req.body?.prompt)
 
   try {
     // 获取账户信息
@@ -442,7 +444,7 @@ router.post('/azure-openai-accounts/:accountId/test', authenticateAdmin, async (
     const deploymentName = account.deploymentName || 'gpt-4o-mini'
     const apiVersion = account.apiVersion || '2024-02-15-preview'
     const apiUrl = `${account.endpoint}/openai/deployments/${deploymentName}/chat/completions?api-version=${apiVersion}`
-    const payload = createChatCompletionsTestPayload(deploymentName)
+    const payload = createChatCompletionsTestPayload(deploymentName, { prompt })
 
     const requestConfig = {
       headers: {

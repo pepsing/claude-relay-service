@@ -148,14 +148,15 @@
             </div>
           </div>
 
-          <!-- [apikey] 提示词输入 -->
-          <div v-if="mode === 'apikey'" class="mb-4">
+          <!-- 提示词输入 -->
+          <div class="mb-4">
             <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
               提示词
             </label>
             <textarea
               v-model="testPrompt"
               class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+              maxlength="2000"
               placeholder="输入测试提示词..."
               rows="2"
             />
@@ -641,7 +642,10 @@ const startTest = () => {
     )
     state.sendTestRequest(
       endpoint,
-      { model: selectedModel.value },
+      {
+        model: selectedModel.value,
+        prompt: testPrompt.value
+      },
       {
         useSSE,
         headers: authToken ? { Authorization: `Bearer ${authToken}` } : {}
@@ -676,10 +680,8 @@ watch(
     if (newVal) {
       state.resetState()
       selectedModel.value = defaultModel.value
-      if (props.mode === 'apikey') {
-        testPrompt.value = 'hi'
-        maxTokens.value = 1000
-      }
+      testPrompt.value = 'hi'
+      if (props.mode === 'apikey') maxTokens.value = 1000
     }
   }
 )

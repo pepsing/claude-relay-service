@@ -1609,9 +1609,10 @@ class ClaudeConsoleRelayService {
   }
 
   // 🧪 测试账号连接（供Admin API使用）
-  async testAccountConnection(accountId, responseStream, model) {
+  async testAccountConnection(accountId, responseStream, model, prompt = 'hi') {
     const {
       createClaudeTestPayload,
+      sanitizeTestPrompt,
       sendStreamTestRequest
     } = require('../../utils/testPayloadHelper')
 
@@ -1636,7 +1637,10 @@ class ClaudeConsoleRelayService {
         mappedModel = claudeConsoleAccountService.getMappedModel(account.supportedModels, model)
       }
 
-      const payload = createClaudeTestPayload(mappedModel, { stream: true })
+      const payload = createClaudeTestPayload(mappedModel, {
+        stream: true,
+        prompt: sanitizeTestPrompt(prompt)
+      })
 
       const extraHeaders = account.userAgent ? { 'User-Agent': account.userAgent } : {}
       const requestOptions = {

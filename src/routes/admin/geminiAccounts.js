@@ -510,6 +510,8 @@ router.post('/:id/reset-status', authenticateAdmin, async (req, res) => {
 router.post('/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
   const { model = 'gemini-2.5-flash' } = req.body
+  const { sanitizeTestPrompt } = require('../../utils/testPayloadHelper')
+  const prompt = sanitizeTestPrompt(req.body?.prompt)
   const startTime = Date.now()
   const { extractErrorMessage } = require('../../utils/testPayloadHelper')
 
@@ -537,7 +539,7 @@ router.post('/:accountId/test', authenticateAdmin, async (req, res) => {
     const { getProxyAgent } = require('../../utils/proxyHelper')
 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
-    const payload = createGeminiTestPayload(model)
+    const payload = createGeminiTestPayload(model, { prompt })
 
     const requestConfig = {
       headers: {

@@ -67,7 +67,8 @@ describe('POST /admin/claude-console-accounts/:accountId/test', () => {
     expect(claudeConsoleRelayService.testAccountConnection).toHaveBeenCalledWith(
       'account-1',
       expect.any(Object),
-      'claude-sonnet-4-6'
+      'claude-sonnet-4-6',
+      'hi'
     )
   })
 })

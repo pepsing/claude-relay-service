@@ -13,7 +13,7 @@ const redis = require('../../models/redis')
 const ClaudeCodeValidator = require('../../validators/clients/claudeCodeValidator')
 const { formatDateWithTimezone } = require('../../utils/dateHelper')
 const requestIdentityService = require('../requestIdentityService')
-const { createClaudeTestPayload } = require('../../utils/testPayloadHelper')
+const { createClaudeTestPayload, sanitizeTestPrompt } = require('../../utils/testPayloadHelper')
 const userMessageQueueService = require('../userMessageQueueService')
 const { isStreamWritable } = require('../../utils/streamHelper')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
@@ -3377,8 +3377,16 @@ class ClaudeRelayService {
   }
 
   // 🧪 测试账号连接（供Admin API使用，直接复用 _makeClaudeStreamRequestWithUsageCapture）
-  async testAccountConnection(accountId, responseStream, model = 'claude-sonnet-4-5-20250929') {
-    const testRequestBody = createClaudeTestPayload(model, { stream: true })
+  async testAccountConnection(
+    accountId,
+    responseStream,
+    model = 'claude-sonnet-4-5-20250929',
+    prompt = 'hi'
+  ) {
+    const testRequestBody = createClaudeTestPayload(model, {
+      stream: true,
+      prompt: sanitizeTestPrompt(prompt)
+    })
 
     try {
       const { account, accessToken, proxyAgent } = await this._prepareAccountForTest(accountId)

@@ -23,6 +23,7 @@ jest.mock('../src/models/redis', () => ({}))
 
 jest.mock('../src/utils/testPayloadHelper', () => ({
   createClaudeTestPayload: jest.fn(),
+  sanitizeTestPrompt: jest.fn((value) => value || 'hi'),
   sendStreamTestRequest: jest.fn()
 }))
 
@@ -83,9 +84,17 @@ describe('claudeConsoleRelayService.testAccountConnection', () => {
     sendStreamTestRequest.mockResolvedValue(undefined)
 
     const res = {}
-    await claudeConsoleRelayService.testAccountConnection('a1', res, 'claude-sonnet-4-6')
+    await claudeConsoleRelayService.testAccountConnection(
+      'a1',
+      res,
+      'claude-sonnet-4-6',
+      'custom test prompt'
+    )
 
-    expect(createClaudeTestPayload).toHaveBeenCalledWith('claude-sonnet-4-6', { stream: true })
+    expect(createClaudeTestPayload).toHaveBeenCalledWith('claude-sonnet-4-6', {
+      stream: true,
+      prompt: 'custom test prompt'
+    })
     expect(sendStreamTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         payload,
@@ -114,7 +123,10 @@ describe('claudeConsoleRelayService.testAccountConnection', () => {
     const res = {}
     await claudeConsoleRelayService.testAccountConnection('a1', res, 'claude-sonnet-4-6')
 
-    expect(createClaudeTestPayload).toHaveBeenCalledWith('claude-sonnet-4-6', { stream: true })
+    expect(createClaudeTestPayload).toHaveBeenCalledWith('claude-sonnet-4-6', {
+      stream: true,
+      prompt: 'hi'
+    })
     const requestOptions = sendStreamTestRequest.mock.calls[0][0]
     expect(requestOptions).toEqual(
       expect.objectContaining({
