@@ -1,12 +1,46 @@
 const {
   OPENAI_CODEX_TEST_INSTRUCTIONS,
+  createClaudeTestPayload,
   createOpenAITestPayload,
   extractOpenAIResponsesText,
   extractErrorMessage,
+  getClaudeCodeTestHeaders,
   sanitizeErrorMsg
 } = require('../src/utils/testPayloadHelper')
+const ClaudeCodeValidator = require('../src/validators/clients/claudeCodeValidator')
+
+function normalizeHeaders(headers) {
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value])
+  )
+}
 
 describe('testPayloadHelper', () => {
+  test('creates Claude Code-compatible Anthropic test requests', () => {
+    const payload = createClaudeTestPayload('claude-sonnet-4-5-20250929', {
+      stream: true,
+      prompt: 'custom test prompt'
+    })
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        model: 'claude-sonnet-4-5-20250929',
+        stream: true,
+        max_tokens: 1000,
+        metadata: expect.objectContaining({
+          user_id: expect.stringMatching(/^user_[0-9a-f]{64}_account__session_/)
+        })
+      })
+    )
+    expect(
+      ClaudeCodeValidator.validate({
+        headers: normalizeHeaders(getClaudeCodeTestHeaders()),
+        path: '/v1/messages',
+        body: payload
+      })
+    ).toBe(true)
+  })
+
   test('creates the default OpenAI Responses test payload with max_output_tokens', () => {
     expect(createOpenAITestPayload('gpt-5', { prompt: 'hi', maxTokens: 12 })).toEqual({
       model: 'gpt-5',

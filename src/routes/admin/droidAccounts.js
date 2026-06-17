@@ -13,7 +13,11 @@ const {
 } = require('../../utils/workosOAuthHelper')
 const webhookNotifier = require('../../utils/webhookNotifier')
 const { formatAccountExpiry, mapExpiryField } = require('./utils')
-const { extractErrorMessage } = require('../../utils/testPayloadHelper')
+const {
+  createClaudeTestPayload,
+  extractErrorMessage,
+  getClaudeCodeTestHeaders
+} = require('../../utils/testPayloadHelper')
 
 const router = express.Router()
 
@@ -633,16 +637,17 @@ router.post('/droid-accounts/:accountId/test', authenticateAdmin, async (req, re
     const { getProxyAgent } = require('../../utils/proxyHelper')
 
     const apiUrl = 'https://api.factory.ai/v1/messages'
-    const payload = {
-      model,
-      max_tokens: 100,
-      messages: [{ role: 'user', content: prompt }]
-    }
+    const payload = createClaudeTestPayload(model, {
+      stream: false,
+      prompt,
+      maxTokens: 100
+    })
 
     const requestConfig = {
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`
+        Authorization: `Bearer ${accessToken}`,
+        ...getClaudeCodeTestHeaders()
       },
       timeout: 30000
     }

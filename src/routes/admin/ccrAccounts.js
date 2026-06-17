@@ -7,7 +7,11 @@ const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const webhookNotifier = require('../../utils/webhookNotifier')
 const { formatAccountExpiry, mapExpiryField } = require('./utils')
-const { extractErrorMessage } = require('../../utils/testPayloadHelper')
+const {
+  createClaudeTestPayload,
+  extractErrorMessage,
+  getClaudeCodeTestHeaders
+} = require('../../utils/testPayloadHelper')
 const { parseVendorPrefixedModel } = require('../../utils/modelHelper')
 
 const router = express.Router()
@@ -457,17 +461,17 @@ router.post('/:accountId/test', authenticateAdmin, async (req, res) => {
       ''
     )
     const apiUrl = baseUrl.endsWith('/v1/messages') ? baseUrl : `${baseUrl}/v1/messages`
-    const payload = {
-      model: mappedModel,
-      max_tokens: 100,
-      messages: [{ role: 'user', content: prompt }]
-    }
+    const payload = createClaudeTestPayload(mappedModel, {
+      stream: false,
+      prompt,
+      maxTokens: 100
+    })
 
     const requestConfig = {
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': credentials.apiKey,
-        'anthropic-version': '2023-06-01'
+        ...getClaudeCodeTestHeaders()
       },
       timeout: 30000
     }

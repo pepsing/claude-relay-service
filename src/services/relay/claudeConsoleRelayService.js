@@ -1612,6 +1612,7 @@ class ClaudeConsoleRelayService {
   async testAccountConnection(accountId, responseStream, model, prompt = 'hi') {
     const {
       createClaudeTestPayload,
+      getClaudeCodeTestHeaders,
       sanitizeTestPrompt,
       sendStreamTestRequest
     } = require('../../utils/testPayloadHelper')
@@ -1642,13 +1643,12 @@ class ClaudeConsoleRelayService {
         prompt: sanitizeTestPrompt(prompt)
       })
 
-      const extraHeaders = account.userAgent ? { 'User-Agent': account.userAgent } : {}
       const requestOptions = {
         apiUrl,
         responseStream,
         payload,
         proxyAgent: claudeConsoleAccountService._createProxyAgent(account.proxy),
-        extraHeaders
+        extraHeaders: getClaudeCodeTestHeaders()
       }
 
       if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {

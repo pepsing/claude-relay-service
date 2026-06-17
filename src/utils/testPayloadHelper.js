@@ -2,6 +2,18 @@ const crypto = require('crypto')
 const { mapToErrorCode } = require('./errorSanitizer')
 
 const OPENAI_CODEX_TEST_INSTRUCTIONS = 'You are a helpful assistant.'
+const CLAUDE_CODE_TEST_USER_AGENT = 'claude-cli/2.0.52 (external, cli)'
+const CLAUDE_CODE_TEST_BETA =
+  'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14'
+
+function getClaudeCodeTestHeaders() {
+  return {
+    'User-Agent': CLAUDE_CODE_TEST_USER_AGENT,
+    'anthropic-version': '2023-06-01',
+    'x-app': 'claude-code',
+    'anthropic-beta': CLAUDE_CODE_TEST_BETA
+  }
+}
 
 // 将原始错误信息映射为安全的标准错误码消息
 const sanitizeErrorMsg = (msg, status) => {
@@ -158,8 +170,7 @@ async function sendStreamTestRequest(options) {
     data: payload,
     headers: {
       'Content-Type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      'User-Agent': 'claude-cli/2.0.52 (external, cli)',
+      ...getClaudeCodeTestHeaders(),
       ...(authorization ? { authorization } : {}),
       ...extraHeaders
     },
@@ -487,6 +498,9 @@ module.exports = {
   randomHex,
   generateSessionString,
   OPENAI_CODEX_TEST_INSTRUCTIONS,
+  CLAUDE_CODE_TEST_USER_AGENT,
+  CLAUDE_CODE_TEST_BETA,
+  getClaudeCodeTestHeaders,
   sanitizeTestPrompt,
   createClaudeTestPayload,
   createGeminiTestPayload,

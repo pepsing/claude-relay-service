@@ -23,13 +23,23 @@ jest.mock('../src/models/redis', () => ({}))
 
 jest.mock('../src/utils/testPayloadHelper', () => ({
   createClaudeTestPayload: jest.fn(),
+  getClaudeCodeTestHeaders: jest.fn(() => ({
+    'User-Agent': 'claude-cli/2.0.52 (external, cli)',
+    'anthropic-version': '2023-06-01',
+    'x-app': 'claude-code',
+    'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14'
+  })),
   sanitizeTestPrompt: jest.fn((value) => value || 'hi'),
   sendStreamTestRequest: jest.fn()
 }))
 
 const claudeConsoleRelayService = require('../src/services/relay/claudeConsoleRelayService')
 const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
-const { createClaudeTestPayload, sendStreamTestRequest } = require('../src/utils/testPayloadHelper')
+const {
+  createClaudeTestPayload,
+  getClaudeCodeTestHeaders,
+  sendStreamTestRequest
+} = require('../src/utils/testPayloadHelper')
 const axios = require('axios')
 const { EventEmitter, PassThrough } = require('stream')
 
@@ -98,7 +108,8 @@ describe('claudeConsoleRelayService.testAccountConnection', () => {
     expect(sendStreamTestRequest).toHaveBeenCalledWith(
       expect.objectContaining({
         payload,
-        authorization: 'Bearer test-key'
+        authorization: 'Bearer test-key',
+        extraHeaders: getClaudeCodeTestHeaders()
       })
     )
   })
@@ -132,6 +143,7 @@ describe('claudeConsoleRelayService.testAccountConnection', () => {
       expect.objectContaining({
         payload,
         extraHeaders: expect.objectContaining({
+          ...getClaudeCodeTestHeaders(),
           'x-api-key': 'sk-ant-test-key'
         })
       })

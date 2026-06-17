@@ -17,6 +17,7 @@ const claudeRelayConfigService = require('../services/claudeRelayConfigService')
 const {
   createClaudeTestPayload,
   OPENAI_CODEX_TEST_INSTRUCTIONS,
+  getClaudeCodeTestHeaders,
   extractErrorMessage,
   sanitizeErrorMsg
 } = require('../utils/testPayloadHelper')
@@ -1496,9 +1497,8 @@ router.post('/api-key/test', async (req, res) => {
       payload: createClaudeTestPayload(model, { stream: true, prompt, maxTokens }),
       timeout: 60000,
       extraHeaders: {
-        'x-api-key': apiKey,
-        'x-app': 'claude-code',
-        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14'
+        ...getClaudeCodeTestHeaders(),
+        'x-api-key': apiKey
       },
       sanitize: false
     })

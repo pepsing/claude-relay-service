@@ -13,7 +13,11 @@ const redis = require('../../models/redis')
 const ClaudeCodeValidator = require('../../validators/clients/claudeCodeValidator')
 const { formatDateWithTimezone } = require('../../utils/dateHelper')
 const requestIdentityService = require('../requestIdentityService')
-const { createClaudeTestPayload, sanitizeTestPrompt } = require('../../utils/testPayloadHelper')
+const {
+  createClaudeTestPayload,
+  getClaudeCodeTestHeaders,
+  sanitizeTestPrompt
+} = require('../../utils/testPayloadHelper')
 const userMessageQueueService = require('../userMessageQueueService')
 const { isStreamWritable } = require('../../utils/streamHelper')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
@@ -3414,7 +3418,7 @@ class ClaudeRelayService {
         testRequestBody,
         accessToken,
         proxyAgent,
-        {}, // clientHeaders - 测试不需要客户端headers
+        getClaudeCodeTestHeaders(),
         responseStream,
         null, // usageCallback - 测试不需要统计
         accountId,
@@ -3506,7 +3510,7 @@ class ClaudeRelayService {
         testRequestBody,
         accessToken,
         proxyAgent,
-        {}, // clientHeaders - 测试不需要客户端headers
+        getClaudeCodeTestHeaders(),
         mockResponseStream,
         null, // usageCallback - 测试不需要统计
         accountId,
