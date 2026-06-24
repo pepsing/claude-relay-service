@@ -73,6 +73,7 @@ class RateLimitCleanupService {
         openai: { checked: 0, cleared: 0, errors: [] },
         claude: { checked: 0, cleared: 0, errors: [] },
         claudeConsole: { checked: 0, cleared: 0, errors: [] },
+        zhipuCodingQuota: { checked: 0, suspended: 0, recovered: 0, errors: [] },
         quotaExceeded: { checked: 0, cleared: 0, errors: [] },
         tokenRefresh: { checked: 0, refreshed: 0, errors: [] }
       }
@@ -86,6 +87,9 @@ class RateLimitCleanupService {
       // 清理 Claude Console 账号
       await this.cleanupClaudeConsoleAccounts(results.claudeConsole)
 
+      // 检查智谱 Coding Plan 窗口配额并处理自动停调度/恢复
+      await this.cleanupZhipuCodingQuota(results.zhipuCodingQuota)
+
       // 清理 Claude Console 配额超限状态
       await this.cleanupClaudeConsoleQuotaExceeded(results.quotaExceeded)
 
@@ -96,22 +100,31 @@ class RateLimitCleanupService {
         results.openai.checked +
         results.claude.checked +
         results.claudeConsole.checked +
+        results.zhipuCodingQuota.checked +
         results.quotaExceeded.checked
       const totalCleared =
         results.openai.cleared +
         results.claude.cleared +
         results.claudeConsole.cleared +
+        results.zhipuCodingQuota.recovered +
         results.quotaExceeded.cleared
       const duration = Date.now() - startTime
 
-      if (totalCleared > 0 || results.tokenRefresh.refreshed > 0) {
+      if (
+        totalCleared > 0 ||
+        results.zhipuCodingQuota.suspended > 0 ||
+        results.tokenRefresh.refreshed > 0
+      ) {
         logger.info(
-          `✅ Rate limit cleanup completed: ${totalCleared}/${totalChecked} accounts cleared, ${results.tokenRefresh.refreshed} tokens refreshed (${duration}ms)`
+          `✅ Rate limit cleanup completed: ${totalCleared}/${totalChecked} accounts cleared, ${results.zhipuCodingQuota.suspended} Zhipu accounts suspended, ${results.tokenRefresh.refreshed} tokens refreshed (${duration}ms)`
         )
         logger.info(`   OpenAI: ${results.openai.cleared}/${results.openai.checked}`)
         logger.info(`   Claude: ${results.claude.cleared}/${results.claude.checked}`)
         logger.info(
           `   Claude Console: ${results.claudeConsole.cleared}/${results.claudeConsole.checked}`
+        )
+        logger.info(
+          `   Zhipu Coding Quota: ${results.zhipuCodingQuota.recovered}/${results.zhipuCodingQuota.checked} recovered, ${results.zhipuCodingQuota.suspended} suspended`
         )
         logger.info(
           `   Quota Exceeded: ${results.quotaExceeded.cleared}/${results.quotaExceeded.checked}`
@@ -137,6 +150,7 @@ class RateLimitCleanupService {
         ...results.openai.errors,
         ...results.claude.errors,
         ...results.claudeConsole.errors,
+        ...results.zhipuCodingQuota.errors,
         ...results.quotaExceeded.errors,
         ...results.tokenRefresh.errors
       ]
@@ -316,8 +330,10 @@ class RateLimitCleanupService {
             typeof account.rateLimitStatus === 'object' &&
             account.rateLimitStatus.status === 'limited')
 
-        const autoStopped = account.rateLimitAutoStopped === 'true'
-        const needsAutoStopRecovery = autoStopped && account.schedulable === 'false'
+        const autoStopped =
+          account.rateLimitAutoStopped === 'true' || account.rateLimitAutoStopped === true
+        const notSchedulable = account.schedulable === 'false' || account.schedulable === false
+        const needsAutoStopRecovery = autoStopped && (account.rateLimitEndAt || notSchedulable)
 
         // 检查两种状态字段：rateLimitStatus 和 status
         const hasStatusRateLimited = account.status === 'rate_limited'
@@ -373,6 +389,42 @@ class RateLimitCleanupService {
   }
 
   /**
+   * 检查智谱 Coding Plan 窗口配额，并自动停调度/恢复
+   */
+  async cleanupZhipuCodingQuota(result) {
+    try {
+      const quotaResult = await claudeConsoleAccountService.checkAllZhipuCodingQuotaAccounts()
+
+      result.checked += quotaResult.checked
+      result.suspended += quotaResult.suspended
+      result.recovered += quotaResult.recovered
+      result.errors.push(...quotaResult.errors)
+
+      if (quotaResult.recovered > 0) {
+        for (const account of quotaResult.accounts) {
+          this.clearedAccounts.push({
+            platform: 'Claude Console',
+            accountId: account.id,
+            accountName: account.name,
+            previousStatus: 'zhipu_coding_quota_exceeded',
+            currentStatus: 'active',
+            windowInfo: account.quotaStatus?.quota || null
+          })
+        }
+      }
+
+      if (quotaResult.suspended > 0 || quotaResult.recovered > 0) {
+        logger.info(
+          `🧭 Zhipu Coding Plan quota cleanup: ${quotaResult.suspended} suspended, ${quotaResult.recovered}/${quotaResult.checked} recovered`
+        )
+      }
+    } catch (error) {
+      logger.error('Failed to cleanup Zhipu Coding Plan quota accounts:', error)
+      result.errors.push({ error: error.message })
+    }
+  }
+
+  /**
    * 检查并恢复 Claude Console 账号的配额超限状态
    */
   async cleanupClaudeConsoleQuotaExceeded(result) {
@@ -380,6 +432,14 @@ class RateLimitCleanupService {
       const accounts = await claudeConsoleAccountService.getAllAccounts()
 
       for (const account of accounts) {
+        if (
+          account.kimiBillingCycleQuotaStoppedAt ||
+          account.zhipuCodingQuotaAutoStopped ||
+          account.zhipuCodingQuotaStoppedAt
+        ) {
+          continue
+        }
+
         // 检查是否处于配额超限状态
         if (account.status === 'quota_exceeded' || account.quotaStoppedAt) {
           result.checked++

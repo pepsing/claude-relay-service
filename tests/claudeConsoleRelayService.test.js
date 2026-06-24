@@ -13,7 +13,19 @@ jest.mock('../src/services/account/claudeConsoleAccountService', () => ({
   isAccountRateLimited: jest.fn(),
   removeAccountRateLimit: jest.fn(),
   isAccountOverloaded: jest.fn(),
-  removeAccountOverload: jest.fn()
+  removeAccountOverload: jest.fn(),
+  markAccountRateLimited: jest.fn(),
+  checkQuotaUsage: jest.fn(),
+  markKimiBillingCycleQuotaExceeded: jest.fn(),
+  markVolcengineArkMonthlyQuotaExceeded: jest.fn(),
+  isZhipuCodingPlanAccount: jest.fn(() => false),
+  refreshZhipuCodingQuotaProtection: jest.fn()
+}))
+
+jest.mock('../src/services/userMessageQueueService', () => ({
+  isUserMessageRequest: jest.fn(() => false),
+  acquireQueueLock: jest.fn(),
+  releaseQueueLock: jest.fn()
 }))
 
 jest.mock('../config/config', () => ({}), {
@@ -74,6 +86,17 @@ describe('claudeConsoleRelayService.testAccountConnection', () => {
     jest.clearAllMocks()
     claudeConsoleAccountService.isAccountRateLimited.mockResolvedValue(false)
     claudeConsoleAccountService.isAccountOverloaded.mockResolvedValue(false)
+    claudeConsoleAccountService.markKimiBillingCycleQuotaExceeded.mockResolvedValue({
+      success: true
+    })
+    claudeConsoleAccountService.markVolcengineArkMonthlyQuotaExceeded.mockResolvedValue({
+      success: true
+    })
+    claudeConsoleAccountService.isZhipuCodingPlanAccount.mockReturnValue(false)
+    claudeConsoleAccountService.refreshZhipuCodingQuotaProtection.mockResolvedValue({
+      checked: true,
+      exhausted: false
+    })
   })
 
   it('passes selected model stream payload and bearer auth for non sk-ant key', async () => {
@@ -150,6 +173,380 @@ describe('claudeConsoleRelayService.testAccountConnection', () => {
     )
     expect(requestOptions).not.toHaveProperty('authorization')
   })
+
+  it('suspends Kimi account scheduling when account test returns billing-cycle 403', async () => {
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      name: 'kimi-亮哥',
+      apiUrl: 'https://api.kimi.com/coding/',
+      apiKey: 'kimi-api-key',
+      proxy: null,
+      userAgent: null,
+      disableAutoProtection: false
+    })
+    claudeConsoleAccountService._createProxyAgent.mockReturnValue(undefined)
+    createClaudeTestPayload.mockReturnValue({
+      model: 'claude-sonnet-4-6',
+      stream: true
+    })
+    sendStreamTestRequest.mockImplementation(async (requestOptions) => {
+      await requestOptions.onErrorResponse({
+        status: 403,
+        data: JSON.stringify({
+          error: {
+            message:
+              "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle."
+          }
+        })
+      })
+    })
+
+    const res = {}
+    await claudeConsoleRelayService.testAccountConnection(
+      'kimi-account-1',
+      res,
+      'claude-sonnet-4-6'
+    )
+
+    expect(claudeConsoleAccountService.markKimiBillingCycleQuotaExceeded).toHaveBeenCalledWith(
+      'kimi-account-1',
+      expect.stringContaining('billing cycle')
+    )
+  })
+
+  it('suspends Volcengine Ark account scheduling until reset time when account test returns monthly quota 429', async () => {
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      name: '火山',
+      apiUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+      apiKey: 'ark-api-key',
+      proxy: null,
+      userAgent: null,
+      disableAutoProtection: true
+    })
+    claudeConsoleAccountService._createProxyAgent.mockReturnValue(undefined)
+    createClaudeTestPayload.mockReturnValue({
+      model: 'deepseek-v4-pro',
+      stream: true
+    })
+    sendStreamTestRequest.mockImplementation(async (requestOptions) => {
+      await requestOptions.onErrorResponse({
+        status: 429,
+        data: 'You have exceeded the monthly usage quota. It will reset at 2026-06-26 23:59:59 +0800 CST.'
+      })
+    })
+
+    const res = {}
+    await claudeConsoleRelayService.testAccountConnection('ark-account-1', res, 'deepseek-v4-pro')
+
+    expect(claudeConsoleAccountService.markVolcengineArkMonthlyQuotaExceeded).toHaveBeenCalledWith(
+      'ark-account-1',
+      expect.objectContaining({
+        resetAt: '2026-06-26T15:59:59.000Z',
+        resetAtText: '2026-06-26 23:59:59 +0800 CST',
+        errorDetails: expect.stringContaining('monthly usage quota')
+      })
+    )
+  })
+})
+
+describe('claudeConsoleRelayService.relayRequest Kimi quota handling', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    claudeConsoleAccountService.isAccountRateLimited.mockResolvedValue(false)
+    claudeConsoleAccountService.isAccountOverloaded.mockResolvedValue(false)
+    claudeConsoleAccountService.markKimiBillingCycleQuotaExceeded.mockResolvedValue({
+      success: true
+    })
+    claudeConsoleAccountService.markVolcengineArkMonthlyQuotaExceeded.mockResolvedValue({
+      success: true
+    })
+    claudeConsoleAccountService.markAccountRateLimited.mockResolvedValue({
+      success: true
+    })
+    claudeConsoleAccountService.checkQuotaUsage.mockResolvedValue(undefined)
+    claudeConsoleAccountService.isZhipuCodingPlanAccount.mockReturnValue(false)
+    claudeConsoleAccountService.refreshZhipuCodingQuotaProtection.mockResolvedValue({
+      checked: true,
+      exhausted: false
+    })
+  })
+
+  it('suspends scheduling for Kimi Coding billing-cycle 403 errors', async () => {
+    const updateLastUsedTime = jest
+      .spyOn(claudeConsoleRelayService, '_updateLastUsedTime')
+      .mockResolvedValue(undefined)
+
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      id: 'kimi-account-1',
+      name: 'kimi-亮哥',
+      apiUrl: 'https://api.kimi.com/coding/',
+      apiKey: 'kimi-api-key',
+      supportedModels: [],
+      maxConcurrentTasks: 0,
+      disableAutoProtection: false
+    })
+    claudeConsoleAccountService._createProxyAgent.mockReturnValue(undefined)
+    axios.mockResolvedValue({
+      status: 403,
+      headers: {},
+      data: {
+        error: {
+          message:
+            "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle."
+        }
+      }
+    })
+
+    const response = await claudeConsoleRelayService.relayRequest(
+      { model: 'claude-sonnet-4-6', messages: [] },
+      { id: 'key-1', name: 'test-key' },
+      null,
+      null,
+      {},
+      'kimi-account-1'
+    )
+
+    expect(response.statusCode).toBe(403)
+    expect(claudeConsoleAccountService.markKimiBillingCycleQuotaExceeded).toHaveBeenCalledWith(
+      'kimi-account-1',
+      expect.stringContaining('billing cycle')
+    )
+
+    updateLastUsedTime.mockRestore()
+  })
+
+  it('suspends Kimi billing-cycle 403 errors even when auto protection is disabled', async () => {
+    const updateLastUsedTime = jest
+      .spyOn(claudeConsoleRelayService, '_updateLastUsedTime')
+      .mockResolvedValue(undefined)
+
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      id: 'kimi-account-2',
+      name: 'kimi-祥总',
+      apiUrl: 'https://api.kimi.com/coding/',
+      apiKey: 'kimi-api-key',
+      supportedModels: [],
+      maxConcurrentTasks: 0,
+      disableAutoProtection: true
+    })
+    claudeConsoleAccountService._createProxyAgent.mockReturnValue(undefined)
+    axios.mockResolvedValue({
+      status: 403,
+      headers: {},
+      data: {
+        error: {
+          message:
+            "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle."
+        }
+      }
+    })
+
+    await claudeConsoleRelayService.relayRequest(
+      { model: 'claude-sonnet-4-6', messages: [] },
+      { id: 'key-1', name: 'test-key' },
+      null,
+      null,
+      {},
+      'kimi-account-2'
+    )
+
+    expect(claudeConsoleAccountService.markKimiBillingCycleQuotaExceeded).toHaveBeenCalledWith(
+      'kimi-account-2',
+      expect.stringContaining('billing cycle')
+    )
+
+    updateLastUsedTime.mockRestore()
+  })
+
+  it('uses Zhipu quota API protection instead of generic 429 rate-limit suspension', async () => {
+    const updateLastUsedTime = jest
+      .spyOn(claudeConsoleRelayService, '_updateLastUsedTime')
+      .mockResolvedValue(undefined)
+
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      id: 'zhipu-account-1',
+      name: 'zhipu-coding',
+      apiUrl: 'https://open.bigmodel.cn/api/anthropic',
+      apiKey: 'zhipu-api-key',
+      supportedModels: [],
+      maxConcurrentTasks: 0,
+      disableAutoProtection: false
+    })
+    claudeConsoleAccountService._createProxyAgent.mockReturnValue(undefined)
+    claudeConsoleAccountService.isZhipuCodingPlanAccount.mockReturnValue(true)
+    claudeConsoleAccountService.refreshZhipuCodingQuotaProtection.mockResolvedValue({
+      checked: true,
+      exhausted: true,
+      suspended: true
+    })
+    axios.mockResolvedValue({
+      status: 429,
+      headers: {},
+      data: {
+        error: {
+          message: 'rate limit reached'
+        }
+      }
+    })
+
+    const response = await claudeConsoleRelayService.relayRequest(
+      { model: 'claude-sonnet-4-6', messages: [] },
+      { id: 'key-1', name: 'test-key' },
+      null,
+      null,
+      {},
+      'zhipu-account-1'
+    )
+
+    expect(response.statusCode).toBe(429)
+    expect(claudeConsoleAccountService.refreshZhipuCodingQuotaProtection).toHaveBeenCalledWith(
+      'zhipu-account-1',
+      expect.objectContaining({
+        account: expect.objectContaining({ apiUrl: 'https://open.bigmodel.cn/api/anthropic' })
+      })
+    )
+    expect(claudeConsoleAccountService.markAccountRateLimited).not.toHaveBeenCalled()
+
+    updateLastUsedTime.mockRestore()
+  })
+
+  it('uses Zhipu quota API protection even when auto protection is disabled', async () => {
+    const updateLastUsedTime = jest
+      .spyOn(claudeConsoleRelayService, '_updateLastUsedTime')
+      .mockResolvedValue(undefined)
+
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      id: 'zhipu-account-2',
+      name: 'zhipu-coding-disabled-protection',
+      apiUrl: 'https://open.bigmodel.cn/api/anthropic',
+      apiKey: 'zhipu-api-key',
+      supportedModels: [],
+      maxConcurrentTasks: 0,
+      disableAutoProtection: true
+    })
+    claudeConsoleAccountService._createProxyAgent.mockReturnValue(undefined)
+    claudeConsoleAccountService.isZhipuCodingPlanAccount.mockReturnValue(true)
+    claudeConsoleAccountService.refreshZhipuCodingQuotaProtection.mockResolvedValue({
+      checked: true,
+      exhausted: true,
+      suspended: true
+    })
+    axios.mockResolvedValue({
+      status: 429,
+      headers: {},
+      data: {
+        error: {
+          message: 'rate limit reached'
+        }
+      }
+    })
+
+    await claudeConsoleRelayService.relayRequest(
+      { model: 'claude-sonnet-4-6', messages: [] },
+      { id: 'key-1', name: 'test-key' },
+      null,
+      null,
+      {},
+      'zhipu-account-2'
+    )
+
+    expect(claudeConsoleAccountService.refreshZhipuCodingQuotaProtection).toHaveBeenCalledWith(
+      'zhipu-account-2',
+      expect.objectContaining({
+        account: expect.objectContaining({ disableAutoProtection: true })
+      })
+    )
+    expect(claudeConsoleAccountService.markAccountRateLimited).not.toHaveBeenCalled()
+
+    updateLastUsedTime.mockRestore()
+  })
+
+  it('suspends Volcengine Ark monthly quota 429 errors until the reset time', async () => {
+    const updateLastUsedTime = jest
+      .spyOn(claudeConsoleRelayService, '_updateLastUsedTime')
+      .mockResolvedValue(undefined)
+
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      id: 'ark-account-1',
+      name: '火山',
+      apiUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+      apiKey: 'ark-api-key',
+      supportedModels: [],
+      maxConcurrentTasks: 0,
+      disableAutoProtection: true
+    })
+    claudeConsoleAccountService._createProxyAgent.mockReturnValue(undefined)
+    axios.mockResolvedValue({
+      status: 429,
+      headers: {},
+      data: {
+        error: {
+          message:
+            'You have exceeded the monthly usage quota. It will reset at 2026-06-26 23:59:59 +0800 CST.'
+        }
+      }
+    })
+
+    const response = await claudeConsoleRelayService.relayRequest(
+      { model: 'deepseek-v4-pro', messages: [] },
+      { id: 'key-1', name: 'test-key' },
+      null,
+      null,
+      {},
+      'ark-account-1'
+    )
+
+    expect(response.statusCode).toBe(429)
+    expect(claudeConsoleAccountService.markVolcengineArkMonthlyQuotaExceeded).toHaveBeenCalledWith(
+      'ark-account-1',
+      expect.objectContaining({
+        resetAt: '2026-06-26T15:59:59.000Z',
+        resetAtText: '2026-06-26 23:59:59 +0800 CST'
+      })
+    )
+    expect(claudeConsoleAccountService.markAccountRateLimited).not.toHaveBeenCalled()
+
+    updateLastUsedTime.mockRestore()
+  })
+
+  it('does not suspend non-Kimi accounts for the same 403 text', async () => {
+    const updateLastUsedTime = jest
+      .spyOn(claudeConsoleRelayService, '_updateLastUsedTime')
+      .mockResolvedValue(undefined)
+
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      id: 'console-account-1',
+      name: 'console-account',
+      apiUrl: 'https://console.example.com/',
+      apiKey: 'console-api-key',
+      supportedModels: [],
+      maxConcurrentTasks: 0,
+      disableAutoProtection: false
+    })
+    claudeConsoleAccountService._createProxyAgent.mockReturnValue(undefined)
+    axios.mockResolvedValue({
+      status: 403,
+      headers: {},
+      data: {
+        error: {
+          message:
+            "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle."
+        }
+      }
+    })
+
+    await claudeConsoleRelayService.relayRequest(
+      { model: 'claude-sonnet-4-6', messages: [] },
+      { id: 'key-1', name: 'test-key' },
+      null,
+      null,
+      {},
+      'console-account-1'
+    )
+
+    expect(claudeConsoleAccountService.markKimiBillingCycleQuotaExceeded).not.toHaveBeenCalled()
+
+    updateLastUsedTime.mockRestore()
+  })
 })
 
 describe('claudeConsoleRelayService._makeClaudeConsoleStreamRequest', () => {
@@ -161,6 +558,11 @@ describe('claudeConsoleRelayService._makeClaudeConsoleStreamRequest', () => {
     jest.useRealTimers()
     delete process.env.CONCURRENCY_MAX_LIFETIME_MINUTES
     delete process.env.CONSOLE_STREAM_END_FALLBACK_MS
+    claudeConsoleAccountService.isZhipuCodingPlanAccount.mockReturnValue(false)
+    claudeConsoleAccountService.refreshZhipuCodingQuotaProtection.mockResolvedValue({
+      checked: true,
+      exhausted: false
+    })
   })
 
   afterEach(() => {

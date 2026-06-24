@@ -90,7 +90,7 @@ class AccountBalanceService {
   async getAllAccountsBalance(platform, options = {}) {
     const normalizedPlatform = this.normalizePlatform(platform)
     const accounts = await this.getAllAccountsByPlatform(normalizedPlatform)
-    const queryApi = this._parseBoolean(options.queryApi) || false
+    const queryApi = this._parseQueryMode(options.queryApi)
     const useCache = options.useCache !== false
 
     const results = await this._mapWithConcurrency(
@@ -317,39 +317,74 @@ class AccountBalanceService {
     }
     const scriptEnabled = isBalanceScriptEnabled()
     const scriptMeta = { scriptEnabled, scriptConfigured }
+    const provider = this.providers.get(platform)
 
     const localBalance = await this._getBalanceFromLocal(accountId, platform)
     const localStatistics = localBalance.statistics || {}
 
     const quotaFromLocal = this._buildQuotaFromLocal(account, localStatistics)
+    const responseMeta = {
+      ...scriptMeta,
+      localQuota: quotaFromLocal.quota
+    }
 
-    // 安全限制：queryApi=auto 仅用于 Antigravity（gemini + oauthProvider=antigravity）账户
+    const providerSupportsAuto =
+      provider &&
+      typeof provider.supportsAutoQuery === 'function' &&
+      provider.supportsAutoQuery(account)
+    const builtInAutoSupported = platform === 'gemini' && account?.oauthProvider === 'antigravity'
     const effectiveQueryMode =
-      queryMode === 'auto' && !(platform === 'gemini' && account?.oauthProvider === 'antigravity')
-        ? 'local'
-        : queryMode
+      queryMode === 'auto' && !builtInAutoSupported && !providerSupportsAuto ? 'local' : queryMode
+    const expectedAutoQuotaType =
+      effectiveQueryMode === 'auto'
+        ? this._getExpectedAutoQuotaType(
+            platform,
+            account,
+            providerSupportsAuto,
+            builtInAutoSupported
+          )
+        : null
 
     // local: 仅本地统计/缓存；auto: 优先缓存，无缓存则尝试远程 Provider（并缓存结果）
     if (effectiveQueryMode !== 'api') {
       if (useCache) {
         const cached = await this.redis.getAccountBalance(platform, accountId)
         if (cached && cached.status === 'success') {
-          return this._buildResponse(
-            {
-              status: cached.status,
-              errorMessage: cached.errorMessage,
-              balance: quotaFromLocal.balance ?? cached.balance,
-              currency: quotaFromLocal.currency || cached.currency || 'USD',
-              quota: quotaFromLocal.quota || cached.quota || null,
-              statistics: localStatistics,
-              lastRefreshAt: cached.lastRefreshAt
-            },
-            accountId,
-            platform,
-            'cache',
-            cached.ttlSeconds,
-            scriptMeta
-          )
+          if (
+            expectedAutoQuotaType &&
+            !this._hasExpectedAutoQuotaType(cached, expectedAutoQuotaType)
+          ) {
+            this.logger.debug(
+              `跳过不匹配的 auto 余额缓存: ${platform}:${accountId}, expected=${expectedAutoQuotaType}, actual=${cached?.quota?.type || 'local'}`
+            )
+          } else {
+            const mergedCached = this._mergeRemoteBalanceWithLocal(
+              cached,
+              quotaFromLocal,
+              this._shouldPreferRemoteBalanceData(
+                cached,
+                providerSupportsAuto,
+                builtInAutoSupported
+              )
+            )
+
+            return this._buildResponse(
+              {
+                status: cached.status,
+                errorMessage: cached.errorMessage,
+                balance: mergedCached.balance,
+                currency: mergedCached.currency,
+                quota: mergedCached.quota,
+                statistics: localStatistics,
+                lastRefreshAt: cached.lastRefreshAt
+              },
+              accountId,
+              platform,
+              'cache',
+              cached.ttlSeconds,
+              responseMeta
+            )
+          }
         }
       }
 
@@ -368,7 +403,7 @@ class AccountBalanceService {
           platform,
           'local',
           null,
-          scriptMeta
+          responseMeta
         )
       }
     }
@@ -379,7 +414,6 @@ class AccountBalanceService {
     if (scriptEnabled && scriptConfigured) {
       providerResult = await this._getBalanceFromScript(scriptConfig, accountId, platform)
     } else {
-      const provider = this.providers.get(platform)
       if (!provider) {
         return this._buildResponse(
           {
@@ -395,7 +429,7 @@ class AccountBalanceService {
           platform,
           'local',
           null,
-          scriptMeta
+          responseMeta
         )
       }
       providerResult = await this._getBalanceFromProvider(provider, account)
@@ -415,14 +449,24 @@ class AccountBalanceService {
     }
 
     const source = isRemoteSuccess ? 'api' : 'local'
+    const mergedProvider = this._mergeRemoteBalanceWithLocal(
+      providerResult,
+      quotaFromLocal,
+      isRemoteSuccess &&
+        this._shouldPreferRemoteBalanceData(
+          providerResult,
+          providerSupportsAuto,
+          builtInAutoSupported
+        )
+    )
 
     return this._buildResponse(
       {
         status: providerResult.status,
         errorMessage: providerResult.errorMessage,
-        balance: quotaFromLocal.balance ?? providerResult.balance,
-        currency: quotaFromLocal.currency || providerResult.currency || 'USD',
-        quota: quotaFromLocal.quota || providerResult.quota || null,
+        balance: mergedProvider.balance,
+        currency: mergedProvider.currency,
+        quota: mergedProvider.quota,
         statistics: localStatistics,
         lastRefreshAt: providerResult.lastRefreshAt
       },
@@ -430,7 +474,7 @@ class AccountBalanceService {
       platform,
       source,
       null,
-      scriptMeta
+      responseMeta
     )
   }
 
@@ -703,6 +747,47 @@ class AccountBalanceService {
     }
   }
 
+  _shouldPreferRemoteBalanceData(balanceData, providerSupportsAuto, builtInAutoSupported) {
+    return Boolean(
+      providerSupportsAuto ||
+        builtInAutoSupported ||
+        (balanceData?.quota && typeof balanceData.quota.type === 'string')
+    )
+  }
+
+  _getExpectedAutoQuotaType(platform, _account, providerSupportsAuto, builtInAutoSupported) {
+    if (builtInAutoSupported) {
+      return 'antigravity'
+    }
+    if (providerSupportsAuto && platform === 'claude-console') {
+      return 'zhipu-coding-plan'
+    }
+    return null
+  }
+
+  _hasExpectedAutoQuotaType(balanceData, expectedType) {
+    if (!expectedType) {
+      return true
+    }
+    return balanceData?.quota?.type === expectedType
+  }
+
+  _mergeRemoteBalanceWithLocal(remoteData = {}, localData = {}, preferRemote = false) {
+    if (preferRemote) {
+      return {
+        balance: remoteData.balance ?? localData.balance ?? null,
+        currency: remoteData.currency || localData.currency || 'USD',
+        quota: remoteData.quota || localData.quota || null
+      }
+    }
+
+    return {
+      balance: localData.balance ?? remoteData.balance ?? null,
+      currency: localData.currency || remoteData.currency || 'USD',
+      quota: localData.quota || remoteData.quota || null
+    }
+  }
+
   _computeNextResetAt(resetTime) {
     const now = new Date()
     const tzNow = this.redis.getDateInTimezone(now)
@@ -794,8 +879,11 @@ class AccountBalanceService {
   }
 
   _parseQueryMode(value) {
-    if (value === 'auto') {
-      return 'auto'
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase()
+      if (normalized === 'auto' || normalized === 'api' || normalized === 'local') {
+        return normalized
+      }
     }
     const parsed = this._parseBoolean(value)
     return parsed ? 'api' : 'local'

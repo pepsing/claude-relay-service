@@ -22,68 +22,77 @@
         {{ balanceData.error }}
       </div>
 
-      <div class="flex items-center justify-between gap-2">
-        <div class="flex items-center gap-2">
-          <i
-            class="fas"
-            :class="
-              balanceData.balance
-                ? 'fa-wallet text-green-600 dark:text-green-400'
-                : 'fa-chart-line text-gray-500 dark:text-gray-400'
-            "
-          ></i>
-          <span class="text-sm font-semibold text-gray-900 dark:text-gray-100">
-            {{ primaryText }}
-          </span>
-          <span class="rounded px-1.5 py-0.5 text-xs" :class="sourceClass">
-            {{ sourceLabel }}
-          </span>
-        </div>
-
-        <button
-          v-if="!hideRefresh"
-          class="text-xs text-gray-500 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:text-blue-400"
-          :disabled="refreshing || !canRefresh"
-          :title="refreshTitle"
-          @click="refresh"
-        >
-          <i class="fas fa-sync-alt" :class="{ 'fa-spin': refreshing }"></i>
-        </button>
+      <div v-if="isLocalQuotaSuppressed" class="text-xs text-gray-400 dark:text-gray-500">
+        本地每日配额见右侧
       </div>
 
-      <!-- 配额（如适用） -->
-      <div v-if="quotaInfo && isAntigravityQuota" class="space-y-2">
-        <div class="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
-          <span>剩余</span>
-          <span>{{ formatQuotaNumber(quotaInfo.remaining) }}</span>
+      <template v-else>
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <i
+              class="fas"
+              :class="
+                displayBalance
+                  ? 'fa-wallet text-green-600 dark:text-green-400'
+                  : 'fa-chart-line text-gray-500 dark:text-gray-400'
+              "
+            ></i>
+            <span class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              {{ primaryText }}
+            </span>
+            <span class="rounded px-1.5 py-0.5 text-xs" :class="sourceClass">
+              {{ sourceLabel }}
+            </span>
+            <span
+              v-if="zhipuPlanLabel"
+              class="rounded bg-emerald-50 px-1.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+            >
+              {{ zhipuPlanLabel }}
+            </span>
+          </div>
+
+          <button
+            v-if="!hideRefresh"
+            class="text-xs text-gray-500 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40 dark:text-gray-400 dark:hover:text-blue-400"
+            :disabled="refreshing || !canRefresh"
+            :title="refreshTitle"
+            @click="refresh"
+          >
+            <i class="fas fa-sync-alt" :class="{ 'fa-spin': refreshing }"></i>
+          </button>
         </div>
 
-        <div class="space-y-1">
+        <!-- 配额（如适用） -->
+        <div
+          v-if="isZhipuQuota && !props.hideWindowQuota && zhipuQuotaRows.length > 0"
+          class="space-y-2"
+        >
           <div
-            v-for="row in antigravityRows"
-            :key="row.category"
+            v-for="row in zhipuQuotaRows"
+            :key="row.key"
             class="flex items-center gap-2 rounded-md bg-gray-50 px-2 py-1.5 dark:bg-gray-700/60"
+            :class="row.wrapperClass"
           >
             <span class="h-2 w-2 shrink-0 rounded-full" :class="row.dotClass"></span>
             <span
               class="min-w-0 flex-1 truncate text-xs font-medium text-gray-800 dark:text-gray-100"
-              :title="row.category"
+              :title="row.label"
             >
-              {{ row.category }}
+              {{ row.label }}
             </span>
 
-            <div class="flex w-[94px] flex-col gap-0.5">
+            <div class="flex w-[112px] flex-col gap-0.5">
               <div class="h-1.5 w-full rounded-full bg-gray-200 dark:bg-gray-600">
                 <div
                   class="h-1.5 rounded-full transition-all"
                   :class="row.barClass"
-                  :style="{ width: `${row.remainingPercent ?? 0}%` }"
+                  :style="{ width: `${row.percentage}%` }"
                 ></div>
               </div>
               <div
                 class="flex items-center justify-between text-[11px] text-gray-500 dark:text-gray-300"
               >
-                <span>{{ row.remainingText }}</span>
+                <span>{{ row.summary }}</span>
                 <span v-if="row.resetAt" class="text-gray-400 dark:text-gray-400">{{
                   formatResetTime(row.resetAt)
                 }}</span>
@@ -91,41 +100,87 @@
             </div>
           </div>
         </div>
-      </div>
 
-      <div v-else-if="quotaInfo" class="space-y-1">
-        <div class="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
-          <span>已用: {{ formatQuotaNumber(quotaInfo.used) }}</span>
-          <span>剩余: {{ formatQuotaNumber(quotaInfo.remaining) }}</span>
-        </div>
-        <div class="h-1.5 w-full rounded-full bg-gray-200 dark:bg-gray-700">
-          <div
-            class="h-1.5 rounded-full transition-all"
-            :class="quotaBarClass"
-            :style="{ width: `${Math.min(100, quotaInfo.percentage)}%` }"
-          ></div>
-        </div>
-        <div class="flex items-center justify-between text-xs">
-          <span class="text-gray-500 dark:text-gray-400">
-            {{ quotaInfo.percentage.toFixed(1) }}% 已使用
-          </span>
-          <span v-if="quotaInfo.resetAt" class="text-gray-400 dark:text-gray-500">
-            重置: {{ formatResetTime(quotaInfo.resetAt) }}
-          </span>
-        </div>
-      </div>
+        <div v-else-if="quotaInfo && isAntigravityQuota" class="space-y-2">
+          <div class="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
+            <span>剩余</span>
+            <span>{{ formatQuotaNumber(quotaInfo.remaining) }}</span>
+          </div>
 
-      <div v-else-if="balanceData.quota?.unlimited" class="flex items-center gap-2">
-        <i class="fas fa-infinity text-blue-500 dark:text-blue-400"></i>
-        <span class="text-xs text-gray-600 dark:text-gray-400">无限制</span>
-      </div>
+          <div class="space-y-1">
+            <div
+              v-for="row in antigravityRows"
+              :key="row.category"
+              class="flex items-center gap-2 rounded-md bg-gray-50 px-2 py-1.5 dark:bg-gray-700/60"
+            >
+              <span class="h-2 w-2 shrink-0 rounded-full" :class="row.dotClass"></span>
+              <span
+                class="min-w-0 flex-1 truncate text-xs font-medium text-gray-800 dark:text-gray-100"
+                :title="row.category"
+              >
+                {{ row.category }}
+              </span>
 
-      <div
-        v-if="balanceData.cacheExpiresAt && balanceData.source === 'cache'"
-        class="text-xs text-gray-400 dark:text-gray-500"
-      >
-        缓存至: {{ formatCacheExpiry(balanceData.cacheExpiresAt) }}
-      </div>
+              <div class="flex w-[94px] flex-col gap-0.5">
+                <div class="h-1.5 w-full rounded-full bg-gray-200 dark:bg-gray-600">
+                  <div
+                    class="h-1.5 rounded-full transition-all"
+                    :class="row.barClass"
+                    :style="{ width: `${row.remainingPercent ?? 0}%` }"
+                  ></div>
+                </div>
+                <div
+                  class="flex items-center justify-between text-[11px] text-gray-500 dark:text-gray-300"
+                >
+                  <span>{{ row.remainingText }}</span>
+                  <span v-if="row.resetAt" class="text-gray-400 dark:text-gray-400">{{
+                    formatResetTime(row.resetAt)
+                  }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="quotaInfo && !isWindowQuotaSuppressed" class="space-y-1">
+          <div class="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
+            <span>已用: {{ formatQuotaNumber(quotaInfo.used) }}</span>
+            <span>剩余: {{ formatQuotaNumber(quotaInfo.remaining) }}</span>
+          </div>
+          <div class="h-1.5 w-full rounded-full bg-gray-200 dark:bg-gray-700">
+            <div
+              class="h-1.5 rounded-full transition-all"
+              :class="quotaBarClass"
+              :style="{ width: `${Math.min(100, quotaInfo.percentage)}%` }"
+            ></div>
+          </div>
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-gray-500 dark:text-gray-400">
+              {{ quotaInfo.percentage.toFixed(1) }}% 已使用
+            </span>
+            <span v-if="quotaInfo.resetAt" class="text-gray-400 dark:text-gray-500">
+              重置: {{ formatResetTime(quotaInfo.resetAt) }}
+            </span>
+          </div>
+        </div>
+
+        <div
+          v-else-if="displayQuota?.unlimited && !isWindowQuotaSuppressed"
+          class="flex items-center gap-2"
+        >
+          <i class="fas fa-infinity text-blue-500 dark:text-blue-400"></i>
+          <span class="text-xs text-gray-600 dark:text-gray-400">无限制</span>
+        </div>
+
+        <div
+          v-if="
+            !props.preferLocalQuota && balanceData.cacheExpiresAt && balanceData.source === 'cache'
+          "
+          class="text-xs text-gray-400 dark:text-gray-500"
+        >
+          缓存至: {{ formatCacheExpiry(balanceData.cacheExpiresAt) }}
+        </div>
+      </template>
     </div>
 
     <div v-else class="text-xs text-gray-400 dark:text-gray-500">暂无余额数据</div>
@@ -143,6 +198,9 @@ const props = defineProps({
   platform: { type: String, required: true },
   initialBalance: { type: Object, default: null },
   hideRefresh: { type: Boolean, default: false },
+  hideLocalQuota: { type: Boolean, default: false },
+  hideWindowQuota: { type: Boolean, default: false },
+  preferLocalQuota: { type: Boolean, default: false },
   autoLoad: { type: Boolean, default: true },
   queryMode: { type: String, default: 'local' } // local | auto | api
 })
@@ -153,9 +211,35 @@ const balanceData = ref(props.initialBalance)
 const loading = ref(false)
 const refreshing = ref(false)
 const requestError = ref(null)
+const autoLoadAttempted = ref(false)
+
+const localQuota = computed(() => balanceData.value?.localQuota || null)
+
+const effectiveSource = computed(() => {
+  if (props.preferLocalQuota && localQuota.value) return 'local'
+  return balanceData.value?.source
+})
+
+const displayQuota = computed(() => {
+  if (props.preferLocalQuota && localQuota.value) return localQuota.value
+  return balanceData.value?.quota
+})
+
+const displayBalance = computed(() => {
+  if (props.preferLocalQuota && localQuota.value) {
+    const amount = Number(localQuota.value.remaining)
+    if (!Number.isFinite(amount)) return null
+    return {
+      amount,
+      currency: 'USD',
+      formattedAmount: formatCurrency(amount)
+    }
+  }
+  return balanceData.value?.balance || null
+})
 
 const sourceClass = computed(() => {
-  const source = balanceData.value?.source
+  const source = effectiveSource.value
   return {
     'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300': source === 'api',
     'bg-gray-100 text-gray-600 dark:bg-gray-700/60 dark:text-gray-300': source === 'cache',
@@ -164,12 +248,29 @@ const sourceClass = computed(() => {
 })
 
 const sourceLabel = computed(() => {
-  const source = balanceData.value?.source
+  const source = effectiveSource.value
   return { api: 'API', cache: '缓存', local: '本地' }[source] || '未知'
 })
 
+const expectedAutoQuotaType = computed(() => {
+  if (props.queryMode !== 'auto') return null
+  if (props.platform === 'gemini') return 'antigravity'
+  if (props.platform === 'claude-console') return 'zhipu-coding-plan'
+  return null
+})
+
+const hasExpectedAutoQuota = (data = balanceData.value) => {
+  const expectedType = expectedAutoQuotaType.value
+  if (!expectedType) return true
+  return data?.quota?.type === expectedType
+}
+
+const shouldAutoLoadExpectedQuota = (data = balanceData.value) => {
+  return props.queryMode === 'auto' && !hasExpectedAutoQuota(data) && !autoLoadAttempted.value
+}
+
 const quotaInfo = computed(() => {
-  const quota = balanceData.value?.quota
+  const quota = displayQuota.value
   if (!quota || quota.unlimited) return null
   if (typeof quota.percentage !== 'number' || !Number.isFinite(quota.percentage)) return null
   return {
@@ -180,14 +281,33 @@ const quotaInfo = computed(() => {
   }
 })
 
+const isLocalQuotaSuppressed = computed(() => {
+  const quota = displayQuota.value
+  return Boolean(
+    props.hideLocalQuota &&
+      effectiveSource.value === 'local' &&
+      !balanceData.value?.scriptConfigured &&
+      quota &&
+      !quota.type
+  )
+})
+
 const isAntigravityQuota = computed(() => {
-  return balanceData.value?.quota?.type === 'antigravity'
+  return displayQuota.value?.type === 'antigravity'
+})
+
+const isZhipuQuota = computed(() => {
+  return displayQuota.value?.type === 'zhipu-coding-plan'
+})
+
+const isWindowQuotaSuppressed = computed(() => {
+  return props.hideWindowQuota && isZhipuQuota.value
 })
 
 const antigravityRows = computed(() => {
   if (!isAntigravityQuota.value) return []
 
-  const buckets = balanceData.value?.quota?.buckets
+  const buckets = displayQuota.value?.buckets
   const list = Array.isArray(buckets) ? buckets : []
   const map = new Map(list.map((b) => [b?.category, b]))
 
@@ -215,6 +335,88 @@ const antigravityRows = computed(() => {
       barClass: styles[category]?.barClass || 'bg-gray-400'
     }
   })
+})
+
+const zhipuQuotaRows = computed(() => {
+  if (!isZhipuQuota.value) return []
+
+  const buckets = Array.isArray(displayQuota.value?.buckets) ? displayQuota.value.buckets : []
+  const order = {
+    five_hour: 0,
+    weekly: 1,
+    tokens: 2,
+    mcp_monthly: 3
+  }
+  const rows = [...buckets].sort((a, b) => {
+    const left = order[a?.windowType || 'tokens'] ?? 99
+    const right = order[b?.windowType || 'tokens'] ?? 99
+    return left - right
+  })
+  const styles = {
+    five_hour: { dotClass: 'bg-blue-500', barClass: 'bg-blue-500 dark:bg-blue-400' },
+    weekly: { dotClass: 'bg-purple-500', barClass: 'bg-purple-500 dark:bg-purple-400' },
+    mcp_monthly: { dotClass: 'bg-cyan-500', barClass: 'bg-cyan-500 dark:bg-cyan-400' },
+    tokens: { dotClass: 'bg-emerald-500', barClass: 'bg-emerald-500 dark:bg-emerald-400' }
+  }
+
+  return rows.map((bucket, index) => {
+    const percentage = Number(bucket?.percentage)
+    const normalizedPercentage = Number.isFinite(percentage)
+      ? Math.max(0, Math.min(100, percentage))
+      : 0
+    const windowType = bucket?.windowType || 'tokens'
+    const style = styles[windowType] || styles.tokens
+    const used = Number(bucket?.used)
+    const total = Number(bucket?.total)
+    const remaining = Number(bucket?.remaining)
+    const unit = bucket?.unit === '%' ? '%' : ''
+    const remainingText = Number.isFinite(remaining)
+      ? `${formatNumber(Math.max(0, remaining))}${unit}`
+      : 'N/A'
+    const usageText =
+      unit === '%' || !Number.isFinite(used) || !Number.isFinite(total)
+        ? `${normalizedPercentage.toFixed(1)}% 已用 / 剩余 ${remainingText}`
+        : `${formatNumber(used)} / ${formatNumber(total)}`
+    const exhausted =
+      normalizedPercentage >= 100 || (bucket?.type === 'TOKENS_LIMIT' && remaining === 0)
+
+    return {
+      key: `${windowType}-${index}`,
+      label: bucket?.label || (index === 1 ? '每周额度' : '5小时额度'),
+      isToken: bucket?.type === 'TOKENS_LIMIT',
+      percentage: normalizedPercentage,
+      summary: usageText,
+      resetAt: bucket?.resetAt || null,
+      exhausted,
+      wrapperClass: exhausted ? 'ring-1 ring-red-100 dark:ring-red-900/50' : '',
+      dotClass: style.dotClass,
+      barClass: exhausted
+        ? 'bg-red-500 dark:bg-red-600'
+        : normalizedPercentage >= 85
+          ? 'bg-yellow-500 dark:bg-yellow-600'
+          : style.barClass
+    }
+  })
+})
+
+const zhipuPrimaryText = computed(() => {
+  const rows = zhipuQuotaRows.value
+  if (rows.length === 0) return null
+
+  const exhaustedRow = rows.find((row) => row.exhausted)
+  const tokenRows = rows.filter((row) => row.isToken)
+  const target =
+    exhaustedRow ||
+    [...tokenRows].sort((a, b) => b.percentage - a.percentage)[0] ||
+    [...rows].sort((a, b) => b.percentage - a.percentage)[0]
+
+  if (!target) return null
+  return `${target.label} ${target.percentage.toFixed(1)}%`
+})
+
+const zhipuPlanLabel = computed(() => {
+  if (!isZhipuQuota.value || props.hideWindowQuota) return ''
+  return displayQuota.value?.planName || displayQuota.value?.level || ''
 })
 
 const quotaBarClass = computed(() => {
@@ -248,12 +450,18 @@ const refreshTitle = computed(() => {
   if (isAntigravityQuota.value) {
     return '刷新配额（调用 Antigravity API）'
   }
+  if (isZhipuQuota.value || (props.platform === 'claude-console' && props.queryMode === 'auto')) {
+    return '刷新配额（调用智谱 Coding Plan API）'
+  }
   return '刷新余额（调用脚本配置的余额 API）'
 })
 
 const primaryText = computed(() => {
-  if (balanceData.value?.balance?.formattedAmount) {
-    return balanceData.value.balance.formattedAmount
+  if (isZhipuQuota.value && !props.hideWindowQuota) {
+    return zhipuPrimaryText.value ? `智谱 ${zhipuPrimaryText.value}` : '智谱额度'
+  }
+  if (displayBalance.value?.formattedAmount) {
+    return displayBalance.value.formattedAmount
   }
   const dailyCost = Number(balanceData.value?.statistics?.dailyCost || 0)
   return `今日成本 ${formatCurrency(dailyCost)}`
@@ -262,21 +470,34 @@ const primaryText = computed(() => {
 const load = async () => {
   if (!props.autoLoad) return
   if (!props.accountId || !props.platform) return
+  if (loading.value) return
 
   loading.value = true
   requestError.value = null
+  if (props.queryMode === 'auto') {
+    autoLoadAttempted.value = true
+  }
 
-  const params = {
-    platform: props.platform,
-    queryApi: props.queryMode === 'api' ? true : props.queryMode === 'auto' ? 'auto' : false
+  try {
+    const params = {
+      platform: props.platform,
+      queryApi: props.queryMode === 'api' ? true : props.queryMode === 'auto' ? 'auto' : false
+    }
+    const response = await getAccountBalanceApi(props.accountId, params)
+    if (response?.success) {
+      balanceData.value = response.data
+      if (hasExpectedAutoQuota(response.data)) {
+        autoLoadAttempted.value = false
+      }
+      emit('refreshed', response.data)
+    } else {
+      requestError.value = response?.error || response?.message || '加载失败'
+    }
+  } catch (error) {
+    requestError.value = error?.message || '加载失败'
+  } finally {
+    loading.value = false
   }
-  const response = await getAccountBalanceApi(props.accountId, params)
-  if (response?.success) {
-    balanceData.value = response.data
-  } else {
-    requestError.value = response?.error || '加载失败'
-  }
-  loading.value = false
 }
 
 const refresh = async () => {
@@ -287,14 +508,19 @@ const refresh = async () => {
   refreshing.value = true
   requestError.value = null
 
-  const response = await refreshAccountBalanceApi(props.accountId, { platform: props.platform })
-  if (response?.success) {
-    balanceData.value = response.data
-    emit('refreshed', response.data)
-  } else {
-    requestError.value = response?.error || '刷新失败'
+  try {
+    const response = await refreshAccountBalanceApi(props.accountId, { platform: props.platform })
+    if (response?.success) {
+      balanceData.value = response.data
+      emit('refreshed', response.data)
+    } else {
+      requestError.value = response?.error || response?.message || '刷新失败'
+    }
+  } catch (error) {
+    requestError.value = error?.message || '刷新失败'
+  } finally {
+    refreshing.value = false
   }
-  refreshing.value = false
 }
 
 const reload = async () => {
@@ -346,13 +572,30 @@ watch(
   () => props.initialBalance,
   (newVal) => {
     if (newVal) {
+      if (
+        props.queryMode === 'auto' &&
+        hasExpectedAutoQuota(balanceData.value) &&
+        !hasExpectedAutoQuota(newVal)
+      ) {
+        return
+      }
       balanceData.value = newVal
+      if (shouldAutoLoadExpectedQuota(newVal)) {
+        load()
+      }
     }
   }
 )
 
+watch(
+  () => [props.accountId, props.platform, props.queryMode],
+  () => {
+    autoLoadAttempted.value = false
+  }
+)
+
 onMounted(() => {
-  if (!props.initialBalance) {
+  if (!props.initialBalance || shouldAutoLoadExpectedQuota()) {
     load()
   }
 })

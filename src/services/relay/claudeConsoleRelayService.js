@@ -329,6 +329,24 @@ class ClaudeConsoleRelayService {
       // 检查是否为账户禁用/不可用的 400 错误
       const accountDisabledError = isAccountDisabledError(response.status, response.data)
 
+      const kimiBillingCycleQuotaError = this._isKimiBillingCycleQuotaError(
+        response.status,
+        response.data,
+        account
+      )
+      const volcengineArkMonthlyQuotaError = this._getVolcengineArkMonthlyQuotaError(
+        response.status,
+        response.data,
+        account
+      )
+      const zhipuCodingQuotaExceeded = await this._handleZhipuCodingQuotaAfterError({
+        accountId,
+        account,
+        status: response.status,
+        errorData: response.data,
+        autoProtectionDisabled
+      })
+
       // 检查错误状态并相应处理
       if (response.status === 401) {
         logger.warn(
@@ -349,6 +367,23 @@ class ClaudeConsoleRelayService {
         if (!autoProtectionDisabled) {
           await claudeConsoleAccountService.markConsoleAccountBlocked(accountId, errorDetails)
         }
+      } else if (kimiBillingCycleQuotaError) {
+        await this._handleKimiBillingCycleQuotaError({
+          accountId,
+          account,
+          errorData: response.data,
+          autoProtectionDisabled
+        })
+      } else if (volcengineArkMonthlyQuotaError) {
+        await this._handleVolcengineArkMonthlyQuotaError({
+          accountId,
+          account,
+          errorData: response.data,
+          quotaError: volcengineArkMonthlyQuotaError,
+          autoProtectionDisabled
+        })
+      } else if (zhipuCodingQuotaExceeded) {
+        logger.info(`⏸️ Suspended Zhipu Coding Plan account ${accountId} after quota check`)
       } else if (response.status === 429) {
         logger.warn(
           `🚫 Rate limit detected for Claude Console account ${accountId}${autoProtectionDisabled ? ' (auto-protection disabled, skipping status change)' : ''}`
@@ -1031,6 +1066,25 @@ class ClaudeConsoleRelayService {
                 errorDataForCheck
               )
 
+              const kimiBillingCycleQuotaError = this._isKimiBillingCycleQuotaError(
+                response.status,
+                errorDataForCheck,
+                account
+              )
+              const volcengineArkMonthlyQuotaError = this._getVolcengineArkMonthlyQuotaError(
+                response.status,
+                errorDataForCheck,
+                account
+              )
+              const zhipuCodingQuotaExceeded = await this._handleZhipuCodingQuotaAfterError({
+                accountId,
+                account,
+                status: response.status,
+                errorData: errorDataForCheck,
+                autoProtectionDisabled,
+                stream: true
+              })
+
               if (response.status === 401) {
                 logger.warn(
                   `🚫 [Stream] Unauthorized error detected for Claude Console account ${accountId}${autoProtectionDisabled ? ' (auto-protection disabled, skipping status change)' : ''}`
@@ -1051,6 +1105,27 @@ class ClaudeConsoleRelayService {
                     errorDataForCheck
                   )
                 }
+              } else if (kimiBillingCycleQuotaError) {
+                await this._handleKimiBillingCycleQuotaError({
+                  accountId,
+                  account,
+                  errorData: errorDataForCheck,
+                  autoProtectionDisabled,
+                  stream: true
+                })
+              } else if (volcengineArkMonthlyQuotaError) {
+                await this._handleVolcengineArkMonthlyQuotaError({
+                  accountId,
+                  account,
+                  errorData: errorDataForCheck,
+                  quotaError: volcengineArkMonthlyQuotaError,
+                  autoProtectionDisabled,
+                  stream: true
+                })
+              } else if (zhipuCodingQuotaExceeded) {
+                logger.info(
+                  `⏸️ [Stream] Suspended Zhipu Coding Plan account ${accountId} after quota check`
+                )
               } else if (response.status === 429) {
                 logger.warn(
                   `🚫 [Stream] Rate limit detected for Claude Console account ${accountId}${autoProtectionDisabled ? ' (auto-protection disabled, skipping status change)' : ''}`
@@ -1438,7 +1513,7 @@ class ClaudeConsoleRelayService {
             settleReject(error)
           })
         })
-        .catch((error) => {
+        .catch(async (error) => {
           if (aborted) {
             settleReject(new Error('Client disconnected'))
             return
@@ -1453,12 +1528,52 @@ class ClaudeConsoleRelayService {
           if (error.response) {
             const catchAutoProtectionDisabled =
               account?.disableAutoProtection === true || account?.disableAutoProtection === 'true'
+            const kimiBillingCycleQuotaError = this._isKimiBillingCycleQuotaError(
+              error.response.status,
+              error.response.data,
+              account
+            )
+            const volcengineArkMonthlyQuotaError = this._getVolcengineArkMonthlyQuotaError(
+              error.response.status,
+              error.response.data,
+              account
+            )
+            const zhipuCodingQuotaExceeded = await this._handleZhipuCodingQuotaAfterError({
+              accountId,
+              account,
+              status: error.response.status,
+              errorData: error.response.data,
+              autoProtectionDisabled: catchAutoProtectionDisabled,
+              stream: true
+            })
+
             if (error.response.status === 401) {
               if (!catchAutoProtectionDisabled) {
                 upstreamErrorHelper
                   .markTempUnavailable(accountId, 'claude-console', 401)
                   .catch(() => {})
               }
+            } else if (kimiBillingCycleQuotaError) {
+              this._handleKimiBillingCycleQuotaError({
+                accountId,
+                account,
+                errorData: error.response.data,
+                autoProtectionDisabled: catchAutoProtectionDisabled,
+                stream: true
+              }).catch(() => {})
+            } else if (volcengineArkMonthlyQuotaError) {
+              this._handleVolcengineArkMonthlyQuotaError({
+                accountId,
+                account,
+                errorData: error.response.data,
+                quotaError: volcengineArkMonthlyQuotaError,
+                autoProtectionDisabled: catchAutoProtectionDisabled,
+                stream: true
+              }).catch(() => {})
+            } else if (zhipuCodingQuotaExceeded) {
+              logger.info(
+                `⏸️ [Stream] Suspended Zhipu Coding Plan account ${accountId} after quota check`
+              )
             } else if (error.response.status === 429) {
               if (!catchAutoProtectionDisabled) {
                 claudeConsoleAccountService.markAccountRateLimited(accountId)
@@ -1519,6 +1634,206 @@ class ClaudeConsoleRelayService {
           settleReject(error)
         })
     })
+  }
+
+  _isKimiCodingApiUrl(apiUrl) {
+    if (!apiUrl || typeof apiUrl !== 'string') {
+      return false
+    }
+
+    try {
+      const parsedUrl = new URL(apiUrl)
+      if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'api.kimi.com') {
+        return false
+      }
+
+      const normalizedPath = parsedUrl.pathname.replace(/\/+$/, '')
+      return (
+        normalizedPath === '/coding' ||
+        normalizedPath === '/coding/v1' ||
+        normalizedPath === '/coding/v1/messages'
+      )
+    } catch {
+      return false
+    }
+  }
+
+  _isVolcengineArkCodingApiUrl(apiUrl) {
+    if (!apiUrl || typeof apiUrl !== 'string') {
+      return false
+    }
+
+    try {
+      const parsedUrl = new URL(apiUrl)
+      const hostname = parsedUrl.hostname.toLowerCase()
+      if (parsedUrl.protocol !== 'https:' || !/^ark\.[a-z0-9-]+\.volces\.com$/.test(hostname)) {
+        return false
+      }
+
+      const normalizedPath = parsedUrl.pathname.replace(/\/+$/, '').toLowerCase()
+      return (
+        normalizedPath === '/api/coding' ||
+        normalizedPath === '/api/coding/v1' ||
+        normalizedPath === '/api/coding/v1/messages'
+      )
+    } catch {
+      return false
+    }
+  }
+
+  _stringifyErrorData(errorData) {
+    if (typeof errorData === 'string') {
+      return errorData
+    }
+
+    if (Buffer.isBuffer(errorData)) {
+      return errorData.toString()
+    }
+
+    try {
+      return JSON.stringify(errorData || '')
+    } catch {
+      return String(errorData || '')
+    }
+  }
+
+  _isKimiBillingCycleQuotaError(status, errorData, account) {
+    if (status !== 403 || !this._isKimiCodingApiUrl(account?.apiUrl)) {
+      return false
+    }
+
+    const errorText = this._stringifyErrorData(errorData).toLowerCase()
+    if (!errorText) {
+      return false
+    }
+
+    return (
+      errorText.includes('billing_cycle_quota') ||
+      errorText.includes('quota will be refreshed in the next cycle') ||
+      (errorText.includes('billing cycle') &&
+        (errorText.includes('usage limit') || errorText.includes('quota')))
+    )
+  }
+
+  _parseVolcengineArkResetTime(errorText) {
+    const match = String(errorText || '').match(
+      /\breset\s+at\s+(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s+([+-]\d{2}:?\d{2})(?:\s+[A-Z]{2,5})?/i
+    )
+    if (!match) {
+      return null
+    }
+
+    const [, datePart, timePart, rawOffset] = match
+    const offset = rawOffset.includes(':')
+      ? rawOffset
+      : `${rawOffset.slice(0, 3)}:${rawOffset.slice(3)}`
+    const resetAt = new Date(`${datePart}T${timePart}${offset}`)
+    if (Number.isNaN(resetAt.getTime())) {
+      return null
+    }
+
+    return {
+      resetAt: resetAt.toISOString(),
+      resetAtText: match[0].replace(/^reset\s+at\s+/i, '')
+    }
+  }
+
+  _getVolcengineArkMonthlyQuotaError(status, errorData, account) {
+    if (Number(status) !== 429 || !this._isVolcengineArkCodingApiUrl(account?.apiUrl)) {
+      return null
+    }
+
+    const errorText = this._stringifyErrorData(errorData)
+    const normalizedText = errorText.toLowerCase()
+    if (
+      !normalizedText.includes('monthly usage quota') &&
+      !(normalizedText.includes('monthly') && normalizedText.includes('quota'))
+    ) {
+      return null
+    }
+
+    return this._parseVolcengineArkResetTime(errorText)
+  }
+
+  async _handleVolcengineArkMonthlyQuotaError({
+    accountId,
+    account,
+    errorData,
+    quotaError,
+    autoProtectionDisabled,
+    stream = false
+  }) {
+    logger.warn(
+      `🚫 ${stream ? '[Stream] ' : ''}Volcengine Ark monthly quota exhausted for Claude Console account ${accountId}, reset at ${quotaError.resetAt}${autoProtectionDisabled ? ' (auto-protection disabled ignored for terminal quota error)' : ''}`
+    )
+
+    await claudeConsoleAccountService.markVolcengineArkMonthlyQuotaExceeded(accountId, {
+      resetAt: quotaError.resetAt,
+      resetAtText: quotaError.resetAtText,
+      errorDetails: this._stringifyErrorData(errorData)
+    })
+    logger.info(
+      `⏸️ Suspended scheduling for Volcengine Ark account ${account?.name || accountId} until ${quotaError.resetAt}`
+    )
+  }
+
+  async _handleKimiBillingCycleQuotaError({
+    accountId,
+    account,
+    errorData,
+    autoProtectionDisabled,
+    stream = false
+  }) {
+    logger.warn(
+      `🚫 ${stream ? '[Stream] ' : ''}Kimi Code billing cycle quota exhausted for Claude Console account ${accountId}${autoProtectionDisabled ? ' (auto-protection disabled ignored for terminal quota error)' : ''}`
+    )
+
+    await claudeConsoleAccountService.markKimiBillingCycleQuotaExceeded(
+      accountId,
+      this._stringifyErrorData(errorData)
+    )
+    logger.info(
+      `⏸️ Suspended scheduling for Kimi Code account ${account?.name || accountId} after billing cycle quota error`
+    )
+  }
+
+  async _handleZhipuCodingQuotaAfterError({
+    accountId,
+    account,
+    status,
+    errorData,
+    autoProtectionDisabled,
+    stream = false
+  }) {
+    if (
+      ![400, 403, 429].includes(Number(status)) ||
+      !claudeConsoleAccountService.isZhipuCodingPlanAccount(account)
+    ) {
+      return false
+    }
+
+    try {
+      const result = await claudeConsoleAccountService.refreshZhipuCodingQuotaProtection(
+        accountId,
+        {
+          account,
+          errorDetails: this._stringifyErrorData(errorData)
+        }
+      )
+
+      if (result.exhausted) {
+        logger.warn(
+          `🚫 ${stream ? '[Stream] ' : ''}Zhipu Coding Plan quota exhausted for Claude Console account ${accountId}${autoProtectionDisabled ? ' (auto-protection disabled ignored for terminal quota state)' : ''}`
+        )
+        return true
+      }
+    } catch (error) {
+      logger.warn(
+        `⚠️ ${stream ? '[Stream] ' : ''}Failed to check Zhipu Coding Plan quota for ${accountId}: ${error.message}`
+      )
+    }
+
+    return false
   }
 
   // 🔧 过滤客户端请求头
@@ -1648,7 +1963,43 @@ class ClaudeConsoleRelayService {
         responseStream,
         payload,
         proxyAgent: claudeConsoleAccountService._createProxyAgent(account.proxy),
-        extraHeaders: getClaudeCodeTestHeaders()
+        extraHeaders: getClaudeCodeTestHeaders(),
+        onErrorResponse: async ({ status, data }) => {
+          const autoProtectionDisabled =
+            account.disableAutoProtection === true || account.disableAutoProtection === 'true'
+          if (this._isKimiBillingCycleQuotaError(status, data, account)) {
+            await this._handleKimiBillingCycleQuotaError({
+              accountId,
+              account,
+              errorData: data,
+              autoProtectionDisabled
+            })
+            return
+          }
+
+          const volcengineArkMonthlyQuotaError = this._getVolcengineArkMonthlyQuotaError(
+            status,
+            data,
+            account
+          )
+          if (volcengineArkMonthlyQuotaError) {
+            await this._handleVolcengineArkMonthlyQuotaError({
+              accountId,
+              account,
+              errorData: data,
+              quotaError: volcengineArkMonthlyQuotaError,
+              autoProtectionDisabled
+            })
+          } else {
+            await this._handleZhipuCodingQuotaAfterError({
+              accountId,
+              account,
+              status,
+              errorData: data,
+              autoProtectionDisabled
+            })
+          }
+        }
       }
 
       if (account.apiKey && account.apiKey.startsWith('sk-ant-')) {

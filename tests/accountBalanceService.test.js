@@ -193,6 +193,159 @@ describe('AccountBalanceService', () => {
     expect(result.data.lastRefreshAt).toBe('2025-01-01T00:00:00Z')
   })
 
+  it('should allow provider-declared auto query mode', async () => {
+    const mockRedis = buildMockRedis()
+    const service = new AccountBalanceService({ redis: mockRedis, logger: mockLogger })
+
+    service._computeMonthlyCost = jest.fn().mockResolvedValue(0)
+    service._computeTotalCost = jest.fn().mockResolvedValue(0)
+
+    const provider = {
+      supportsAutoQuery: jest.fn(() => true),
+      queryBalance: jest.fn().mockResolvedValue({
+        balance: null,
+        currency: 'USD',
+        quota: {
+          type: 'zhipu-coding-plan',
+          percentage: 100,
+          used: 100,
+          remaining: 0,
+          resetAt: '2026-06-24T12:00:00.000Z'
+        },
+        queryMethod: 'api'
+      })
+    }
+    service.registerProvider('claude-console', provider)
+
+    const account = {
+      id: 'zhipu-auto',
+      name: 'Zhipu',
+      apiUrl: 'https://open.bigmodel.cn/api/anthropic',
+      dailyQuota: '100',
+      quotaResetTime: '00:00'
+    }
+    const result = await service._getAccountBalanceForAccount(account, 'claude-console', {
+      queryApi: 'auto',
+      useCache: false
+    })
+
+    expect(provider.supportsAutoQuery).toHaveBeenCalledWith(account)
+    expect(provider.queryBalance).toHaveBeenCalledWith(account)
+    expect(result.data.source).toBe('api')
+    expect(result.data.quota.type).toBe('zhipu-coding-plan')
+    expect(result.data.balance.amount).toBeCloseTo(80, 6)
+    expect(result.data.localQuota.remaining).toBeCloseTo(80, 6)
+  })
+
+  it('should preserve cached auto provider quota over local daily quota', async () => {
+    const mockRedis = buildMockRedis()
+    mockRedis.getAccountBalance.mockResolvedValue({
+      status: 'success',
+      balance: null,
+      currency: 'USD',
+      quota: {
+        type: 'zhipu-coding-plan',
+        percentage: 50,
+        used: 50,
+        remaining: 50,
+        resetAt: '2026-06-24T12:00:00.000Z'
+      },
+      errorMessage: '',
+      lastRefreshAt: '2026-06-24T10:00:00.000Z',
+      ttlSeconds: 120
+    })
+
+    const service = new AccountBalanceService({ redis: mockRedis, logger: mockLogger })
+    service._computeMonthlyCost = jest.fn().mockResolvedValue(0)
+    service._computeTotalCost = jest.fn().mockResolvedValue(0)
+
+    const provider = {
+      supportsAutoQuery: jest.fn(() => true),
+      queryBalance: jest.fn()
+    }
+    service.registerProvider('claude-console', provider)
+
+    const account = {
+      id: 'zhipu-cache',
+      name: 'Zhipu Cache',
+      apiUrl: 'https://open.bigmodel.cn/api/anthropic',
+      dailyQuota: '100',
+      quotaResetTime: '00:00'
+    }
+    const result = await service._getAccountBalanceForAccount(account, 'claude-console', {
+      queryApi: false,
+      useCache: true
+    })
+
+    expect(provider.supportsAutoQuery).toHaveBeenCalledWith(account)
+    expect(provider.queryBalance).not.toHaveBeenCalled()
+    expect(result.data.source).toBe('cache')
+    expect(result.data.quota.type).toBe('zhipu-coding-plan')
+    expect(result.data.quota.percentage).toBe(50)
+    expect(result.data.balance.amount).toBeCloseTo(80, 6)
+    expect(result.data.localQuota.remaining).toBeCloseTo(80, 6)
+  })
+
+  it('should skip stale local cache in provider-declared auto query mode', async () => {
+    const mockRedis = buildMockRedis()
+    mockRedis.getAccountBalance.mockResolvedValue({
+      status: 'success',
+      balance: 100,
+      currency: 'USD',
+      quota: {
+        daily: 100,
+        used: 0,
+        remaining: 100,
+        resetAt: '2026-06-24T16:00:00.000Z',
+        percentage: 0
+      },
+      errorMessage: '',
+      lastRefreshAt: '2026-06-24T10:00:00.000Z',
+      ttlSeconds: 120
+    })
+
+    const service = new AccountBalanceService({ redis: mockRedis, logger: mockLogger })
+    service._computeMonthlyCost = jest.fn().mockResolvedValue(0)
+    service._computeTotalCost = jest.fn().mockResolvedValue(0)
+
+    const provider = {
+      supportsAutoQuery: jest.fn(() => true),
+      queryBalance: jest.fn().mockResolvedValue({
+        balance: null,
+        currency: 'USD',
+        quota: {
+          type: 'zhipu-coding-plan',
+          percentage: 6,
+          used: 6,
+          remaining: 94,
+          resetAt: '2026-06-24T12:00:00.000Z'
+        },
+        queryMethod: 'api'
+      })
+    }
+    service.registerProvider('claude-console', provider)
+
+    const account = {
+      id: 'zhipu-stale-cache',
+      name: 'Zhipu Stale Cache',
+      apiUrl: 'https://open.bigmodel.cn/api/anthropic',
+      dailyQuota: '100',
+      quotaResetTime: '00:00'
+    }
+    const result = await service._getAccountBalanceForAccount(account, 'claude-console', {
+      queryApi: 'auto',
+      useCache: true
+    })
+
+    expect(provider.supportsAutoQuery).toHaveBeenCalledWith(account)
+    expect(provider.queryBalance).toHaveBeenCalledWith(account)
+    expect(mockRedis.setAccountBalance).toHaveBeenCalled()
+    expect(result.data.source).toBe('api')
+    expect(result.data.quota.type).toBe('zhipu-coding-plan')
+    expect(result.data.quota.percentage).toBe(6)
+    expect(result.data.localQuota.remaining).toBeCloseTo(80, 6)
+  })
+
   it('should count low balance once per account in summary', async () => {
     const mockRedis = buildMockRedis()
     const service = new AccountBalanceService({ redis: mockRedis, logger: mockLogger })

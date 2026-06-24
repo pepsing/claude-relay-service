@@ -126,7 +126,8 @@ async function sendStreamTestRequest(options) {
     proxyAgent = null,
     timeout = 30000,
     extraHeaders = {},
-    sanitize = false
+    sanitize = false,
+    onErrorResponse = null
   } = options
 
   const sendSSE = (type, data = {}) => {
@@ -194,7 +195,7 @@ async function sendStreamTestRequest(options) {
       return new Promise((resolve) => {
         const chunks = []
         response.data.on('data', (chunk) => chunks.push(chunk))
-        response.data.on('end', () => {
+        response.data.on('end', async () => {
           const errorData = Buffer.concat(chunks).toString()
           let errorMsg = `API Error: ${response.status}`
           try {
@@ -203,6 +204,17 @@ async function sendStreamTestRequest(options) {
           } catch {
             if (errorData.length < 200) {
               errorMsg = errorData || errorMsg
+            }
+          }
+          if (typeof onErrorResponse === 'function') {
+            try {
+              await onErrorResponse({
+                status: response.status,
+                headers: response.headers,
+                data: errorData
+              })
+            } catch (callbackError) {
+              logger.warn('Failed to run test request error callback:', callbackError.message)
             }
           }
           endTest(false, sanitize ? sanitizeErrorMsg(errorMsg, response.status) : errorMsg)
