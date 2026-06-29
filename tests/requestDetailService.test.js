@@ -97,6 +97,7 @@ describe('requestDetailService', () => {
     })
     redis.getClient.mockReturnValue({ multi: jest.fn(() => multi) })
     redis.getApiKey.mockResolvedValue({ name: 'Primary Key' })
+    openaiAccountService.getAccount.mockResolvedValue({ name: 'OpenAI Main' })
     langfuseTraceService.isEnabled.mockReturnValue(true)
 
     const result = await requestDetailService.captureRequestDetail({
@@ -164,11 +165,15 @@ describe('requestDetailService', () => {
     expect(multi.zadd).toHaveBeenCalled()
     expect(exec).toHaveBeenCalled()
     expect(requestDetailPostgresStore.upsertRequestDetail).not.toHaveBeenCalled()
-    await Promise.resolve()
+    for (let i = 0; i < 5; i++) {
+      await Promise.resolve()
+    }
     expect(langfuseTraceService.captureRequestDetail).toHaveBeenCalledWith(
       expect.objectContaining({
         requestId: 'req_capture_1',
         apiKeyName: 'Primary Key',
+        accountName: 'OpenAI Main',
+        accountTypeName: 'OpenAI',
         requestBody: expect.objectContaining({
           apiKey: 'super-secret'
         }),

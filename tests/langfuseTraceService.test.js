@@ -48,7 +48,9 @@ describe('langfuseTraceService', () => {
       apiKeyId: 'key_1',
       apiKeyName: '吴满江',
       accountId: 'acct_1',
+      accountName: 'Claude Console Main',
       accountType: 'claude-console',
+      accountTypeName: 'Claude Console',
       model: 'gpt-5.5',
       sessionHash: 'session_hash_1',
       metadataUserId:
@@ -111,6 +113,8 @@ describe('langfuseTraceService', () => {
       })
     )
     expect(traceEvent.body.metadata.detail).toBeUndefined()
+    expect(traceEvent.body.metadata.accountName).toBe('Claude Console Main')
+    expect(traceEvent.body.metadata.accountTypeName).toBe('Claude Console')
     expect(traceEvent.body.metadata.metadataDeviceId).toBe('device_123')
     expect(traceEvent.body.metadata.metadataSessionId).toBe('session_from_metadata')
     expect(generationEvent.body).toEqual(

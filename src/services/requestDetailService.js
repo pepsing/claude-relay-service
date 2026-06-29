@@ -990,11 +990,21 @@ class RequestDetailService {
       detail.apiKeyName ||
       normalized.apiKeyName ||
       (normalized.apiKeyId ? await this._getApiKeyName(normalized.apiKeyId, new Map()) : null)
+    const accountInfo = await this._resolveAccountInfo(
+      normalized.accountId || detail.accountId,
+      normalized.accountType || detail.accountType,
+      new Map()
+    )
     const langfuseDetail = {
       ...detail,
       ...normalized,
       requestId,
       apiKeyName,
+      accountId: accountInfo?.accountId || normalized.accountId || detail.accountId,
+      accountName: detail.accountName || normalized.accountName || accountInfo?.accountName,
+      accountType: accountInfo?.accountType || normalized.accountType || detail.accountType,
+      accountTypeName:
+        detail.accountTypeName || normalized.accountTypeName || accountInfo?.accountTypeName,
       requestBody:
         detail.requestBody ?? detail.requestBodySnapshot ?? normalized.requestBodySnapshot,
       responseBody:
