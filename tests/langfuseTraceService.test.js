@@ -109,7 +109,15 @@ describe('langfuseTraceService', () => {
         sessionId: 'session_hash_1',
         input: expect.objectContaining({ apiKey: 'raw-secret' }),
         output: expect.objectContaining({ id: 'resp_1' }),
-        tags: expect.arrayContaining(['crs', 'test', 'claude-console', 'gpt-5.5', 'stream'])
+        tags: expect.arrayContaining([
+          'crs',
+          'test',
+          'claude-console',
+          'account:Claude Console Main',
+          'account_id:acct_1',
+          'gpt-5.5',
+          'stream'
+        ])
       })
     )
     expect(traceEvent.body.metadata.detail).toBeUndefined()

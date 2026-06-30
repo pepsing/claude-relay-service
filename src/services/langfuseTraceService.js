@@ -208,11 +208,18 @@ function buildMetadata(detail = {}, runtimeConfig = {}) {
   })
 }
 
+function buildScopedTag(scope, value) {
+  const text = firstNonEmpty(value)
+  return text ? `${scope}:${text}` : null
+}
+
 function buildTags(detail = {}, runtimeConfig = {}) {
   return [
     'crs',
     runtimeConfig.environment,
     detail.accountType,
+    buildScopedTag('account', detail.accountName || detail.accountId),
+    buildScopedTag('account_id', detail.accountId),
     detail.model,
     detail.endpoint,
     detail.stream === true ? 'stream' : 'non-stream',
