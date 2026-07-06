@@ -1369,8 +1369,9 @@ async function cleanupExpiredRequestDetails({ retentionHours, batchSize } = {}) 
   )
   let deletedRecords = 0
   let batches = 0
+  let hasMoreExpiredRecords = true
 
-  while (true) {
+  while (hasMoreExpiredRecords) {
     const result = await postgres.query(
       `
         WITH expired AS (
@@ -1389,14 +1390,15 @@ async function cleanupExpiredRequestDetails({ retentionHours, batchSize } = {}) 
 
     const deleted = Number(result.rowCount || 0)
     if (deleted <= 0) {
-      break
+      hasMoreExpiredRecords = false
+      continue
     }
 
     deletedRecords += deleted
     batches += 1
 
     if (deleted < normalizedBatchSize) {
-      break
+      hasMoreExpiredRecords = false
     }
   }
 
