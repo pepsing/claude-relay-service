@@ -99,7 +99,7 @@
             ]"
             @click="selectModel(model.id)"
           >
-            <span class="min-w-0 flex-1 truncate text-left">{{ model.label }}</span>
+            <span class="min-w-0 flex-1 truncate text-left">{{ model.id }}</span>
             <span class="model-count">{{ model.routableCount ?? 0 }}</span>
           </button>
         </div>

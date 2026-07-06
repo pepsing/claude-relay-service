@@ -14,6 +14,7 @@ const droidAccountService = require('./account/droidAccountService')
 const upstreamErrorHelper = require('../utils/upstreamErrorHelper')
 const { isSchedulable } = require('../utils/commonHelper')
 const { isClaudeFamilyModel, parseVendorPrefixedModel } = require('../utils/modelHelper')
+const modelsConfig = require('../../config/models')
 
 const LIVE_WINDOW_SECONDS = 300
 const HISTORY_BUCKETS = 60
@@ -25,21 +26,23 @@ const ENDPOINT_DEFINITIONS = [
     label: 'Claude',
     path: '/api/v1/messages',
     service: 'claude',
-    defaultModel: 'sonnet',
+    defaultModel: 'claude-sonnet-5',
     acceptedFormat: 'Claude / Codex',
     modelSource: 'body.model',
     accountTypes: ['claude', 'claude-console', 'bedrock'],
     ccrAccountTypes: ['ccr'],
     requestDetailMatchers: ['/api/v1/messages', '/v1/messages', '/api/messages'],
     models: [
-      { id: 'sonnet', label: 'sonnet', hint: '模型别名' },
-      { id: 'opus', label: 'opus', hint: '模型别名' },
-      { id: 'haiku', label: 'haiku', hint: '模型别名' },
+      { id: 'claude-sonnet-5', label: 'claude-sonnet-5', hint: '完整模型名' },
+      { id: 'claude-fable-5', label: 'claude-fable-5', hint: '完整模型名' },
       { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', hint: '完整模型名' },
+      { id: 'claude-opus-4-8', label: 'claude-opus-4-8', hint: '完整模型名' },
       { id: 'claude-opus-4-7', label: 'claude-opus-4-7', hint: '完整模型名' },
-      { id: 'claude-haiku-4-5-20251001', label: 'claude-haiku-4-5', hint: '完整模型名' },
-      { id: 'ccr,claude-sonnet', label: 'ccr,claude-*', hint: 'CCR 前缀路由' },
-      { id: 'bedrock anthropic.*', label: 'bedrock anthropic.*', hint: 'Bedrock Claude 模型' }
+      {
+        id: 'claude-haiku-4-5-20251001',
+        label: 'claude-haiku-4-5-20251001',
+        hint: '完整模型名'
+      }
     ]
   },
   {
@@ -111,14 +114,16 @@ const ENDPOINT_DEFINITIONS = [
     label: 'Droid',
     path: '/droid/v1/messages',
     service: 'droid',
-    defaultModel: 'claude-sonnet-4.5',
+    defaultModel: 'claude-sonnet-5',
     acceptedFormat: 'Droid',
     modelSource: 'body.model',
     accountTypes: ['droid'],
     requestDetailMatchers: ['/droid'],
     models: [
-      { id: 'claude-sonnet-4.5', label: 'claude-sonnet-4.5', hint: '默认模型' },
-      { id: 'claude-opus-4.5', label: 'claude-opus-4.5', hint: '高阶模型' }
+      { id: 'claude-sonnet-5', label: 'claude-sonnet-5', hint: '默认模型' },
+      { id: 'claude-fable-5', label: 'claude-fable-5', hint: '完整模型名' },
+      { id: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6', hint: '完整模型名' },
+      { id: 'claude-opus-4-8', label: 'claude-opus-4-8', hint: '高阶模型' }
     ]
   }
 ]
@@ -196,6 +201,27 @@ function getEndpointModelConfigKey(endpoint) {
   return endpoint.id
 }
 
+function mergeEndpointModels(...groups) {
+  const seen = new Set()
+  const merged = []
+
+  groups.flat().forEach((model) => {
+    const id = model?.id || model?.value
+    if (!id || seen.has(id) || modelsConfig.isHiddenDefaultUiModel(id)) {
+      return
+    }
+
+    seen.add(id)
+    merged.push({
+      id,
+      label: id,
+      hint: model?.hint || '系统设置'
+    })
+  })
+
+  return merged
+}
+
 function withConfiguredEndpointModels(endpoint, modelEndpointConfigs = {}) {
   const configKey = getEndpointModelConfigKey(endpoint)
   const whitelistModels = modelEndpointConfigs[configKey]?.whitelistModels
@@ -205,11 +231,7 @@ function withConfiguredEndpointModels(endpoint, modelEndpointConfigs = {}) {
 
   return {
     ...endpoint,
-    models: whitelistModels.map((model) => ({
-      id: model.value,
-      label: model.label || model.value,
-      hint: '系统设置'
-    }))
+    models: mergeEndpointModels(endpoint.models, whitelistModels)
   }
 }
 
@@ -515,9 +537,14 @@ function getDisplayModelId(sourceType, sourceModel) {
   return vendor === 'ccr' ? model : `ccr,${model}`
 }
 
+function isHiddenUiModelId(model) {
+  const { baseModel } = parseVendorPrefixedModel(String(model || '').trim())
+  return modelsConfig.isDeprecatedClaudeUiModel(baseModel)
+}
+
 function addModelOption(optionMap, option, order) {
   const id = String(option.id || '').trim()
-  if (!id) {
+  if (!id || isHiddenUiModelId(id)) {
     return
   }
 
@@ -533,7 +560,7 @@ function addModelOption(optionMap, option, order) {
 
   optionMap.set(key, {
     id,
-    label: option.label || id,
+    label: id,
     hint: option.hint || '',
     sourceTypes: option.sourceTypes || [],
     sourceCount: option.sourceCount || 0,
@@ -560,6 +587,10 @@ function buildAcceptedModelOptions(endpoint, accounts) {
   for (const { account, sourceType } of accounts) {
     const entries = getSourceModelEntries(account)
     for (const entry of entries) {
+      if (isHiddenUiModelId(entry.sourceModel) || isHiddenUiModelId(entry.mappedModel)) {
+        continue
+      }
+
       const id = getDisplayModelId(sourceType, entry.sourceModel)
       if (!id) {
         continue

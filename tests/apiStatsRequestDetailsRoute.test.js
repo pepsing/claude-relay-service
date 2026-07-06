@@ -68,7 +68,9 @@ jest.mock('../config/models', () => ({
   PLATFORM_TEST_MODELS: {},
   getDefaultModelEndpointConfigs: jest.fn(() => ({})),
   getAllModels: jest.fn(() => []),
-  getModelsByService: jest.fn(() => [])
+  getModelsByService: jest.fn(() => []),
+  isDeprecatedClaudeUiModel: jest.fn(() => false),
+  isHiddenDefaultUiModel: jest.fn(() => false)
 }))
 jest.mock('../src/utils/logger', () => ({
   api: jest.fn(),
@@ -82,10 +84,12 @@ jest.mock('../src/utils/logger', () => ({
 const apiKeyService = require('../src/services/apiKeyService')
 const redis = require('../src/models/redis')
 const requestDetailService = require('../src/services/requestDetailService')
+const claudeRelayConfigService = require('../src/services/claudeRelayConfigService')
 const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
 const ccrAccountService = require('../src/services/account/ccrAccountService')
 const geminiAccountService = require('../src/services/account/geminiAccountService')
 const geminiApiAccountService = require('../src/services/account/geminiApiAccountService')
+const modelsConfig = require('../config/models')
 require('../src/routes/apiStats')
 
 function createResponse() {
@@ -109,6 +113,11 @@ function findPostHandler(path) {
   return route?.[1]
 }
 
+function findGetHandler(path) {
+  const route = mockRouter.get.mock.calls.find((call) => call[0] === path)
+  return route?.[1]
+}
+
 describe('apiStats request detail routes', () => {
   beforeEach(() => {
     apiKeyService.validateApiKeyForStats.mockReset()
@@ -124,6 +133,12 @@ describe('apiStats request detail routes', () => {
     redis.getCostStats.mockReset()
     redis.getWeeklyOpusCost.mockReset()
     redis.scanAndGetAllChunked.mockReset()
+    claudeRelayConfigService.getConfig.mockReset()
+    claudeRelayConfigService.getConfig.mockResolvedValue({ modelEndpointConfigs: {} })
+    claudeRelayConfigService.getDefaultModelEndpointConfigs.mockReset()
+    claudeRelayConfigService.getDefaultModelEndpointConfigs.mockReturnValue({})
+    modelsConfig.isHiddenDefaultUiModel.mockReset()
+    modelsConfig.isHiddenDefaultUiModel.mockReturnValue(false)
     requestDetailService.listRequestDetails.mockReset()
     requestDetailService.getRequestDetail.mockReset()
     claudeConsoleAccountService.getAllAccounts.mockReset()
@@ -323,13 +338,55 @@ describe('apiStats request detail routes', () => {
     expect(res.body.data.testModelOptions.claude).toEqual(
       expect.arrayContaining([
         { value: 'kimi-for-coding', label: 'kimi-for-coding' },
-        { value: 'ccr,glm-5.1', label: 'CCR: glm-5.1' }
+        { value: 'ccr,glm-5.1', label: 'ccr,glm-5.1' }
       ])
     )
     expect(res.body.data.testModelOptions.gemini).toEqual([
       { value: 'qwen3.6-plus', label: 'qwen3.6-plus' }
     ])
     expect(res.body.data.testModelOptions.openai).toEqual([])
+  })
+
+  test('merges default mapping presets into saved endpoint model configs', async () => {
+    claudeRelayConfigService.getDefaultModelEndpointConfigs.mockReturnValue({
+      claude: {
+        label: 'Claude',
+        whitelistModels: [{ value: 'claude-sonnet-5', label: 'claude-sonnet-5' }],
+        mappingPresets: [
+          { from: 'claude-sonnet-5', to: 'claude-sonnet-5' },
+          { from: 'claude-fable-5', to: 'claude-fable-5' }
+        ]
+      }
+    })
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      modelEndpointConfigs: {
+        claude: {
+          label: 'Claude',
+          whitelistModels: [{ value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' }],
+          mappingPresets: [{ from: 'custom-sonnet', to: 'claude-sonnet-4-6' }]
+        }
+      }
+    })
+
+    const handler = findGetHandler('/models')
+    const res = createResponse()
+
+    await handler({ query: {} }, res)
+
+    expect(res.body.success).toBe(true)
+    expect(res.body.data.endpointConfigs.claude.whitelistModels).toEqual(
+      expect.arrayContaining([
+        { value: 'claude-sonnet-5', label: 'claude-sonnet-5' },
+        { value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' }
+      ])
+    )
+    expect(res.body.data.endpointConfigs.claude.mappingPresets).toEqual(
+      expect.arrayContaining([
+        { label: '+ claude-sonnet-5', from: 'claude-sonnet-5', to: 'claude-sonnet-5' },
+        { label: '+ claude-fable-5', from: 'claude-fable-5', to: 'claude-fable-5' },
+        { label: '+ custom-sonnet', from: 'custom-sonnet', to: 'claude-sonnet-4-6' }
+      ])
+    )
   })
 
   test('rejects request detail query when apiId does not match the submitted key', async () => {

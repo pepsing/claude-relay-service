@@ -329,8 +329,7 @@ const normalizeModelOptions = (models) => {
       if (model && typeof model === 'object') {
         const value = String(model.value || model.id || model.model || '').trim()
         if (!value) return null
-        const label = String(model.label || model.name || value).trim() || value
-        return { value, label }
+        return { value, label: value }
       }
 
       return null
@@ -427,13 +426,13 @@ const availableModels = computed(() => {
 
 // 各平台回退默认模型（模型列表未加载时使用）
 const platformFallbackModels = {
-  claude: 'claude-sonnet-4-5-20250929',
-  'claude-console': 'claude-sonnet-4-5-20250929',
+  claude: 'claude-sonnet-5',
+  'claude-console': 'claude-sonnet-5',
   gemini: 'gemini-2.5-pro',
   'gemini-api': 'gemini-2.5-flash',
   'openai-responses': 'gpt-5',
-  droid: 'claude-sonnet-4-5-20250929',
-  ccr: 'claude-sonnet-4-5-20250929'
+  droid: 'claude-sonnet-5',
+  ccr: 'claude-sonnet-5'
 }
 
 const defaultModel = computed(() => {
@@ -444,9 +443,8 @@ const defaultModel = computed(() => {
     if (platform === 'bedrock') {
       const models = availableModels.value
       if (models.length > 0) return models[0].value
-      if (props.account?.credentialType === 'bearer_token')
-        return 'us.anthropic.claude-sonnet-4-5-20250929-v1:0'
-      return 'us.anthropic.claude-3-5-haiku-20241022-v1:0'
+      if (props.account?.credentialType === 'bearer_token') return 'anthropic.claude-sonnet-4-6'
+      return 'anthropic.claude-haiku-4-5-20251001-v1:0'
     }
     const models = availableModels.value
     if (models.length > 0) return models[0].value
@@ -473,7 +471,7 @@ const apikeyServiceConfigs = {
   claude: {
     name: 'Claude',
     endpoint: '/api-key/test',
-    defaultModel: 'claude-sonnet-4-5-20250929',
+    defaultModel: 'claude-sonnet-5',
     displayEndpoint: '/api/v1/messages'
   },
   gemini: {

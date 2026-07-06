@@ -112,7 +112,7 @@
               :key="model.value"
               class="mb-1 flex items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-xs text-gray-700 shadow-sm last:mb-0 dark:bg-gray-900 dark:text-gray-300"
             >
-              <span class="min-w-0 flex-1 truncate" :title="model.value">{{ model.label }}</span>
+              <span class="min-w-0 flex-1 truncate" :title="model.value">{{ model.value }}</span>
               <i class="fas fa-check-circle flex-shrink-0 text-green-500" />
             </div>
           </div>
@@ -196,8 +196,7 @@ const normalizeModels = (models) => {
       if (model && typeof model === 'object') {
         const value = String(model.value || model.id || model.model || '').trim()
         if (!value) return null
-        const label = String(model.label || model.name || value).trim() || value
-        return { value, label }
+        return { value, label: value }
       }
 
       return null

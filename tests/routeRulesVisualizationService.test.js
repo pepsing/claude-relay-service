@@ -111,6 +111,20 @@ describe('routeRulesVisualizationService', () => {
 
     expect(result.defaultEndpoint).toBe('claude')
     expect(result.endpoints.map((endpoint) => endpoint.id)).toContain('claude')
+    expect(result.endpoints.find((endpoint) => endpoint.id === 'claude')).toMatchObject({
+      defaultModel: 'claude-sonnet-5',
+      models: expect.arrayContaining([
+        expect.objectContaining({ id: 'claude-sonnet-5' }),
+        expect.objectContaining({ id: 'claude-fable-5' })
+      ])
+    })
+    expect(result.endpoints.find((endpoint) => endpoint.id === 'claude').models).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({ id: 'ccr,claude-sonnet-5' }),
+        expect.objectContaining({ id: 'ccr,claude-sonnet-4-6' }),
+        expect.objectContaining({ id: 'bedrock anthropic.*' })
+      ])
+    )
     expect(result.apiKeys).toEqual([
       expect.objectContaining({
         id: 'key_1',
@@ -119,6 +133,23 @@ describe('routeRulesVisualizationService', () => {
         bindings: expect.objectContaining({ claudeConsoleAccountId: 'console-a' })
       })
     ])
+  })
+
+  test('keeps latest static Claude models visible when endpoint settings were saved earlier', async () => {
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      modelEndpointConfigs: {
+        claude: {
+          whitelistModels: [{ value: 'claude-sonnet-4-6', label: 'claude-sonnet-4-6' }]
+        }
+      }
+    })
+
+    const result = await routeRulesVisualizationService.getEndpoints()
+    const claude = result.endpoints.find((endpoint) => endpoint.id === 'claude')
+
+    expect(claude.models.map((model) => model.id)).toEqual(
+      expect.arrayContaining(['claude-sonnet-5', 'claude-fable-5', 'claude-sonnet-4-6'])
+    )
   })
 
   test('explains claude model candidates with live qpm, quotas and availability', async () => {
@@ -134,7 +165,7 @@ describe('routeRulesVisualizationService', () => {
         name: 'ai-pincc-cc',
         platform: 'claude-console',
         priority: 49,
-        supportedModels: ['claude-sonnet-4.5'],
+        supportedModels: ['claude-sonnet-4-6'],
         isActive: true,
         status: 'active',
         schedulable: true,
@@ -149,7 +180,7 @@ describe('routeRulesVisualizationService', () => {
         name: 'ai-tokensaver-claude',
         platform: 'claude-console',
         priority: 30,
-        supportedModels: ['claude-opus-4.5'],
+        supportedModels: ['claude-opus-4-6'],
         isActive: true,
         status: 'active',
         schedulable: false,
@@ -168,7 +199,7 @@ describe('routeRulesVisualizationService', () => {
           statusCode: 200,
           accountId: 'console-a',
           accountType: 'claude-console',
-          model: 'claude-sonnet-4.5',
+          model: 'claude-sonnet-4-6',
           totalTokens: 9000,
           durationMs: 1200
         },
@@ -178,7 +209,7 @@ describe('routeRulesVisualizationService', () => {
           statusCode: 429,
           accountId: 'console-a',
           accountType: 'claude-console',
-          model: 'claude-sonnet-4.5',
+          model: 'claude-sonnet-4-6',
           totalTokens: 0,
           durationMs: 900
         }
@@ -188,7 +219,7 @@ describe('routeRulesVisualizationService', () => {
 
     const result = await routeRulesVisualizationService.getExplain({
       endpoint: 'claude',
-      model: 'claude-sonnet-4.5',
+      model: 'claude-sonnet-4-6',
       apiKeyId: 'key_1'
     })
 
@@ -197,7 +228,7 @@ describe('routeRulesVisualizationService', () => {
 
     expect(result.summary.routableCount).toBe(1)
     expect(result.modelRoutes.map((model) => model.id)).toEqual(
-      expect.arrayContaining(['claude-sonnet-4.5', 'claude-opus-4.5'])
+      expect.arrayContaining(['claude-sonnet-4-6', 'claude-opus-4-6'])
     )
     expect(routable).toMatchObject({
       routeStatus: 'routable',
@@ -205,13 +236,13 @@ describe('routeRulesVisualizationService', () => {
       editAccount: expect.objectContaining({
         id: 'console-a',
         platform: 'claude-console',
-        supportedModels: ['claude-sonnet-4.5']
+        supportedModels: ['claude-sonnet-4-6']
       }),
       daily: expect.objectContaining({ quota: 600, usage: 215.45 }),
       modelMapping: expect.objectContaining({
         selected: expect.objectContaining({
-          sourceModel: 'claude-sonnet-4.5',
-          mappedModel: 'claude-sonnet-4.5'
+          sourceModel: 'claude-sonnet-4-6',
+          mappedModel: 'claude-sonnet-4-6'
         })
       }),
       live: expect.objectContaining({ rpm: 0.4, tpm: 1800, rateLimitedCount: 1 })
@@ -228,7 +259,7 @@ describe('routeRulesVisualizationService', () => {
         id: 'console-a',
         name: 'ai-pincc-cc',
         priority: 49,
-        supportedModels: ['claude-sonnet'],
+        supportedModels: ['claude-sonnet-4-6'],
         isActive: true,
         status: 'active',
         schedulable: true
@@ -239,7 +270,7 @@ describe('routeRulesVisualizationService', () => {
         id: 'ccr-a',
         name: 'ccr-shared',
         priority: 10,
-        supportedModels: ['claude-sonnet'],
+        supportedModels: ['claude-sonnet-4-6'],
         isActive: true,
         status: 'active',
         schedulable: true
@@ -248,7 +279,7 @@ describe('routeRulesVisualizationService', () => {
 
     const result = await routeRulesVisualizationService.getExplain({
       endpoint: 'claude',
-      model: 'ccr,claude-sonnet'
+      model: 'ccr,claude-sonnet-4-6'
     })
 
     const ccrAccount = result.accounts.find((account) => account.id === 'ccr-a')
@@ -268,7 +299,11 @@ describe('routeRulesVisualizationService', () => {
         priority: 20,
         supportedModels: {
           'custom-sonnet': 'claude-sonnet-4-6',
-          'aliyun-claude': 'claude-sonnet-4-20250514'
+          'aliyun-claude': 'claude-sonnet-4-20250514',
+          Qwen: 'qwen-max',
+          Kimi: 'kimi-k2',
+          GLM: 'glm-5.1',
+          'deepseek-chat': 'deepseek-chat'
         },
         isActive: true,
         status: 'active',
@@ -298,8 +333,16 @@ describe('routeRulesVisualizationService', () => {
     const customRoute = result.modelRoutes.find((model) => model.id === 'custom-sonnet')
 
     expect(modelIds).toEqual(
-      expect.arrayContaining(['custom-sonnet', 'aliyun-claude', 'ccr,vendor-sonnet'])
+      expect.arrayContaining([
+        'custom-sonnet',
+        'Qwen',
+        'Kimi',
+        'GLM',
+        'deepseek-chat',
+        'ccr,vendor-sonnet'
+      ])
     )
+    expect(modelIds).not.toContain('aliyun-claude')
     expect(customRoute).toMatchObject({
       selected: true,
       candidateCount: 1,

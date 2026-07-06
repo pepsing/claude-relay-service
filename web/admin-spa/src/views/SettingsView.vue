@@ -2355,12 +2355,12 @@ const cloneModelEndpointConfigs = (configs = {}) =>
         whitelistModels: Array.isArray(config?.whitelistModels)
           ? config.whitelistModels.map((model) => ({
               value: model.value,
-              label: model.label || model.value
+              label: model.value
             }))
           : [],
         mappingPresets: Array.isArray(config?.mappingPresets)
           ? config.mappingPresets.map((preset) => ({
-              label: preset.label || `+ ${preset.from}`,
+              label: `+ ${preset.from}`,
               from: preset.from,
               to: preset.to
             }))
@@ -2400,9 +2400,7 @@ const updateActiveModelEndpointConfig = (updates) => {
 
 const formatModelOptionLine = (model) => {
   if (!model?.value) return ''
-  return model.label && model.label !== model.value
-    ? `${model.value} | ${model.label}`
-    : model.value
+  return model.value
 }
 
 const parseModelOptionLines = (text) => {
@@ -2412,20 +2410,18 @@ const parseModelOptionLines = (text) => {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [valuePart, ...labelParts] = line.split('|')
+      const [valuePart] = line.split('|')
       const value = valuePart.trim()
-      const label = labelParts.join('|').trim() || value
       if (!value || seen.has(value)) return null
       seen.add(value)
-      return { value, label }
+      return { value, label: value }
     })
     .filter(Boolean)
 }
 
 const formatMappingPresetLine = (preset) => {
   if (!preset?.from || !preset?.to) return ''
-  const base = `${preset.from} => ${preset.to}`
-  return preset.label ? `${base} | ${preset.label}` : base
+  return `${preset.from} => ${preset.to}`
 }
 
 const parseMappingPresetLines = (text) => {
@@ -2435,7 +2431,7 @@ const parseMappingPresetLines = (text) => {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [mappingPart, ...labelParts] = line.split('|')
+      const [mappingPart] = line.split('|')
       const [fromPart, toPart] = mappingPart.split('=>')
       const from = fromPart?.trim()
       const to = (toPart || fromPart || '').trim()
@@ -2446,7 +2442,7 @@ const parseMappingPresetLines = (text) => {
       seen.add(key)
 
       return {
-        label: labelParts.join('|').trim() || `+ ${from}`,
+        label: `+ ${from}`,
         from,
         to
       }

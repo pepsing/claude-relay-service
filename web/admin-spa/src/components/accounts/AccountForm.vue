@@ -1085,7 +1085,7 @@
                 <input
                   v-model="form.defaultModel"
                   class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
-                  placeholder="例如：us.anthropic.claude-sonnet-4-20250514-v1:0"
+                  placeholder="例如：anthropic.claude-sonnet-4-6"
                   type="text"
                 />
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -1099,7 +1099,7 @@
                       <ul class="list-inside list-disc space-y-1 text-xs">
                         <li>支持 Inference Profile ID（推荐）</li>
                         <li>支持 Application Inference Profile ARN</li>
-                        <li>常用模型：us.anthropic.claude-sonnet-4-20250514-v1:0</li>
+                        <li>常用模型：anthropic.claude-sonnet-4-6</li>
                         <li>留空将使用系统配置的默认模型</li>
                       </ul>
                     </div>
@@ -1114,7 +1114,7 @@
                 <input
                   v-model="form.smallFastModel"
                   class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
-                  placeholder="例如：us.anthropic.claude-3-5-haiku-20241022-v1:0"
+                  placeholder="例如：anthropic.claude-haiku-4-5-20251001-v1:0"
                   type="text"
                 />
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -1426,7 +1426,7 @@
                         :value="model.value"
                       />
                       <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{
-                        model.label
+                        model.value
                       }}</span>
                     </label>
                   </div>
@@ -1495,7 +1495,7 @@
                       type="button"
                       @click="addPresetMapping(preset.from, preset.to)"
                     >
-                      {{ preset.label || `+ ${preset.from}` }}
+                      + {{ preset.from }}
                     </button>
                   </div>
                 </div>
@@ -1768,7 +1768,7 @@
               </div>
               <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
                 <i class="fas fa-info-circle mr-1" />
-                Pro 账号不支持 Claude Opus 4 模型
+                Pro 账号不支持 claude-opus-4-8、claude-opus-4-6 模型
               </p>
             </div>
 
@@ -2810,7 +2810,7 @@
             </div>
             <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
               <i class="fas fa-info-circle mr-1" />
-              Pro 账号不支持 Claude Opus 4 模型
+              Pro 账号不支持 claude-opus-4-8、claude-opus-4-6 模型
             </p>
           </div>
 
@@ -3184,7 +3184,7 @@
                       :value="model.value"
                     />
                     <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{
-                      model.label
+                      model.value
                     }}</span>
                   </label>
                 </div>
@@ -3253,7 +3253,7 @@
                     type="button"
                     @click="addPresetMapping(preset.from, preset.to)"
                   >
-                    {{ preset.label || `+ ${preset.from}` }}
+                    + {{ preset.from }}
                   </button>
                 </div>
               </div>
@@ -3573,7 +3573,7 @@
               <input
                 v-model="form.defaultModel"
                 class="form-input w-full"
-                placeholder="例如：us.anthropic.claude-sonnet-4-20250514-v1:0"
+                placeholder="例如：anthropic.claude-sonnet-4-6"
                 type="text"
               />
               <p class="mt-1 text-xs text-gray-500">
@@ -3588,7 +3588,7 @@
               <input
                 v-model="form.smallFastModel"
                 class="form-input w-full"
-                placeholder="例如：us.anthropic.claude-3-5-haiku-20241022-v1:0"
+                placeholder="例如：anthropic.claude-haiku-4-5-20251001-v1:0"
                 type="text"
               />
               <p class="mt-1 text-xs text-gray-500">用于快速响应的轻量级模型，留空将使用系统默认</p>
@@ -4328,8 +4328,9 @@ const buildClaudeTempUnavailablePolicyPayload = () => ({
 const modelRestrictionMode = ref('whitelist') // 'whitelist' 或 'mapping'
 const allowedModels = ref([
   // 默认勾选所有 Sonnet 和 Haiku 模型
+  'claude-sonnet-5',
   'claude-sonnet-4-6',
-  'claude-haiku-4-5'
+  'claude-haiku-4-5-20251001'
 ]) // 白名单模式下选中的模型列表
 
 const platformModelEndpointMap = {
@@ -4378,9 +4379,9 @@ const currentModelEndpointConfig = computed(
 const commonModels = computed(() => {
   const endpointModels = currentModelEndpointConfig.value.whitelistModels
   if (Array.isArray(endpointModels) && endpointModels.length > 0) {
-    return endpointModels
+    return endpointModels.map((model) => ({ value: model.value, label: model.value }))
   }
-  return modelCatalog.value.all || []
+  return (modelCatalog.value.all || []).map((model) => ({ value: model.value, label: model.value }))
 })
 
 const presetMappingsForCurrentEndpoint = computed(() => {

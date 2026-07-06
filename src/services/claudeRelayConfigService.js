@@ -263,16 +263,12 @@ class ClaudeRelayConfigService {
           ? normalizeString(item)
           : normalizeString(item?.value || item?.id || item?.model)
 
-      if (!value || seen.has(value)) {
+      if (!value || seen.has(value) || modelsConfig.isHiddenDefaultUiModel(value)) {
         return
       }
 
       seen.add(value)
-      const label =
-        typeof item === 'object'
-          ? normalizeString(item.label || item.name || value, MODEL_ENDPOINT_LIMITS.maxLabelLength)
-          : value
-      models.push({ value, label: label || value })
+      models.push({ value, label: value })
     })
 
     return models
@@ -303,7 +299,12 @@ class ClaudeRelayConfigService {
 
       const from = normalizeString(item.from)
       const to = normalizeString(item.to)
-      if (!from || !to) {
+      if (
+        !from ||
+        !to ||
+        modelsConfig.isHiddenDefaultUiModel(from) ||
+        modelsConfig.isHiddenDefaultUiModel(to)
+      ) {
         return
       }
 
@@ -313,8 +314,7 @@ class ClaudeRelayConfigService {
       }
 
       seen.add(presetKey)
-      const label = normalizeString(item.label || `+ ${from}`, MODEL_ENDPOINT_LIMITS.maxLabelLength)
-      presets.push({ label: label || `+ ${from}`, from, to })
+      presets.push({ label: `+ ${from}`, from, to })
     })
 
     return presets

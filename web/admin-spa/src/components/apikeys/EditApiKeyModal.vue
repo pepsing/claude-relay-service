@@ -928,7 +928,7 @@
                   </div>
                 </div>
                 <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                  设置此API Key无法访问的模型，例如：claude-opus-4-20250514
+                  设置此API Key无法访问的模型，例如：claude-opus-4-8
                 </p>
               </div>
             </div>
@@ -1194,7 +1194,14 @@ const removeRestrictedModel = (index) => {
 }
 
 // 常用模型列表
-const commonModels = ref(['claude-opus-4-20250514', 'claude-opus-4-1-20250805'])
+const commonModels = ref([
+  'claude-sonnet-5',
+  'claude-fable-5',
+  'claude-opus-4-8',
+  'claude-opus-4-6',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5-20251001'
+])
 
 // 可用的快捷模型（过滤掉已在限制列表中的）
 const availableQuickModels = computed(() => {

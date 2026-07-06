@@ -41,11 +41,43 @@ const mergeModelOptions = (...groups) => {
   const merged = []
 
   groups.flat().forEach((model) => {
-    if (!model?.value || seen.has(model.value)) {
+    if (
+      !model?.value ||
+      seen.has(model.value) ||
+      modelsConfig.isHiddenDefaultUiModel(model.value)
+    ) {
       return
     }
     seen.add(model.value)
-    merged.push({ value: model.value, label: model.label || model.value })
+    merged.push({ value: model.value, label: model.value })
+  })
+
+  return merged
+}
+
+const mergeMappingPresets = (...groups) => {
+  const seen = new Set()
+  const merged = []
+
+  groups.flat().forEach((preset) => {
+    const from = typeof preset?.from === 'string' ? preset.from.trim() : ''
+    const to = typeof preset?.to === 'string' ? preset.to.trim() : ''
+    if (
+      !from ||
+      !to ||
+      modelsConfig.isHiddenDefaultUiModel(from) ||
+      modelsConfig.isHiddenDefaultUiModel(to)
+    ) {
+      return
+    }
+
+    const key = `${from}\u0000${to}`
+    if (seen.has(key)) {
+      return
+    }
+
+    seen.add(key)
+    merged.push({ label: `+ ${from}`, from, to })
   })
 
   return merged
@@ -63,17 +95,55 @@ const resolveModelEndpointKey = (service, endpointConfigs = {}) => {
 
 const buildConfiguredModelData = async () => {
   const config = await claudeRelayConfigService.getConfig()
-  const endpointConfigs =
+  const defaultEndpointConfigs = claudeRelayConfigService.getDefaultModelEndpointConfigs()
+  const savedEndpointConfigs =
     config.modelEndpointConfigs || claudeRelayConfigService.getDefaultModelEndpointConfigs()
 
-  const claudeModels = endpointConfigs.claude?.whitelistModels || modelsConfig.CLAUDE_MODELS
-  const geminiModels = endpointConfigs.gemini?.whitelistModels || modelsConfig.GEMINI_MODELS
-  const openaiModels = endpointConfigs.openai?.whitelistModels || modelsConfig.OPENAI_MODELS
-  const openaiResponsesModels = endpointConfigs['openai-responses']?.whitelistModels || openaiModels
-  const azureOpenaiModels = endpointConfigs['azure-openai']?.whitelistModels || openaiModels
-  const bedrockModels = endpointConfigs.bedrock?.whitelistModels || modelsConfig.BEDROCK_MODELS
-  const droidModels = endpointConfigs.droid?.whitelistModels || claudeModels
-  const ccrModels = endpointConfigs.ccr?.whitelistModels || claudeModels
+  const getEndpointConfig = (endpoint, fallbackModels = []) => {
+    const savedConfig = savedEndpointConfigs[endpoint] || {}
+    const defaultConfig = defaultEndpointConfigs[endpoint] || {}
+
+    return {
+      ...savedConfig,
+      label: savedConfig.label || defaultConfig.label || endpoint,
+      whitelistModels: mergeModelOptions(
+        defaultConfig.whitelistModels || fallbackModels,
+        savedConfig.whitelistModels || []
+      ),
+      mappingPresets: mergeMappingPresets(
+        defaultConfig.mappingPresets || [],
+        savedConfig.mappingPresets || []
+      )
+    }
+  }
+
+  const claudeConfig = getEndpointConfig('claude', modelsConfig.CLAUDE_MODELS)
+  const geminiConfig = getEndpointConfig('gemini', modelsConfig.GEMINI_MODELS)
+  const openaiConfig = getEndpointConfig('openai', modelsConfig.OPENAI_MODELS)
+  const openaiResponsesConfig = getEndpointConfig('openai-responses', openaiConfig.whitelistModels)
+  const azureOpenaiConfig = getEndpointConfig('azure-openai', openaiConfig.whitelistModels)
+  const bedrockConfig = getEndpointConfig('bedrock', modelsConfig.BEDROCK_MODELS)
+  const droidConfig = getEndpointConfig('droid', claudeConfig.whitelistModels)
+  const ccrConfig = getEndpointConfig('ccr', claudeConfig.whitelistModels)
+  const claudeModels = claudeConfig.whitelistModels
+  const geminiModels = geminiConfig.whitelistModels
+  const openaiModels = openaiConfig.whitelistModels
+  const openaiResponsesModels = openaiResponsesConfig.whitelistModels
+  const azureOpenaiModels = azureOpenaiConfig.whitelistModels
+  const bedrockModels = bedrockConfig.whitelistModels
+  const droidModels = droidConfig.whitelistModels
+  const ccrModels = ccrConfig.whitelistModels
+  const endpointConfigs = {
+    ...savedEndpointConfigs,
+    claude: claudeConfig,
+    gemini: geminiConfig,
+    openai: openaiConfig,
+    'openai-responses': openaiResponsesConfig,
+    'azure-openai': azureOpenaiConfig,
+    bedrock: bedrockConfig,
+    droid: droidConfig,
+    ccr: ccrConfig
+  }
 
   return {
     claude: claudeModels,
@@ -277,16 +347,19 @@ function isModelAllowedForKey(keyData, model) {
   return !restrictedModels.includes(getEffectiveModel(model))
 }
 
-function addTestModelOption(optionMaps, service, value, label = value, keyData = {}) {
+function addTestModelOption(optionMaps, service, value, keyData = {}) {
   const modelValue = typeof value === 'string' ? value.trim() : ''
-  if (!modelValue || !isModelAllowedForKey(keyData, modelValue)) {
+  if (
+    !modelValue ||
+    modelsConfig.isDeprecatedClaudeUiModel(getEffectiveModel(modelValue)) ||
+    !isModelAllowedForKey(keyData, modelValue)
+  ) {
     return
   }
 
-  const modelLabel = typeof label === 'string' && label.trim() ? label.trim() : modelValue
   optionMaps[service].set(modelValue, {
     value: modelValue,
-    label: modelLabel
+    label: modelValue
   })
 }
 
@@ -323,8 +396,7 @@ async function collectAccountSourceModelOptions({
   bindingValue,
   bindingPrefix = '',
   loadAccounts,
-  valuePrefix = '',
-  labelPrefix = ''
+  valuePrefix = ''
 }) {
   const resolvedBindingValue = bindingValue !== undefined ? bindingValue : keyData[bindingField]
   const boundIds = await resolveBoundAccountIds(resolvedBindingValue, bindingPrefix)
@@ -349,13 +421,7 @@ async function collectAccountSourceModelOptions({
     }
 
     for (const sourceModel of extractConfiguredSourceModels(account.supportedModels)) {
-      addTestModelOption(
-        optionMaps,
-        service,
-        `${valuePrefix}${sourceModel}`,
-        `${labelPrefix}${sourceModel}`,
-        keyData
-      )
+      addTestModelOption(optionMaps, service, `${valuePrefix}${sourceModel}`, keyData)
     }
   }
 }
@@ -383,8 +449,7 @@ async function buildApiKeyTestModelOptions(keyData = {}) {
       keyData,
       bindingField: 'ccrAccountId',
       loadAccounts: () => ccrAccountService.getAllAccounts(),
-      valuePrefix: 'ccr,',
-      labelPrefix: 'CCR: '
+      valuePrefix: 'ccr,'
     })
   }
 
@@ -1460,7 +1525,7 @@ router.post('/api-key/test', async (req, res) => {
   const { sendStreamTestRequest } = require('../utils/testPayloadHelper')
 
   try {
-    const { apiKey, model = 'claude-sonnet-4-5-20250929', prompt = 'hi' } = req.body
+    const { apiKey, model = 'claude-sonnet-5', prompt = 'hi' } = req.body
     const maxTokens = sanitizeMaxTokens(req.body.maxTokens)
 
     if (!apiKey) {

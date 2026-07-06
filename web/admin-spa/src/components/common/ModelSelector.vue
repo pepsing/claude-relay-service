@@ -9,7 +9,7 @@
       @change="handleSelectChange"
     >
       <option v-for="m in models" :key="m.value" :value="m.value">
-        {{ m.label }}
+        {{ m.value }}
       </option>
       <option value="__custom__">自定义模型...</option>
     </select>

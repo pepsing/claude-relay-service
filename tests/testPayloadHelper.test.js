@@ -17,14 +17,14 @@ function normalizeHeaders(headers) {
 
 describe('testPayloadHelper', () => {
   test('creates Claude Code-compatible Anthropic test requests', () => {
-    const payload = createClaudeTestPayload('claude-sonnet-4-5-20250929', {
+    const payload = createClaudeTestPayload('claude-sonnet-5', {
       stream: true,
       prompt: 'custom test prompt'
     })
 
     expect(payload).toEqual(
       expect.objectContaining({
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-5',
         stream: true,
         max_tokens: 1000,
         metadata: expect.objectContaining({

@@ -964,7 +964,7 @@ router.post('/claude-accounts/:accountId/test', authenticateAdmin, async (req, r
   const model =
     typeof req.body?.model === 'string' && req.body.model.trim()
       ? req.body.model.trim()
-      : 'claude-sonnet-4-5-20250929'
+      : 'claude-sonnet-5'
   const prompt = sanitizeTestPrompt(req.body?.prompt)
 
   try {
@@ -1017,7 +1017,7 @@ router.get('/claude-accounts/:accountId/test-config', authenticateAdmin, async (
         config: testConfig || {
           enabled: false,
           cronExpression: '0 8 * * *',
-          model: 'claude-sonnet-4-5-20250929'
+          model: 'claude-sonnet-5'
         }
       }
     })
@@ -1070,7 +1070,7 @@ router.put('/claude-accounts/:accountId/test-config', authenticateAdmin, async (
     }
 
     // 验证模型参数
-    const testModel = model || 'claude-sonnet-4-5-20250929'
+    const testModel = model || 'claude-sonnet-5'
     if (typeof testModel !== 'string' || testModel.length > 256) {
       return res.status(400).json({
         error: 'Invalid parameter',
