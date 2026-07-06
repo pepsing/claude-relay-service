@@ -241,7 +241,7 @@
     <!-- 教程内容 -->
     <div v-if="currentTab === 'tutorial'" class="tab-content">
       <div class="glass-strong rounded-3xl shadow-xl">
-        <TutorialView />
+        <TutorialView :api-key="apiKey" :stats-data="statsData" />
       </div>
     </div>
 

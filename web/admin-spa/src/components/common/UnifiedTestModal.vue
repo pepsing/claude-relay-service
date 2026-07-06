@@ -148,6 +148,45 @@
             </div>
           </div>
 
+          <!-- CC Switch 导入 -->
+          <div
+            v-if="canImportCcSwitch"
+            class="mb-4 rounded-xl border border-cyan-100 bg-cyan-50/80 p-3 dark:border-cyan-500/40 dark:bg-cyan-950/30"
+          >
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div class="min-w-0">
+                <div
+                  class="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-gray-100"
+                >
+                  <i class="fas fa-external-link-alt text-cyan-600 dark:text-cyan-300" />
+                  <span>CC Switch</span>
+                </div>
+                <p class="mt-1 truncate text-xs text-gray-600 dark:text-gray-400">
+                  导入 {{ selectedModel || apikeyServiceConfig.defaultModel }} 到
+                  {{ currentBaseUrl }}
+                </p>
+              </div>
+              <div class="flex flex-shrink-0 gap-2">
+                <button
+                  class="inline-flex items-center justify-center gap-1.5 rounded-lg border border-cyan-200 bg-white px-3 py-2 text-xs font-semibold text-cyan-700 transition hover:bg-cyan-50 dark:border-cyan-700 dark:bg-gray-900 dark:text-cyan-300 dark:hover:bg-cyan-950/50"
+                  type="button"
+                  @click="copyCcSwitchImportUrl"
+                >
+                  <i class="fas fa-copy" />
+                  复制链接
+                </button>
+                <button
+                  class="inline-flex items-center justify-center gap-1.5 rounded-lg bg-cyan-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-cyan-700"
+                  type="button"
+                  @click="openCcSwitchImport"
+                >
+                  <i class="fas fa-bolt" />
+                  一键导入
+                </button>
+              </div>
+            </div>
+          </div>
+
           <!-- 提示词输入 -->
           <div class="mb-4">
             <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -283,9 +322,10 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
-import { APP_CONFIG } from '@/utils/tools'
+import { APP_CONFIG, copyText } from '@/utils/tools'
 import { getModelsApi } from '@/utils/http_apis'
 import { useTestState } from '@/utils/useTestState'
+import { useTutorialUrls } from '@/utils/useTutorialUrls'
 import ModelSelector from '@/components/common/ModelSelector.vue'
 
 const props = defineProps({
@@ -302,6 +342,7 @@ const props = defineProps({
 
 const emit = defineEmits(['close'])
 const state = useTestState()
+const { currentBaseUrl } = useTutorialUrls()
 
 // ========== 模型相关 ==========
 const selectedModel = ref('')
@@ -500,6 +541,73 @@ const maskedApiKey = computed(() => {
 })
 
 const disableTest = computed(() => props.mode === 'apikey' && !props.apiKeyValue)
+
+const canImportCcSwitch = computed(
+  () => props.mode === 'apikey' && props.serviceType === 'claude' && Boolean(props.apiKeyValue)
+)
+
+const relayHomepage = computed(() => currentBaseUrl.value.replace(/\/api\/?$/, ''))
+
+const availableModelValues = computed(() =>
+  availableModels.value.map((model) => model.value).filter(Boolean)
+)
+
+const selectedImportModel = computed(
+  () => selectedModel.value || apikeyServiceConfig.value.defaultModel
+)
+
+const findPreferredModel = (predicate) =>
+  availableModelValues.value.find((model) => predicate(model)) || ''
+
+const selectedSonnetModel = computed(
+  () =>
+    findPreferredModel(
+      (model) => model === selectedImportModel.value && model.includes('sonnet')
+    ) ||
+    findPreferredModel((model) => model.includes('sonnet')) ||
+    selectedImportModel.value
+)
+const selectedOpusModel = computed(
+  () =>
+    findPreferredModel((model) => model === selectedImportModel.value && model.includes('opus')) ||
+    findPreferredModel((model) => model.includes('opus')) ||
+    selectedImportModel.value
+)
+const selectedHaikuModel = computed(
+  () =>
+    findPreferredModel((model) => model === selectedImportModel.value && model.includes('haiku')) ||
+    findPreferredModel((model) => model.includes('haiku')) ||
+    selectedImportModel.value
+)
+
+const ccSwitchImportUrl = computed(() => {
+  const params = new URLSearchParams({
+    resource: 'provider',
+    app: 'claude',
+    name: props.apiKeyName ? `Claude Relay Service - ${props.apiKeyName}` : 'Claude Relay Service',
+    endpoint: currentBaseUrl.value,
+    homepage: relayHomepage.value,
+    model: selectedImportModel.value,
+    sonnetModel: selectedSonnetModel.value,
+    opusModel: selectedOpusModel.value,
+    haikuModel: selectedHaikuModel.value,
+    enabled: 'true',
+    notes: 'Claude Relay Service /api endpoint'
+  })
+
+  const apiKey = props.apiKeyValue.trim()
+  if (apiKey) {
+    params.set('apiKey', apiKey)
+  }
+
+  return `ccswitch://v1/import?${params.toString()}`
+})
+
+const openCcSwitchImport = () => {
+  window.location.href = ccSwitchImportUrl.value
+}
+
+const copyCcSwitchImportUrl = () => copyText(ccSwitchImportUrl.value, 'CC Switch 导入链接已复制')
 
 // ========== account 模式 - 平台信息 ==========
 const platformConfigs = {

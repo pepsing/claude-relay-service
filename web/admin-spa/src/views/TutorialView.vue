@@ -53,36 +53,48 @@
     </div>
 
     <!-- 动态组件 -->
-    <component :is="currentTutorialComponent" :platform="activeTutorialSystem" />
+    <component
+      :is="currentTutorialComponent"
+      :api-key="tutorialApiKey"
+      :platform="activeTutorialSystem"
+      :stats-data="statsData"
+    />
   </div>
 </template>
 
 <script setup>
 import { computed, ref } from 'vue'
 import ClaudeCodeTutorial from '@/components/tutorial/ClaudeCodeTutorial.vue'
-import GeminiCliTutorial from '@/components/tutorial/GeminiCliTutorial.vue'
 import CodexTutorial from '@/components/tutorial/CodexTutorial.vue'
-import DroidCliTutorial from '@/components/tutorial/DroidCliTutorial.vue'
+
+const props = defineProps({
+  apiKey: {
+    type: String,
+    default: ''
+  },
+  statsData: {
+    type: Object,
+    default: null
+  }
+})
 
 // 当前系统选择
-const activeTutorialSystem = ref('windows')
+const activeTutorialSystem = ref('macos')
 
 // 当前 CLI 工具选择
 const activeCliTool = ref('claude-code')
 
 // 系统列表
 const tutorialSystems = [
-  { key: 'windows', name: 'Windows', icon: 'fab fa-windows' },
   { key: 'macos', name: 'macOS', icon: 'fab fa-apple' },
+  { key: 'windows', name: 'Windows', icon: 'fab fa-windows' },
   { key: 'linux', name: 'Linux / WSL2', icon: 'fab fa-linux' }
 ]
 
 // CLI 工具列表
 const cliTools = [
   { key: 'claude-code', name: 'Claude Code', icon: 'fas fa-robot', component: ClaudeCodeTutorial },
-  { key: 'codex', name: 'Codex', icon: 'fas fa-code', component: CodexTutorial },
-  { key: 'gemini-cli', name: 'Gemini CLI', icon: 'fab fa-google', component: GeminiCliTutorial },
-  { key: 'droid-cli', name: 'Droid CLI', icon: 'fas fa-terminal', component: DroidCliTutorial }
+  { key: 'codex', name: 'Codex', icon: 'fas fa-code', component: CodexTutorial }
 ]
 
 // 当前工具标题
@@ -95,6 +107,14 @@ const currentToolTitle = computed(() => {
 const currentTutorialComponent = computed(() => {
   const tool = cliTools.find((t) => t.key === activeCliTool.value)
   return tool ? tool.component : null
+})
+
+const tutorialApiKey = computed(() => {
+  const keys = String(props.apiKey || '')
+    .split(/[\s,]+/)
+    .map((key) => key.trim())
+    .filter(Boolean)
+  return keys.find((key) => key.length >= 10 && key.length <= 512) || ''
 })
 </script>
 
