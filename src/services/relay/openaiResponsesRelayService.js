@@ -277,6 +277,24 @@ class OpenAIResponsesRelayService {
         )
       }
 
+      const inboundModel = req.body?.model || null
+      const upstreamModel = openaiResponsesAccountService.getMappedModel(
+        fullAccount.supportedModels,
+        inboundModel
+      )
+
+      if (upstreamModel && upstreamModel !== inboundModel) {
+        req._openaiModelMapping = {
+          inboundModel,
+          upstreamModel
+        }
+        req.body = {
+          ...req.body,
+          model: upstreamModel
+        }
+        logger.info(`🔄 OpenAI-Responses model mapping: ${inboundModel} -> ${upstreamModel}`)
+      }
+
       const targetUrl = `${baseApi}${targetPath}`
       logger.info(`🎯 Forwarding to: ${targetUrl}`)
 

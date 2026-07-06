@@ -42,11 +42,21 @@ function detectBackendFromModel(modelName) {
   return 'claude'
 }
 
+function selectBackendForRequest(req, modelName) {
+  if (req.baseUrl === '/openai') {
+    return 'openai'
+  }
+
+  return detectBackendFromModel(modelName)
+}
+
 // 🚀 智能后端路由处理器
 async function routeToBackend(req, res, requestedModel) {
-  const backend = detectBackendFromModel(requestedModel)
+  const backend = selectBackendForRequest(req, requestedModel)
 
-  logger.info(`🔀 Routing request - Model: ${requestedModel}, Backend: ${backend}`)
+  logger.info(
+    `🔀 Routing request - Base: ${req.baseUrl || '/'}, Model: ${requestedModel}, Backend: ${backend}`
+  )
 
   // 检查权限
   const { permissions } = req.apiKey

@@ -14,6 +14,10 @@ const droidAccountService = require('./account/droidAccountService')
 const upstreamErrorHelper = require('../utils/upstreamErrorHelper')
 const { isSchedulable } = require('../utils/commonHelper')
 const { isClaudeFamilyModel, parseVendorPrefixedModel } = require('../utils/modelHelper')
+const {
+  PROVIDER_ENDPOINT_CHAT_COMPLETIONS,
+  normalizeOpenAIProviderEndpoint
+} = require('../utils/openaiProviderEndpoint')
 const modelsConfig = require('../../config/models')
 
 const LIVE_WINDOW_SECONDS = 300
@@ -53,7 +57,7 @@ const ENDPOINT_DEFINITIONS = [
     defaultModel: 'gpt-5',
     acceptedFormat: 'OpenAI Chat Completions',
     modelSource: 'body.model',
-    accountTypes: ['openai', 'openai-responses'],
+    accountTypes: ['openai-responses'],
     requestDetailMatchers: ['/openai/v1/chat/completions', '/v1/chat/completions'],
     models: [
       { id: 'gpt-5', label: 'gpt-5', hint: '默认模型' },
@@ -502,6 +506,16 @@ function getRouteAccountTypes(endpoint, model) {
     return vendor === 'ccr' ? endpoint.ccrAccountTypes : endpoint.accountTypes
   }
   return endpoint.accountTypes
+}
+
+function accountMatchesEndpointVariant(endpoint, sourceType, account) {
+  if (endpoint.id !== 'openai' || sourceType !== 'openai-responses') {
+    return true
+  }
+
+  return (
+    normalizeOpenAIProviderEndpoint(account.providerEndpoint) === PROVIDER_ENDPOINT_CHAT_COMPLETIONS
+  )
 }
 
 function getSourceModelEntries(account) {
@@ -1245,7 +1259,9 @@ async function loadAccountsForEndpoint(endpoint, model) {
         return []
       }
       const accounts = await loader.load()
-      return normalizeArrayResult(accounts).map((account) => ({ account, sourceType }))
+      return normalizeArrayResult(accounts)
+        .filter((account) => accountMatchesEndpointVariant(endpoint, sourceType, account))
+        .map((account) => ({ account, sourceType }))
     })
   )
 

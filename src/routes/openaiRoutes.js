@@ -21,6 +21,7 @@ const {
   extractOpenAICacheReadTokens
 } = require('../utils/requestDetailHelper')
 const requestBodyRuleService = require('../services/requestBodyRuleService')
+const { PROVIDER_ENDPOINT_CHAT_COMPLETIONS } = require('../utils/openaiProviderEndpoint')
 
 // Codex CLI 系统提示词（非 Codex CLI 客户端请求时注入，统一端点也使用）
 const CODEX_CLI_INSTRUCTIONS =
@@ -265,7 +266,12 @@ async function applyRateLimitTracking(
 }
 
 // 使用统一调度器选择 OpenAI 账户
-async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel = null) {
+async function getOpenAIAuthToken(
+  apiKeyData,
+  sessionId = null,
+  requestedModel = null,
+  schedulerOptions = {}
+) {
   try {
     // 生成会话哈希（如果有会话ID）
     const sessionHash = sessionId
@@ -276,7 +282,8 @@ async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel =
     const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
       apiKeyData,
       sessionHash,
-      requestedModel
+      requestedModel,
+      schedulerOptions
     )
 
     if (!result || !result.accountId) {
@@ -476,11 +483,16 @@ const handleResponses = async (req, res) => {
       )
     }
 
+    const schedulerOptions = req._fromUnifiedChatCompletions
+      ? { requiredProviderEndpoint: PROVIDER_ENDPOINT_CHAT_COMPLETIONS }
+      : {}
+
     // 使用调度器选择账户
     ;({ accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(
       apiKeyData,
       sessionId,
-      schedulerModel
+      schedulerModel,
+      schedulerOptions
     ))
 
     // 如果是 OpenAI-Responses 账户，使用专门的中继服务处理

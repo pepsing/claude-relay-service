@@ -212,7 +212,32 @@ describe('openai responses payload toggles', () => {
     expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
       req.apiKey,
       createHash('session-a'),
-      'gpt-5'
+      'gpt-5',
+      {}
+    )
+  })
+
+  test('requires chat-completions provider endpoint for unified chat-completions requests', async () => {
+    const req = createReq({
+      body: {
+        model: 'glm-5.2',
+        prompt_cache_key: 'chat-session'
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      },
+      fromUnifiedEndpoint: true
+    })
+    req._fromUnifiedChatCompletions = true
+
+    await openaiRoutes.handleResponses(req, createRes())
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      createHash('chat-session'),
+      'glm-5.2',
+      { requiredProviderEndpoint: 'chat-completions' }
     )
   })
 
@@ -235,7 +260,8 @@ describe('openai responses payload toggles', () => {
     expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
       req.apiKey,
       createHash('session-b'),
-      'gpt-5'
+      'gpt-5',
+      {}
     )
   })
 
@@ -274,7 +300,8 @@ describe('openai responses payload toggles', () => {
     expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
       req.apiKey,
       createHash('new-key'),
-      'gpt-5'
+      'gpt-5',
+      {}
     )
   })
 
@@ -305,7 +332,8 @@ describe('openai responses payload toggles', () => {
     expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
       req.apiKey,
       createHash('rule-key'),
-      'gpt-5-codex'
+      'gpt-5-codex',
+      {}
     )
   })
 
@@ -351,7 +379,8 @@ describe('openai responses payload toggles', () => {
     expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
       req.apiKey,
       createHash('compat-key'),
-      'gpt-5'
+      'gpt-5',
+      {}
     )
     expect(req.body.model).toBe('gpt-5')
     expect(req.body.service_tier).toBe('priority')
@@ -408,7 +437,8 @@ describe('openai responses payload toggles', () => {
     expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
       req.apiKey,
       createHash('rule-model-key'),
-      'gpt-5'
+      'gpt-5',
+      {}
     )
     expect(req.body.model).toBe('gpt-5')
     expect(req.body.text).toEqual({ format: {} })

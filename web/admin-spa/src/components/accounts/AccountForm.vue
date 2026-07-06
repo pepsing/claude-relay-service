@@ -1656,6 +1656,54 @@
               </div>
 
               <div>
+                <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
+                  >模型白名单 / 映射 (可选)</label
+                >
+                <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/30">
+                  <p class="text-xs text-purple-700 dark:text-purple-400">
+                    <i class="fas fa-info-circle mr-1" />
+                    不填写表示支持所有模型；左右相同表示白名单；左右不同表示转发前改写模型名。
+                  </p>
+                </div>
+                <div class="mb-3 space-y-2">
+                  <div
+                    v-for="(mapping, index) in modelMappings"
+                    :key="`openai-responses-create-${index}`"
+                    class="flex items-center gap-2"
+                  >
+                    <input
+                      v-model="mapping.from"
+                      class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                      placeholder="客户端请求模型"
+                      type="text"
+                    />
+                    <i class="fas fa-arrow-right text-gray-400 dark:text-gray-500" />
+                    <input
+                      v-model="mapping.to"
+                      class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                      placeholder="上游模型"
+                      type="text"
+                    />
+                    <button
+                      class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20"
+                      type="button"
+                      @click="removeModelMapping(index)"
+                    >
+                      <i class="fas fa-trash" />
+                    </button>
+                  </div>
+                </div>
+                <button
+                  class="w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-300"
+                  type="button"
+                  @click="addModelMapping"
+                >
+                  <i class="fas fa-plus mr-2" />
+                  添加模型
+                </button>
+              </div>
+
+              <div>
                 <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
                   最大并发任务数
                 </label>
@@ -3394,6 +3442,54 @@
                 Responses 会使用 /responses；Chat Completions 会使用
                 /chat/completions；自动则保持客户端请求的原始路径
               </p>
+            </div>
+
+            <div>
+              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300"
+                >模型白名单 / 映射 (可选)</label
+              >
+              <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/30">
+                <p class="text-xs text-purple-700 dark:text-purple-400">
+                  <i class="fas fa-info-circle mr-1" />
+                  不填写表示支持所有模型；左右相同表示白名单；左右不同表示转发前改写模型名。
+                </p>
+              </div>
+              <div class="mb-3 space-y-2">
+                <div
+                  v-for="(mapping, index) in modelMappings"
+                  :key="`openai-responses-edit-${index}`"
+                  class="flex items-center gap-2"
+                >
+                  <input
+                    v-model="mapping.from"
+                    class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                    placeholder="客户端请求模型"
+                    type="text"
+                  />
+                  <i class="fas fa-arrow-right text-gray-400 dark:text-gray-500" />
+                  <input
+                    v-model="mapping.to"
+                    class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                    placeholder="上游模型"
+                    type="text"
+                  />
+                  <button
+                    class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20"
+                    type="button"
+                    @click="removeModelMapping(index)"
+                  >
+                    <i class="fas fa-trash" />
+                  </button>
+                </div>
+              </div>
+              <button
+                class="w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-300"
+                type="button"
+                @click="addModelMapping"
+              >
+                <i class="fas fa-plus mr-2" />
+                添加模型
+              </button>
             </div>
 
             <!-- 限流时长字段 - 隐藏不显示，保持原值 -->
@@ -5547,6 +5643,8 @@ const createAccount = async () => {
       data.apiKey = form.value.apiKey
       data.userAgent = form.value.userAgent || ''
       data.providerEndpoint = normalizeProviderEndpointValue(form.value.providerEndpoint)
+      data.supportedModels = convertModelMappingRowsToObject() || {}
+      data.modelRestrictionMode = 'mapping'
       data.priority = form.value.priority || 50
       data.rateLimitDuration = 60 // 默认值60，不从用户输入获取
       data.dailyQuota = form.value.dailyQuota || 0
@@ -5903,6 +6001,8 @@ const updateAccount = async () => {
       }
       data.userAgent = form.value.userAgent || ''
       data.providerEndpoint = normalizeProviderEndpointValue(form.value.providerEndpoint)
+      data.supportedModels = convertModelMappingRowsToObject() || {}
+      data.modelRestrictionMode = 'mapping'
       data.priority = form.value.priority || 50
       // 编辑时不上传 rateLimitDuration，保持原值
       data.dailyQuota = form.value.dailyQuota || 0
@@ -6411,6 +6511,16 @@ const addPresetMapping = (from, to) => {
 }
 
 // 将模型映射表转换为对象格式（根据当前模式）
+const convertModelMappingRowsToObject = () => {
+  const mapping = {}
+  modelMappings.value.forEach((item) => {
+    if (item.from && item.to) {
+      mapping[item.from] = item.to
+    }
+  })
+  return Object.keys(mapping).length > 0 ? mapping : null
+}
+
 const convertMappingsToObject = () => {
   const mapping = {}
 
@@ -6421,11 +6531,7 @@ const convertMappingsToObject = () => {
     })
   } else {
     // 映射模式：使用手动配置的映射表
-    modelMappings.value.forEach((item) => {
-      if (item.from && item.to) {
-        mapping[item.from] = item.to
-      }
-    })
+    return convertModelMappingRowsToObject()
   }
 
   return Object.keys(mapping).length > 0 ? mapping : null

@@ -57,6 +57,8 @@ class OpenAIResponsesAccountService {
       isActive = true,
       accountType = 'shared', // 'dedicated' or 'shared'
       schedulable = true, // 是否可被调度
+      supportedModels = {}, // 模型白名单/映射表，空对象表示支持所有模型
+      modelRestrictionMode = 'mapping',
       dailyQuota = 0, // 每日额度限制（美元），0表示不限制
       quotaResetTime = '00:00', // 额度重置时间（HH:mm格式）
       maxConcurrentTasks = 0, // 最大并发任务数，0表示无限制
@@ -81,6 +83,11 @@ class OpenAIResponsesAccountService {
 
     // 规范化 baseApi（确保不以 / 结尾）
     const normalizedBaseApi = baseApi.endsWith('/') ? baseApi.slice(0, -1) : baseApi
+    const normalizedModelRestrictionMode = this._normalizeModelRestrictionMode(modelRestrictionMode)
+    const processedModels = this._processModelMapping(
+      supportedModels,
+      normalizedModelRestrictionMode
+    )
 
     const accountId = uuidv4()
 
@@ -93,6 +100,8 @@ class OpenAIResponsesAccountService {
       apiKey: this._encryptSensitiveData(apiKey),
       userAgent,
       priority: priority.toString(),
+      supportedModels: JSON.stringify(processedModels),
+      modelRestrictionMode: normalizedModelRestrictionMode,
       proxy: proxy ? JSON.stringify(proxy) : '',
       isActive: isActive.toString(),
       accountType,
@@ -157,6 +166,10 @@ class OpenAIResponsesAccountService {
     accountData.maxConcurrentTasks = this._normalizeMaxConcurrentTasks(
       accountData.maxConcurrentTasks
     )
+    accountData.supportedModels = this._parseSupportedModels(accountData.supportedModels)
+    accountData.modelRestrictionMode = this._normalizeModelRestrictionMode(
+      accountData.modelRestrictionMode
+    )
 
     return accountData
   }
@@ -176,6 +189,21 @@ class OpenAIResponsesAccountService {
     // 处理 JSON 字段
     if (updates.proxy !== undefined) {
       updates.proxy = updates.proxy ? JSON.stringify(updates.proxy) : ''
+    }
+
+    if (updates.modelRestrictionMode !== undefined) {
+      updates.modelRestrictionMode = this._normalizeModelRestrictionMode(
+        updates.modelRestrictionMode
+      )
+    }
+
+    if (updates.supportedModels !== undefined) {
+      updates.supportedModels = JSON.stringify(
+        this._processModelMapping(
+          updates.supportedModels,
+          updates.modelRestrictionMode || account.modelRestrictionMode || 'mapping'
+        )
+      )
     }
 
     // 规范化 baseApi
@@ -278,6 +306,10 @@ class OpenAIResponsesAccountService {
       accountData.apiKey = '***'
       accountData.maxConcurrentTasks = this._normalizeMaxConcurrentTasks(
         accountData.maxConcurrentTasks
+      )
+      accountData.supportedModels = this._parseSupportedModels(accountData.supportedModels)
+      accountData.modelRestrictionMode = this._normalizeModelRestrictionMode(
+        accountData.modelRestrictionMode
       )
       accountData.activeTaskCount = await redis.getConcurrency(
         `openai_responses_account:${accountData.id}`
@@ -627,6 +659,103 @@ class OpenAIResponsesAccountService {
       remainingMinutes,
       willBeAvailableAt
     }
+  }
+
+  _normalizeModelRestrictionMode(mode) {
+    return mode === 'whitelist' ? 'whitelist' : 'mapping'
+  }
+
+  _parseSupportedModels(value) {
+    if (!value) {
+      return {}
+    }
+
+    if (typeof value === 'object') {
+      return this._processModelMapping(value, 'mapping')
+    }
+
+    try {
+      return this._processModelMapping(JSON.parse(value), 'mapping')
+    } catch {
+      return {}
+    }
+  }
+
+  _processModelMapping(supportedModels, modelRestrictionMode = 'mapping') {
+    const normalizedMode = this._normalizeModelRestrictionMode(modelRestrictionMode)
+
+    if (!supportedModels || (Array.isArray(supportedModels) && supportedModels.length === 0)) {
+      return {}
+    }
+
+    if (Array.isArray(supportedModels)) {
+      return supportedModels.reduce((mapping, model) => {
+        if (typeof model === 'string' && model.trim()) {
+          const normalizedModel = model.trim()
+          mapping[normalizedModel] = normalizedModel
+        }
+        return mapping
+      }, {})
+    }
+
+    if (typeof supportedModels === 'object') {
+      const mapping = {}
+      for (const [from, to] of Object.entries(supportedModels)) {
+        const inboundModel = typeof from === 'string' ? from.trim() : ''
+        const upstreamModel =
+          normalizedMode === 'whitelist'
+            ? inboundModel
+            : typeof to === 'string' && to.trim()
+              ? to.trim()
+              : inboundModel
+
+        if (inboundModel) {
+          mapping[inboundModel] = upstreamModel
+        }
+      }
+      return mapping
+    }
+
+    return {}
+  }
+
+  isModelSupported(modelMapping, requestedModel) {
+    if (!requestedModel) {
+      return true
+    }
+
+    const parsedMapping = this._parseSupportedModels(modelMapping)
+    const keys = Object.keys(parsedMapping)
+    if (keys.length === 0) {
+      return true
+    }
+
+    const requestedModelLower = requestedModel.toLowerCase()
+    return keys.some((model) => model.toLowerCase() === requestedModelLower)
+  }
+
+  getMappedModel(modelMapping, requestedModel) {
+    if (!requestedModel) {
+      return requestedModel
+    }
+
+    const parsedMapping = this._parseSupportedModels(modelMapping)
+    if (Object.keys(parsedMapping).length === 0) {
+      return requestedModel
+    }
+
+    if (Object.prototype.hasOwnProperty.call(parsedMapping, requestedModel)) {
+      return parsedMapping[requestedModel]
+    }
+
+    const requestedModelLower = requestedModel.toLowerCase()
+    for (const [from, to] of Object.entries(parsedMapping)) {
+      if (from.toLowerCase() === requestedModelLower) {
+        return to
+      }
+    }
+
+    return requestedModel
   }
 
   // 加密敏感数据

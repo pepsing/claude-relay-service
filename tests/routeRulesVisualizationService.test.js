@@ -349,4 +349,53 @@ describe('routeRulesVisualizationService', () => {
       routableCount: 1
     })
   })
+
+  test('limits OpenAI Chat route rules to chat-completions OpenAI-Responses accounts', async () => {
+    openaiAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'oauth-openai',
+        name: 'OAuth OpenAI',
+        priority: 10,
+        supportedModels: ['glm-5.2'],
+        isActive: true,
+        status: 'active',
+        schedulable: true
+      }
+    ])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'responses-provider',
+        name: 'Responses provider',
+        priority: 20,
+        providerEndpoint: 'responses',
+        supportedModels: { 'kimi-k2.7': 'kimi-k2.7' },
+        isActive: true,
+        status: 'active',
+        schedulable: true,
+        accountType: 'shared'
+      },
+      {
+        id: 'chat-provider',
+        name: 'Chat provider',
+        priority: 30,
+        providerEndpoint: 'chat-completions',
+        supportedModels: { 'glm-5.2': 'glm-5.2' },
+        isActive: true,
+        status: 'active',
+        schedulable: true,
+        accountType: 'shared'
+      }
+    ])
+
+    const result = await routeRulesVisualizationService.getExplain({
+      endpoint: 'openai',
+      model: 'glm-5.2'
+    })
+
+    expect(result.routeAccountTypes).toEqual(['openai-responses'])
+    expect(result.accounts.map((account) => account.id)).toEqual(['chat-provider'])
+    expect(result.modelRoutes.map((model) => model.id)).toEqual(expect.arrayContaining(['glm-5.2']))
+    expect(result.modelRoutes.map((model) => model.id)).not.toContain('kimi-k2.7')
+    expect(openaiAccountService.getAllAccounts).not.toHaveBeenCalled()
+  })
 })
