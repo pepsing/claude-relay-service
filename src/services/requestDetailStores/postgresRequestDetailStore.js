@@ -1,5 +1,8 @@
 const postgres = require('../../models/postgres')
 
+const DEFAULT_CLEANUP_BATCH_SIZE = 5000
+const MAX_CLEANUP_BATCH_SIZE = 50000
+
 const REQUEST_DETAILS_RESET_SCHEMA_SQL = `
 DROP TABLE IF EXISTS request_detail_timings CASCADE;
 DROP TABLE IF EXISTS request_detail_contexts CASCADE;
@@ -1347,6 +1350,65 @@ async function purgeRequestBodySnapshots() {
   return { updatedRecords: result.rowCount || 0 }
 }
 
+async function cleanupExpiredRequestDetails({ retentionHours, batchSize } = {}) {
+  const normalizedRetentionHours = normalizeInteger(retentionHours, 0)
+  if (normalizedRetentionHours < 1) {
+    return {
+      deletedRecords: 0,
+      retentionHours: normalizedRetentionHours,
+      batchSize: 0,
+      batches: 0,
+      skipped: true,
+      reason: 'invalid_retention'
+    }
+  }
+
+  const normalizedBatchSize = Math.min(
+    Math.max(normalizeInteger(batchSize, DEFAULT_CLEANUP_BATCH_SIZE), 1),
+    MAX_CLEANUP_BATCH_SIZE
+  )
+  let deletedRecords = 0
+  let batches = 0
+
+  while (true) {
+    const result = await postgres.query(
+      `
+        WITH expired AS (
+          SELECT request_id
+          FROM request_details
+          WHERE timestamp < now() - ($1::int * interval '1 hour')
+          ORDER BY timestamp ASC, request_id ASC
+          LIMIT $2
+        )
+        DELETE FROM request_details d
+        USING expired
+        WHERE d.request_id = expired.request_id
+      `,
+      [normalizedRetentionHours, normalizedBatchSize]
+    )
+
+    const deleted = Number(result.rowCount || 0)
+    if (deleted <= 0) {
+      break
+    }
+
+    deletedRecords += deleted
+    batches += 1
+
+    if (deleted < normalizedBatchSize) {
+      break
+    }
+  }
+
+  return {
+    deletedRecords,
+    retentionHours: normalizedRetentionHours,
+    batchSize: normalizedBatchSize,
+    batches,
+    skipped: false
+  }
+}
+
 module.exports = {
   REQUEST_DETAILS_SCHEMA_SQL,
   REQUEST_DETAILS_RESET_SCHEMA_SQL,
@@ -1362,5 +1424,6 @@ module.exports = {
   getRequestDetail,
   countRequestBodySnapshots,
   purgeRequestBodySnapshots,
+  cleanupExpiredRequestDetails,
   rowToRecord
 }

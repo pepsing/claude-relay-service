@@ -1213,6 +1213,28 @@ class RequestDetailService {
     }
   }
 
+  async cleanupExpiredPostgresRequestDetails(options = {}) {
+    const settings = await this.getSettings()
+    const postgresEnabled =
+      settings.readMode === 'postgres' ||
+      settings.writeMode === 'postgres' ||
+      settings.writeMode === 'dual'
+
+    if (!postgresEnabled) {
+      return {
+        deletedRecords: 0,
+        retentionHours: settings.retentionHours,
+        skipped: true,
+        reason: 'postgres_disabled'
+      }
+    }
+
+    return requestDetailPostgresStore.cleanupExpiredRequestDetails({
+      retentionHours: settings.retentionHours,
+      batchSize: options.batchSize
+    })
+  }
+
   async _getApiKeyName(keyId, cache) {
     if (!keyId) {
       return null

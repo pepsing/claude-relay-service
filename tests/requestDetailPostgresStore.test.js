@@ -79,4 +79,43 @@ describe('requestDetailPostgresStore', () => {
     expect(sql).not.toContain('sortBy')
     expect(values).toHaveLength(4)
   })
+
+  test('cleanupExpiredRequestDetails deletes only expired request detail rows', async () => {
+    postgres.query.mockResolvedValueOnce({ rows: [], rowCount: 3 })
+
+    const result = await requestDetailPostgresStore.cleanupExpiredRequestDetails({
+      retentionHours: 48,
+      batchSize: 100
+    })
+
+    const [sql, values] = postgres.query.mock.calls[0]
+    expect(result).toEqual({
+      deletedRecords: 3,
+      retentionHours: 48,
+      batchSize: 100,
+      batches: 1,
+      skipped: false
+    })
+    expect(sql).toContain('DELETE FROM request_details')
+    expect(sql).toContain('USING expired')
+    expect(sql).not.toContain('usage_events')
+    expect(sql).not.toContain('usage_rollups')
+    expect(values).toEqual([48, 100])
+  })
+
+  test('cleanupExpiredRequestDetails skips invalid retention values', async () => {
+    const result = await requestDetailPostgresStore.cleanupExpiredRequestDetails({
+      retentionHours: 0
+    })
+
+    expect(result).toEqual({
+      deletedRecords: 0,
+      retentionHours: 0,
+      batchSize: 0,
+      batches: 0,
+      skipped: true,
+      reason: 'invalid_retention'
+    })
+    expect(postgres.query).not.toHaveBeenCalled()
+  })
 })

@@ -677,17 +677,25 @@ class Application {
 
         const apiKeyService = require('./services/apiKeyService')
         const claudeAccountService = require('./services/account/claudeAccountService')
+        const requestDetailService = require('./services/requestDetailService')
+        const requestDetailCleanupPromise = requestDetailService
+          .cleanupExpiredPostgresRequestDetails()
+          .catch((cleanupError) => {
+            logger.warn(`⚠️ Failed to cleanup PostgreSQL request details: ${cleanupError.message}`)
+            return { deletedRecords: 0, skipped: true, failed: true }
+          })
 
-        const [expiredKeys, errorAccounts] = await Promise.all([
+        const [expiredKeys, errorAccounts, requestDetailCleanup] = await Promise.all([
           apiKeyService.cleanupExpiredKeys(),
           claudeAccountService.cleanupErrorAccounts(),
-          claudeAccountService.cleanupTempErrorAccounts() // 新增：清理临时错误账户
+          claudeAccountService.cleanupTempErrorAccounts(), // 新增：清理临时错误账户
+          requestDetailCleanupPromise
         ])
 
         await redis.cleanup()
 
         logger.success(
-          `🧹 Cleanup completed: ${expiredKeys} expired keys, ${errorAccounts} error accounts reset`
+          `🧹 Cleanup completed: ${expiredKeys} expired keys, ${errorAccounts} error accounts reset, ${requestDetailCleanup.deletedRecords || 0} expired PostgreSQL request details removed`
         )
       } catch (error) {
         logger.error('❌ Cleanup task failed:', error)

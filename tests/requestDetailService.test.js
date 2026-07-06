@@ -47,7 +47,8 @@ jest.mock('../src/services/requestDetailStores/postgresRequestDetailStore', () =
   getAvailableFilters: jest.fn(),
   getRequestDetail: jest.fn(),
   countRequestBodySnapshots: jest.fn(),
-  purgeRequestBodySnapshots: jest.fn()
+  purgeRequestBodySnapshots: jest.fn(),
+  cleanupExpiredRequestDetails: jest.fn()
 }))
 
 jest.mock('../src/services/langfuseTraceService', () => ({
@@ -2256,6 +2257,55 @@ describe('requestDetailService', () => {
     expect(purge).toEqual({ updatedRecords: 3 })
     expect(requestDetailPostgresStore.countRequestBodySnapshots).toHaveBeenCalled()
     expect(requestDetailPostgresStore.purgeRequestBodySnapshots).toHaveBeenCalled()
+  })
+
+  test('cleanupExpiredPostgresRequestDetails applies configured retention to PostgreSQL', async () => {
+    appConfig.requestDetailStorage.writeMode = 'postgres'
+    appConfig.requestDetailStorage.readMode = 'postgres'
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      requestDetailCaptureEnabled: true,
+      requestDetailRetentionHours: 48,
+      requestDetailBodyPreviewEnabled: false
+    })
+    requestDetailPostgresStore.cleanupExpiredRequestDetails.mockResolvedValue({
+      deletedRecords: 12,
+      retentionHours: 48,
+      batchSize: 5000,
+      batches: 1,
+      skipped: false
+    })
+
+    const result = await requestDetailService.cleanupExpiredPostgresRequestDetails()
+
+    expect(result).toEqual({
+      deletedRecords: 12,
+      retentionHours: 48,
+      batchSize: 5000,
+      batches: 1,
+      skipped: false
+    })
+    expect(requestDetailPostgresStore.cleanupExpiredRequestDetails).toHaveBeenCalledWith({
+      retentionHours: 48,
+      batchSize: undefined
+    })
+  })
+
+  test('cleanupExpiredPostgresRequestDetails skips when PostgreSQL storage is disabled', async () => {
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      requestDetailCaptureEnabled: true,
+      requestDetailRetentionHours: 24,
+      requestDetailBodyPreviewEnabled: false
+    })
+
+    const result = await requestDetailService.cleanupExpiredPostgresRequestDetails()
+
+    expect(result).toEqual({
+      deletedRecords: 0,
+      retentionHours: 24,
+      skipped: true,
+      reason: 'postgres_disabled'
+    })
+    expect(requestDetailPostgresStore.cleanupExpiredRequestDetails).not.toHaveBeenCalled()
   })
 
   test('purgeRequestBodySnapshots removes snapshots while keeping records', async () => {

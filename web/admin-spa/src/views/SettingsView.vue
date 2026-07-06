@@ -1198,7 +1198,7 @@
                   </p>
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                     新请求明细按小时保留，支持 0-30 天与 0-23 小时组合，总保留时间为 1-720
-                    小时；关闭采集不会删除已保留的数据，直到自然过期
+                    小时；超过保留期的数据会由后台定时清理，关闭采集不会立即删除已保留的数据
                   </p>
                 </div>
 
@@ -1219,7 +1219,7 @@
                         class="mt-2 text-xs text-amber-600 dark:text-amber-400"
                       >
                         <i class="fas fa-exclamation-triangle mr-1"></i>
-                        开启请求体预览会增加 Redis 存储压力
+                        开启请求体预览会增加明细存储压力
                       </p>
                     </div>
 
@@ -2314,7 +2314,7 @@ const requestDetailRetentionWarning = computed(() => {
     !requestDetailRetentionError.value &&
     requestDetailRetentionTotalHours.value > REQUEST_DETAIL_RETENTION_WARNING_HOURS
   ) {
-    return '保留时间超过 72 小时会增加 Redis 存储压力'
+    return '保留时间超过 72 小时会增加明细存储压力'
   }
   return ''
 })
