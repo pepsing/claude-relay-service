@@ -114,4 +114,22 @@ describe('testPayloadHelper', () => {
       )
     ).toBe('Hello from SSE')
   })
+
+  test('extracts text from Chat Completions JSON bodies', () => {
+    expect(
+      extractOpenAIResponsesText({
+        id: 'chatcmpl-test',
+        object: 'chat.completion',
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: 'Hello from chat'
+            }
+          }
+        ]
+      })
+    ).toBe('Hello from chat')
+  })
 })

@@ -5,6 +5,10 @@ const logger = require('../../utils/logger')
 const config = require('../../../config/config')
 const LRUCache = require('../../utils/lruCache')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
+const {
+  getOpenAIProviderEndpointValues,
+  normalizeOpenAIProviderEndpoint
+} = require('../../utils/openaiProviderEndpoint')
 
 class OpenAIResponsesAccountService {
   constructor() {
@@ -58,7 +62,7 @@ class OpenAIResponsesAccountService {
       maxConcurrentTasks = 0, // 最大并发任务数，0表示无限制
       rateLimitDuration = 60, // 限流时间（分钟）
       disableAutoProtection = false, // 是否关闭自动防护（429/401/400/529 不自动禁用）
-      providerEndpoint = 'responses' // Provider 端点类型：responses | auto
+      providerEndpoint = 'responses' // Provider 端点类型：responses | chat-completions | auto
     } = options
 
     // 验证必填字段
@@ -67,8 +71,9 @@ class OpenAIResponsesAccountService {
     }
 
     // 验证 providerEndpoint 枚举值
-    const validEndpoints = ['responses', 'auto']
-    if (!validEndpoints.includes(providerEndpoint)) {
+    const normalizedProviderEndpoint = normalizeOpenAIProviderEndpoint(providerEndpoint)
+    if (!normalizedProviderEndpoint) {
+      const validEndpoints = getOpenAIProviderEndpointValues()
       throw new Error(
         `Invalid providerEndpoint: ${providerEndpoint}. Must be one of: ${validEndpoints.join(', ')}`
       )
@@ -113,7 +118,7 @@ class OpenAIResponsesAccountService {
       quotaStoppedAt: '',
       maxConcurrentTasks: this._normalizeMaxConcurrentTasks(maxConcurrentTasks).toString(),
       disableAutoProtection: disableAutoProtection.toString(), // 关闭自动防护
-      providerEndpoint // Provider 端点类型：responses(默认) | auto
+      providerEndpoint: normalizedProviderEndpoint // Provider 端点类型：responses(默认) | chat-completions | auto
     }
 
     // 保存到 Redis
@@ -188,12 +193,14 @@ class OpenAIResponsesAccountService {
 
     // 验证 providerEndpoint 枚举值
     if (updates.providerEndpoint !== undefined) {
-      const validEndpoints = ['responses', 'auto']
-      if (!validEndpoints.includes(updates.providerEndpoint)) {
+      const normalizedProviderEndpoint = normalizeOpenAIProviderEndpoint(updates.providerEndpoint)
+      if (!normalizedProviderEndpoint) {
+        const validEndpoints = getOpenAIProviderEndpointValues()
         throw new Error(
           `Invalid providerEndpoint: ${updates.providerEndpoint}. Must be one of: ${validEndpoints.join(', ')}`
         )
       }
+      updates.providerEndpoint = normalizedProviderEndpoint
     }
 
     // 自动防护开关

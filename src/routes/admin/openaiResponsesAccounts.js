@@ -15,12 +15,17 @@ const webhookNotifier = require('../../utils/webhookNotifier')
 const { formatAccountExpiry, mapExpiryField } = require('./utils')
 const {
   createOpenAITestPayload,
+  createChatCompletionsTestPayload,
   OPENAI_CODEX_TEST_INSTRUCTIONS,
   extractOpenAIResponsesText,
   extractErrorMessage,
   sanitizeTestPrompt
 } = require('../../utils/testPayloadHelper')
 const { getProxyAgent } = require('../../utils/proxyHelper')
+const {
+  PROVIDER_ENDPOINT_CHAT_COMPLETIONS,
+  resolveOpenAIProviderTargetPath
+} = require('../../utils/openaiProviderEndpoint')
 
 const router = express.Router()
 
@@ -506,22 +511,25 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
 
     // 构造测试请求（根据 providerEndpoint 和 baseApi 决定端点路径）
     const baseUrl = account.baseApi || 'https://api.openai.com'
-    const providerEndpoint = account.providerEndpoint || 'responses'
-    let endpointPath = '/responses'
-    if (providerEndpoint === 'auto') {
-      endpointPath = '/responses' // 测试时默认用 responses
-    }
-    // 防止 baseApi 已含 /v1 时路径重复
-    if (!baseUrl.endsWith('/v1')) {
-      endpointPath = `/v1${endpointPath}`
-    }
-    const apiUrl = `${baseUrl}${endpointPath}`
-    const payload = createOpenAITestPayload(model, {
-      stream: false,
-      prompt,
-      instructions: OPENAI_CODEX_TEST_INSTRUCTIONS,
-      includeMaxOutputTokens: false
+    const { providerEndpoint, targetPath } = resolveOpenAIProviderTargetPath({
+      providerEndpoint: account.providerEndpoint || 'responses',
+      requestPath:
+        account.providerEndpoint === PROVIDER_ENDPOINT_CHAT_COMPLETIONS
+          ? '/v1/chat/completions'
+          : '/v1/responses',
+      baseApi: baseUrl
     })
+    const endpointPath = targetPath
+    const apiUrl = `${baseUrl}${endpointPath}`
+    const payload =
+      providerEndpoint === PROVIDER_ENDPOINT_CHAT_COMPLETIONS
+        ? createChatCompletionsTestPayload(model, { prompt })
+        : createOpenAITestPayload(model, {
+            stream: false,
+            prompt,
+            instructions: OPENAI_CODEX_TEST_INSTRUCTIONS,
+            includeMaxOutputTokens: false
+          })
 
     const requestConfig = {
       headers: {

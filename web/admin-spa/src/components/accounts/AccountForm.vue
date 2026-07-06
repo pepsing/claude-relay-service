@@ -1646,11 +1646,12 @@
                   class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
                 >
                   <option value="responses">Responses（推荐）</option>
+                  <option value="chat-completions">Chat Completions</option>
                   <option value="auto">自动（保持原始路径）</option>
                 </select>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  指定 Provider 支持的端点类型。Responses 会将所有请求路由到（包括来自
-                  /v1/chat/completions 的请求会自动转换）；自动则保持客户端请求的原始路径
+                  Responses 会使用 /responses；Chat Completions 会使用
+                  /chat/completions；自动则保持客户端请求的原始路径
                 </p>
               </div>
 
@@ -3386,12 +3387,12 @@
                 class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
               >
                 <option value="responses">Responses（推荐）</option>
-                <option value="completions">Chat Completions</option>
+                <option value="chat-completions">Chat Completions</option>
                 <option value="auto">自动（保持原始路径）</option>
               </select>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                指定 Provider 支持的端点类型。Responses 会将所有请求路由到（包括来自
-                /v1/chat/completions 的请求会自动转换）；自动则保持原始路径
+                Responses 会使用 /responses；Chat Completions 会使用
+                /chat/completions；自动则保持客户端请求的原始路径
               </p>
             </div>
 
@@ -4212,6 +4213,25 @@ const normalizeAccountCooldownOverride = (value) => {
 
 const toFormBoolean = (value) => value === true || value === 'true'
 
+const normalizeProviderEndpointValue = (value) => {
+  const normalized = String(value || '').trim()
+  if (
+    normalized === 'completions' ||
+    normalized === 'chat/completions' ||
+    normalized === 'chat_completions'
+  ) {
+    return 'chat-completions'
+  }
+  return normalized || 'responses'
+}
+
+const assertMutationSuccess = (result, fallbackMessage) => {
+  if (!result?.success) {
+    throw new Error(result?.message || result?.error || fallbackMessage)
+  }
+  return result
+}
+
 // 表单数据
 const form = ref({
   platform: props.account?.platform || 'claude',
@@ -4249,7 +4269,7 @@ const form = ref({
   endpointType: props.account?.endpointType || 'anthropic',
   // OpenAI-Responses 特定字段
   baseApi: props.account?.baseApi || '',
-  providerEndpoint: props.account?.providerEndpoint || 'responses',
+  providerEndpoint: normalizeProviderEndpointValue(props.account?.providerEndpoint),
   // Gemini-API 特定字段
   baseUrl: props.account?.baseUrl || 'https://generativelanguage.googleapis.com',
   rateLimitDuration: props.account?.rateLimitDuration || 60,
@@ -5526,7 +5546,7 @@ const createAccount = async () => {
       data.baseApi = form.value.baseApi
       data.apiKey = form.value.apiKey
       data.userAgent = form.value.userAgent || ''
-      data.providerEndpoint = form.value.providerEndpoint || 'responses'
+      data.providerEndpoint = normalizeProviderEndpointValue(form.value.providerEndpoint)
       data.priority = form.value.priority || 50
       data.rateLimitDuration = 60 // 默认值60，不从用户输入获取
       data.dailyQuota = form.value.dailyQuota || 0
@@ -5609,6 +5629,7 @@ const createAccount = async () => {
       throw new Error(`不支持的平台: ${form.value.platform}`)
     }
 
+    assertMutationSuccess(result, '账户创建失败')
     emit('success', result)
   } catch (error) {
     // 显示详细的错误信息
@@ -5881,7 +5902,7 @@ const updateAccount = async () => {
         data.apiKey = form.value.apiKey
       }
       data.userAgent = form.value.userAgent || ''
-      data.providerEndpoint = form.value.providerEndpoint || 'responses'
+      data.providerEndpoint = normalizeProviderEndpointValue(form.value.providerEndpoint)
       data.priority = form.value.priority || 50
       // 编辑时不上传 rateLimitDuration，保持原值
       data.dailyQuota = form.value.dailyQuota || 0
@@ -5962,28 +5983,30 @@ const updateAccount = async () => {
       data.disableAutoProtection = !!form.value.disableAutoProtection
     }
 
+    let result
     if (props.account.platform === 'claude') {
-      await accountsStore.updateClaudeAccount(props.account.id, data)
+      result = await accountsStore.updateClaudeAccount(props.account.id, data)
     } else if (props.account.platform === 'claude-console') {
-      await accountsStore.updateClaudeConsoleAccount(props.account.id, data)
+      result = await accountsStore.updateClaudeConsoleAccount(props.account.id, data)
     } else if (props.account.platform === 'openai-responses') {
-      await accountsStore.updateOpenAIResponsesAccount(props.account.id, data)
+      result = await accountsStore.updateOpenAIResponsesAccount(props.account.id, data)
     } else if (props.account.platform === 'bedrock') {
-      await accountsStore.updateBedrockAccount(props.account.id, data)
+      result = await accountsStore.updateBedrockAccount(props.account.id, data)
     } else if (props.account.platform === 'openai') {
-      await accountsStore.updateOpenAIAccount(props.account.id, data)
+      result = await accountsStore.updateOpenAIAccount(props.account.id, data)
     } else if (props.account.platform === 'azure_openai') {
-      await accountsStore.updateAzureOpenAIAccount(props.account.id, data)
+      result = await accountsStore.updateAzureOpenAIAccount(props.account.id, data)
     } else if (props.account.platform === 'gemini') {
-      await accountsStore.updateGeminiAccount(props.account.id, data)
+      result = await accountsStore.updateGeminiAccount(props.account.id, data)
     } else if (props.account.platform === 'gemini-api') {
-      await accountsStore.updateGeminiApiAccount(props.account.id, data)
+      result = await accountsStore.updateGeminiApiAccount(props.account.id, data)
     } else if (props.account.platform === 'droid') {
-      await accountsStore.updateDroidAccount(props.account.id, data)
+      result = await accountsStore.updateDroidAccount(props.account.id, data)
     } else {
       throw new Error(`不支持的平台: ${props.account.platform}`)
     }
 
+    assertMutationSuccess(result, '账户更新失败')
     emit('success')
   } catch (error) {
     // 显示详细的错误信息
@@ -6509,7 +6532,7 @@ watch(
         deploymentName: newAccount.deploymentName || '',
         // OpenAI-Responses 特定字段
         baseApi: newAccount.baseApi || '',
-        providerEndpoint: newAccount.providerEndpoint || 'responses',
+        providerEndpoint: normalizeProviderEndpointValue(newAccount.providerEndpoint),
         // Gemini-API 特定字段
         baseUrl: newAccount.baseUrl || 'https://generativelanguage.googleapis.com',
         // 额度管理字段

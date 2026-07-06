@@ -426,9 +426,10 @@ const visibleFieldGroups = computed(() => {
       type: 'select',
       options: [
         { value: 'responses', label: 'Responses' },
+        { value: 'chat-completions', label: 'Chat Completions' },
         { value: 'auto', label: 'Auto' }
       ],
-      hint: '控制上游请求入口。'
+      hint: '控制上游请求入口。Responses 使用 /responses，Chat Completions 使用 /chat/completions。'
     })
   }
   if (upstreamFields.length > 0) {
@@ -581,6 +582,18 @@ function toBoolean(value) {
   return value === true || value === 'true' || value === 1 || value === '1'
 }
 
+function normalizeProviderEndpointValue(value) {
+  const normalized = String(value || '').trim()
+  if (
+    normalized === 'completions' ||
+    normalized === 'chat/completions' ||
+    normalized === 'chat_completions'
+  ) {
+    return 'chat-completions'
+  }
+  return normalized || 'responses'
+}
+
 function getAccountGroupIds(account) {
   if (!account) {
     return []
@@ -622,6 +635,9 @@ function getComparableFieldValue(account, key) {
   }
   if (key === 'proxyText') {
     return account?.proxy || null
+  }
+  if (key === 'providerEndpoint') {
+    return normalizeProviderEndpointValue(account?.providerEndpoint)
   }
   return account?.[key]
 }
@@ -691,7 +707,7 @@ function seedFormFromAccount(account) {
   form.azureEndpoint = account.azureEndpoint || ''
   form.apiVersion = account.apiVersion || ''
   form.deploymentName = account.deploymentName || ''
-  form.providerEndpoint = account.providerEndpoint || 'responses'
+  form.providerEndpoint = normalizeProviderEndpointValue(account.providerEndpoint)
   form.userAgent = account.userAgent || ''
   form.disableAutoProtection = toBoolean(account.disableAutoProtection)
   form.interceptWarmup = toBoolean(account.interceptWarmup)
@@ -796,7 +812,7 @@ function buildPatch() {
     }
   }
   if (fieldEnabled.providerEndpoint) {
-    patch.providerEndpoint = form.providerEndpoint || 'responses'
+    patch.providerEndpoint = normalizeProviderEndpointValue(form.providerEndpoint)
   }
   if (fieldEnabled.userAgent) {
     patch.userAgent = String(form.userAgent || '').trim()

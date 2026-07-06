@@ -2150,12 +2150,14 @@
     <!-- 编辑账户模态框 -->
     <CcrAccountForm
       v-if="showEditAccountModal && editingAccount && editingAccount.platform === 'ccr'"
+      :key="`ccr:${editingAccount.id}`"
       :account="editingAccount"
       @close="showEditAccountModal = false"
       @success="handleEditSuccess"
     />
     <AccountForm
       v-else-if="showEditAccountModal"
+      :key="editingAccount ? `${editingAccount.platform}:${editingAccount.id}` : 'edit-account'"
       :account="editingAccount"
       @close="showEditAccountModal = false"
       @success="handleEditSuccess"
@@ -4922,12 +4924,11 @@ const handleCreateSuccess = () => {
 }
 
 // 处理编辑成功
-const handleEditSuccess = () => {
+const handleEditSuccess = async () => {
   showEditAccountModal.value = false
   showToast('账户更新成功', 'success')
-  // 清空分组成员缓存，因为账户类型和分组可能发生变化
-  groupMembersLoaded.value = false
-  loadAccounts()
+  clearCache()
+  await loadAccounts(true)
 }
 
 // 获取 Claude 账号的添加方式

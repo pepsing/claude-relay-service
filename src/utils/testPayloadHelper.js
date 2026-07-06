@@ -377,6 +377,20 @@ function extractOpenAIResponsesTextFromObject(data) {
     return data.output_text
   }
 
+  if (Array.isArray(data.choices)) {
+    return data.choices
+      .map((choice) => {
+        if (typeof choice?.message?.content === 'string') {
+          return choice.message.content
+        }
+        if (typeof choice?.delta?.content === 'string') {
+          return choice.delta.content
+        }
+        return ''
+      })
+      .join('')
+  }
+
   let responseText = ''
   const output = data.output || data.response?.output
   if (Array.isArray(output)) {

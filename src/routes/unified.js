@@ -87,6 +87,10 @@ async function routeToBackend(req, res, requestedModel) {
       const originalEnd = res.end.bind(res)
 
       res.write = function (chunk, encoding, callback) {
+        if (req._openaiChatCompletionsPassthrough) {
+          return originalWrite(chunk, encoding, callback)
+        }
+
         if (res.statusCode >= 400) {
           return originalWrite(chunk, encoding, callback)
         }
@@ -139,6 +143,10 @@ async function routeToBackend(req, res, requestedModel) {
       }
 
       res.end = function (chunk, encoding, callback) {
+        if (req._openaiChatCompletionsPassthrough) {
+          return originalEnd(chunk, encoding, callback)
+        }
+
         if (res.statusCode < 400) {
           // 处理 res.end(chunk) 传入的最后一块数据
           if (chunk) {
@@ -207,6 +215,9 @@ async function routeToBackend(req, res, requestedModel) {
     }
 
     // 输入转换：Chat Completions → Responses API 格式
+    req._openaiOriginalChatCompletionsPath = req.path
+    req._openaiOriginalChatCompletionsBody = JSON.parse(JSON.stringify(req.body || {}))
+    req._fromUnifiedChatCompletions = true
     req.body = codexConverter.buildRequestFromOpenAI(req.body)
     // 注入 Codex CLI 系统提示词（与 handleResponses 非 Codex CLI 适配一致）
     req.body.instructions = CODEX_CLI_INSTRUCTIONS
