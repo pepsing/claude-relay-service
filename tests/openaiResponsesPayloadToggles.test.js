@@ -106,6 +106,7 @@ const redis = require('../src/models/redis')
 const openaiAccountService = require('../src/services/account/openaiAccountService')
 const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
 const openaiResponsesRelayService = require('../src/services/relay/openaiResponsesRelayService')
+const errorSanitizer = require('../src/utils/errorSanitizer')
 const openaiRoutes = require('../src/routes/openaiRoutes')
 
 function createHash(value) {
@@ -239,6 +240,39 @@ describe('openai responses payload toggles', () => {
       'glm-5.2',
       { requiredProviderEndpoint: 'chat-completions' }
     )
+  })
+
+  test('returns local model routing errors without replacing them with generic sanitizer text', async () => {
+    const error = new Error('No available OpenAI accounts support the requested model: glm-5.2')
+    error.statusCode = 400
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockRejectedValue(error)
+    errorSanitizer.getSafeMessage.mockReturnValue('Internal server error')
+
+    const req = createReq({
+      body: {
+        model: 'glm-5.2',
+        prompt_cache_key: 'chat-session'
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      },
+      fromUnifiedEndpoint: true
+    })
+    req._fromUnifiedChatCompletions = true
+    const res = createRes()
+
+    await openaiRoutes.handleResponses(req, res)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.payload).toEqual({
+      error: {
+        message: 'No available OpenAI accounts support the requested model: glm-5.2',
+        type: 'invalid_request_error',
+        code: 'model_not_supported'
+      }
+    })
+    expect(errorSanitizer.getSafeMessage).not.toHaveBeenCalled()
   })
 
   test('applies Codex adaptation only when adaptation toggle is on', async () => {

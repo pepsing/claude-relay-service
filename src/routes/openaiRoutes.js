@@ -37,6 +37,31 @@ function checkOpenAIPermissions(apiKeyData) {
   return apiKeyService.hasPermission(apiKeyData?.permissions, 'openai')
 }
 
+function getLocalOpenAIClientErrorMessage(error, status) {
+  if (error?.response || status < 400 || status >= 500 || !error?.message) {
+    return null
+  }
+
+  const message = String(error.message)
+  if (message.startsWith('No available OpenAI accounts support the requested model:')) {
+    return message
+  }
+
+  if (message === 'No available OpenAI accounts') {
+    return message
+  }
+
+  if (message.includes('does not support model')) {
+    return 'Configured OpenAI account does not support the requested model'
+  }
+
+  if (message.includes('does not match required provider endpoint')) {
+    return 'Configured OpenAI account does not match the requested endpoint type'
+  }
+
+  return null
+}
+
 function normalizeHeaders(headers = {}) {
   if (!headers || typeof headers !== 'object') {
     return {}
@@ -1065,7 +1090,16 @@ const handleResponses = async (req, res) => {
     }
 
     let responsePayload = error.response?.data
-    if (!responsePayload) {
+    const localClientErrorMessage = getLocalOpenAIClientErrorMessage(error, status)
+    if (localClientErrorMessage) {
+      responsePayload = {
+        error: {
+          message: localClientErrorMessage,
+          type: 'invalid_request_error',
+          code: 'model_not_supported'
+        }
+      }
+    } else if (!responsePayload) {
       responsePayload = { error: { message: getSafeMessage(error) } }
     } else if (typeof responsePayload === 'string') {
       responsePayload = { error: { message: getSafeMessage(responsePayload) } }

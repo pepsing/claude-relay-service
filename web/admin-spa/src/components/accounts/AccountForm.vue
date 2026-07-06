@@ -1408,7 +1408,7 @@
                   </div>
 
                   <!-- 模型复选框列表 -->
-                  <div class="mb-3 grid grid-cols-2 gap-2">
+                  <div class="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <label
                       v-for="model in commonModels"
                       :key="model.value"
@@ -1451,23 +1451,25 @@
                     <div
                       v-for="(mapping, index) in modelMappings"
                       :key="index"
-                      class="flex items-center gap-2"
+                      class="flex flex-col gap-2 sm:flex-row sm:items-center"
                     >
                       <input
                         v-model="mapping.from"
-                        class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                        class="form-input w-full min-w-0 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400 sm:flex-1"
                         placeholder="原始模型名称"
                         type="text"
                       />
-                      <i class="fas fa-arrow-right text-gray-400 dark:text-gray-500" />
+                      <i
+                        class="fas fa-arrow-right rotate-90 self-center text-gray-400 dark:text-gray-500 sm:rotate-0"
+                      />
                       <input
                         v-model="mapping.to"
-                        class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                        class="form-input w-full min-w-0 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400 sm:flex-1"
                         placeholder="映射后的模型名称"
                         type="text"
                       />
                       <button
-                        class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20"
+                        class="flex h-10 w-10 flex-none items-center justify-center self-end rounded-lg text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 sm:self-auto"
                         type="button"
                         @click="removeModelMapping(index)"
                       >
@@ -1669,23 +1671,25 @@
                   <div
                     v-for="(mapping, index) in modelMappings"
                     :key="`openai-responses-create-${index}`"
-                    class="flex items-center gap-2"
+                    class="flex flex-col gap-2 sm:flex-row sm:items-center"
                   >
                     <input
                       v-model="mapping.from"
-                      class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                      class="form-input w-full min-w-0 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400 sm:flex-1"
                       placeholder="客户端请求模型"
                       type="text"
                     />
-                    <i class="fas fa-arrow-right text-gray-400 dark:text-gray-500" />
+                    <i
+                      class="fas fa-arrow-right rotate-90 self-center text-gray-400 dark:text-gray-500 sm:rotate-0"
+                    />
                     <input
                       v-model="mapping.to"
-                      class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                      class="form-input w-full min-w-0 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400 sm:flex-1"
                       placeholder="上游模型"
                       type="text"
                     />
                     <button
-                      class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20"
+                      class="flex h-10 w-10 flex-none items-center justify-center self-end rounded-lg text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 sm:self-auto"
                       type="button"
                       @click="removeModelMapping(index)"
                     >
@@ -3215,7 +3219,7 @@
                 </div>
 
                 <!-- 模型复选框列表 -->
-                <div class="mb-3 grid grid-cols-2 gap-2">
+                <div class="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <label
                     v-for="model in commonModels"
                     :key="model.value"
@@ -3258,23 +3262,25 @@
                   <div
                     v-for="(mapping, index) in modelMappings"
                     :key="index"
-                    class="flex items-center gap-2"
+                    class="flex flex-col gap-2 sm:flex-row sm:items-center"
                   >
                     <input
                       v-model="mapping.from"
-                      class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                      class="form-input w-full min-w-0 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 sm:flex-1"
                       placeholder="原始模型名称"
                       type="text"
                     />
-                    <i class="fas fa-arrow-right text-gray-400 dark:text-gray-500" />
+                    <i
+                      class="fas fa-arrow-right rotate-90 self-center text-gray-400 dark:text-gray-500 sm:rotate-0"
+                    />
                     <input
                       v-model="mapping.to"
-                      class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                      class="form-input w-full min-w-0 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 sm:flex-1"
                       placeholder="映射后的模型名称"
                       type="text"
                     />
                     <button
-                      class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20"
+                      class="flex h-10 w-10 flex-none items-center justify-center self-end rounded-lg text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 sm:self-auto"
                       type="button"
                       @click="removeModelMapping(index)"
                     >
@@ -3458,23 +3464,25 @@
                 <div
                   v-for="(mapping, index) in modelMappings"
                   :key="`openai-responses-edit-${index}`"
-                  class="flex items-center gap-2"
+                  class="flex flex-col gap-2 sm:flex-row sm:items-center"
                 >
                   <input
                     v-model="mapping.from"
-                    class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                    class="form-input w-full min-w-0 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400 sm:flex-1"
                     placeholder="客户端请求模型"
                     type="text"
                   />
-                  <i class="fas fa-arrow-right text-gray-400 dark:text-gray-500" />
+                  <i
+                    class="fas fa-arrow-right rotate-90 self-center text-gray-400 dark:text-gray-500 sm:rotate-0"
+                  />
                   <input
                     v-model="mapping.to"
-                    class="form-input flex-1 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400"
+                    class="form-input w-full min-w-0 border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-400 sm:flex-1"
                     placeholder="上游模型"
                     type="text"
                   />
                   <button
-                    class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20"
+                    class="flex h-10 w-10 flex-none items-center justify-center self-end rounded-lg text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20 sm:self-auto"
                     type="button"
                     @click="removeModelMapping(index)"
                   >
