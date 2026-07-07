@@ -948,7 +948,7 @@ const filters = reactive({
   dateRange: null,
   keyword: '',
   apiKeyId: normalizeQueryValue(route.query.apiKeyId),
-  accountId: '',
+  accountId: normalizeQueryValue(route.query.accountId),
   model: '',
   endpoint: '',
   session: '',
@@ -1588,11 +1588,16 @@ const debouncedKeywordFetch = debounce(() => {
 }, 300)
 
 watch(
-  () => route.query.apiKeyId,
-  (apiKeyId) => {
+  () => [route.query.apiKeyId, route.query.accountId],
+  ([apiKeyId, accountId]) => {
     const nextApiKeyId = normalizeQueryValue(apiKeyId)
-    if (filters.apiKeyId === nextApiKeyId) return
-    filters.apiKeyId = nextApiKeyId
+    const nextAccountId = normalizeQueryValue(accountId)
+    if (filters.apiKeyId !== nextApiKeyId) {
+      filters.apiKeyId = nextApiKeyId
+    }
+    if (filters.accountId !== nextAccountId) {
+      filters.accountId = nextAccountId
+    }
   }
 )
 

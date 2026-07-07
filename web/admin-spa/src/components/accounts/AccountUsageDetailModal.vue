@@ -52,6 +52,12 @@
               <i class="fas fa-clock" /> 请求时间线
             </button>
             <button
+              class="flex items-center gap-2 rounded-full bg-blue-100 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-200 dark:bg-blue-500/10 dark:text-blue-200 dark:hover:bg-blue-500/20"
+              @click="goRequestDetails"
+            >
+              <i class="fas fa-list-ul" /> 请求明细
+            </button>
+            <button
               class="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
               @click="handleClose"
             >
@@ -588,6 +594,14 @@ const goTimeline = () => {
   router.push({
     path: `/accounts/${props.account.id}/usage-records`,
     query: { platform: props.account.platform || props.account.accountType }
+  })
+}
+
+const goRequestDetails = () => {
+  if (!props.account?.id) return
+  router.push({
+    name: 'RequestDetails',
+    query: { accountId: props.account.id }
   })
 }
 

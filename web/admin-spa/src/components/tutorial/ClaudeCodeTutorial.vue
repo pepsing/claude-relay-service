@@ -635,7 +635,13 @@ const settingsJsonLines = computed(() => [
   '{',
   '  "env": {',
   `    "ANTHROPIC_BASE_URL": "${currentBaseUrl.value}",`,
-  `    "ANTHROPIC_AUTH_TOKEN": "${apiKeyValue.value}"`,
+  `    "ANTHROPIC_AUTH_TOKEN": "${apiKeyValue.value}",`,
+  '    "ANTHROPIC_MODEL": "glm",',
+  '    "API_TIMEOUT_MS": "3000000",',
+  '    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",',
+  '    "DISABLE_ERROR_REPORTING": "1",',
+  '    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",',
+  '    "DISABLE_TELEMETRY": "1"',
   '  }',
   '}'
 ])
