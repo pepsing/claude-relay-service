@@ -29,6 +29,77 @@ const {
 
 const router = express.Router()
 
+function extractSupportedModelNames(supportedModels) {
+  let parsed = supportedModels
+
+  if (typeof supportedModels === 'string') {
+    try {
+      parsed = JSON.parse(supportedModels)
+    } catch {
+      parsed = supportedModels
+    }
+  }
+
+  if (Array.isArray(parsed)) {
+    return parsed
+      .map((model) => {
+        if (typeof model === 'string') return model.trim()
+        if (model && typeof model === 'object') {
+          return String(model.value || model.id || model.model || '').trim()
+        }
+        return ''
+      })
+      .filter(Boolean)
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    return Object.keys(parsed)
+      .map((model) => model.trim())
+      .filter(Boolean)
+  }
+
+  return []
+}
+
+function getDefaultOpenAIResponsesTestModel(account, providerEndpoint) {
+  if (providerEndpoint === PROVIDER_ENDPOINT_CHAT_COMPLETIONS) {
+    return extractSupportedModelNames(account?.supportedModels)[0] || 'gpt-4o-mini'
+  }
+
+  return 'gpt-4o-mini'
+}
+
+function getOpenAITestFinishReason(data) {
+  let parsed = data
+
+  if (typeof data === 'string') {
+    try {
+      parsed = JSON.parse(data)
+    } catch {
+      return ''
+    }
+  }
+
+  if (Array.isArray(parsed?.choices)) {
+    return parsed.choices
+      .map((choice) => choice?.finish_reason)
+      .filter(Boolean)
+      .join(', ')
+  }
+
+  return parsed?.status || parsed?.response?.status || ''
+}
+
+function assertOpenAITestResponseHasText(responseText, responseData) {
+  if (responseText.trim()) {
+    return
+  }
+
+  const finishReason = getOpenAITestFinishReason(responseData)
+  const detail = finishReason ? ` (finish_reason/status: ${finishReason})` : ''
+  throw new Error(`Test response has no content${detail}`)
+}
+
 // ==================== OpenAI-Responses 账户管理 API ====================
 
 // 获取所有 OpenAI-Responses 账户
@@ -494,7 +565,7 @@ router.post('/openai-responses-accounts/:id/reset-usage', authenticateAdmin, asy
 // 测试 OpenAI-Responses 账户连通性
 router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
-  const { model = 'gpt-4o-mini' } = req.body
+  const requestedModel = typeof req.body?.model === 'string' ? req.body.model.trim() : ''
   const prompt = sanitizeTestPrompt(req.body?.prompt)
   const startTime = Date.now()
 
@@ -521,9 +592,10 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
     })
     const endpointPath = targetPath
     const apiUrl = `${baseUrl}${endpointPath}`
+    const model = requestedModel || getDefaultOpenAIResponsesTestModel(account, providerEndpoint)
     const payload =
       providerEndpoint === PROVIDER_ENDPOINT_CHAT_COMPLETIONS
-        ? createChatCompletionsTestPayload(model, { prompt })
+        ? createChatCompletionsTestPayload(model, { prompt, maxTokens: 512 })
         : createOpenAITestPayload(model, {
             stream: false,
             prompt,
@@ -555,6 +627,7 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
 
     // 提取响应文本，兼容标准 JSON 和部分上游即使 stream=false 仍返回 SSE 文本的情况
     const responseText = extractOpenAIResponsesText(response.data)
+    assertOpenAITestResponseHasText(responseText, response.data)
 
     logger.success(
       `✅ OpenAI-Responses account test passed: ${account.name} (${accountId}), latency: ${latency}ms`

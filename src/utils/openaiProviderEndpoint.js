@@ -57,11 +57,26 @@ function responsesTargetPath(sourcePath = '') {
   return pathUsesV1(sourcePath) ? '/v1/responses' : '/responses'
 }
 
-function removeDuplicatedV1(baseApi = '', targetPath = '') {
-  if (String(baseApi).endsWith('/v1') && String(targetPath).startsWith('/v1/')) {
-    return targetPath.slice(3)
+function baseApiEndsWithVersion(baseApi = '') {
+  const text = String(baseApi || '').trim()
+  if (!text) {
+    return false
   }
-  return targetPath
+
+  try {
+    const { pathname } = new URL(text)
+    return /(^|\/)v\d+$/i.test(pathname.replace(/\/+$/, ''))
+  } catch {
+    return /(^|\/)v\d+$/i.test(text.replace(/[?#].*$/, '').replace(/\/+$/, ''))
+  }
+}
+
+function removeDuplicatedVersionPath(baseApi = '', targetPath = '') {
+  const normalizedTargetPath = String(targetPath || '')
+  if (baseApiEndsWithVersion(baseApi) && /^\/v\d+\//i.test(normalizedTargetPath)) {
+    return normalizedTargetPath.replace(/^\/v\d+/i, '')
+  }
+  return normalizedTargetPath
 }
 
 function resolveOpenAIProviderTargetPath({ providerEndpoint, requestPath, originalPath, baseApi }) {
@@ -82,7 +97,7 @@ function resolveOpenAIProviderTargetPath({ providerEndpoint, requestPath, origin
 
   return {
     providerEndpoint: normalizedProviderEndpoint,
-    targetPath: removeDuplicatedV1(baseApi, targetPath)
+    targetPath: removeDuplicatedVersionPath(baseApi, targetPath)
   }
 }
 

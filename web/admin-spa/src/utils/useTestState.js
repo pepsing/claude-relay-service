@@ -158,7 +158,7 @@ export const useTestState = () => {
         testDuration.value = Date.now() - testStartTime.value
         if (data.success) {
           testStatus.value = 'success'
-          responseText.value = data.data?.responseText || 'Test passed'
+          responseText.value = data.data?.responseText || ''
         } else {
           testStatus.value = 'error'
           errorMessage.value = data.message || 'Test failed'

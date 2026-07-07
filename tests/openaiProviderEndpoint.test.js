@@ -31,6 +31,30 @@ describe('openaiProviderEndpoint', () => {
     })
   })
 
+  test('resolves chat completions target without duplicating versioned baseApi', () => {
+    expect(
+      resolveOpenAIProviderTargetPath({
+        providerEndpoint: 'chat-completions',
+        requestPath: '/v1/chat/completions',
+        baseApi: 'https://open.bigmodel.cn/api/coding/paas/v4'
+      })
+    ).toEqual({
+      providerEndpoint: 'chat-completions',
+      targetPath: '/chat/completions'
+    })
+
+    expect(
+      resolveOpenAIProviderTargetPath({
+        providerEndpoint: 'chat-completions',
+        requestPath: '/v1/chat/completions',
+        baseApi: 'https://ark.cn-beijing.volces.com/api/coding/v3'
+      })
+    ).toEqual({
+      providerEndpoint: 'chat-completions',
+      targetPath: '/chat/completions'
+    })
+  })
+
   test('resolves chat completions target from unified original path', () => {
     expect(
       resolveOpenAIProviderTargetPath({

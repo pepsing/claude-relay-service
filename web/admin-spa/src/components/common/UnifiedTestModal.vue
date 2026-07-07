@@ -266,6 +266,9 @@
               >
                 {{ state.errorMessage.value }}
               </p>
+              <p v-else class="text-sm text-gray-500 dark:text-gray-400">
+                测试已通过，但没有返回可展示的响应正文
+              </p>
             </div>
           </div>
 
@@ -425,8 +428,27 @@ const extractConfiguredSourceModels = (supportedModels) => {
 
 const accountMappingModelPlatforms = new Set(['claude-console', 'ccr', 'gemini', 'gemini-api'])
 
+const normalizeProviderEndpointType = (value) => {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (text === 'chat-completions' || text === 'chat_completions' || text === 'chat/completions') {
+    return 'chat-completions'
+  }
+  return 'responses'
+}
+
+const isOpenAIChatCompletionsAccount = computed(
+  () =>
+    props.mode === 'account' &&
+    props.account?.platform === 'openai-responses' &&
+    normalizeProviderEndpointType(props.account?.providerEndpoint) === 'chat-completions'
+)
+
 const accountMappingModels = computed(() => {
-  if (props.mode !== 'account' || !accountMappingModelPlatforms.has(props.account?.platform)) {
+  if (
+    props.mode !== 'account' ||
+    (!accountMappingModelPlatforms.has(props.account?.platform) &&
+      !isOpenAIChatCompletionsAccount.value)
+  ) {
     return []
   }
 
@@ -462,6 +484,10 @@ const availableModels = computed(() => {
     baseModels = modelsFromApi.value[props.serviceType] || []
   }
 
+  if (isOpenAIChatCompletionsAccount.value) {
+    return mergeModelOptions(accountMappingModels.value)
+  }
+
   return mergeModelOptions(baseModels, accountMappingModels.value, externalModelOptions.value)
 })
 
@@ -486,6 +512,9 @@ const defaultModel = computed(() => {
       if (models.length > 0) return models[0].value
       if (props.account?.credentialType === 'bearer_token') return 'anthropic.claude-sonnet-4-6'
       return 'anthropic.claude-haiku-4-5-20251001-v1:0'
+    }
+    if (isOpenAIChatCompletionsAccount.value) {
+      return availableModels.value[0]?.value || ''
     }
     const models = availableModels.value
     if (models.length > 0) return models[0].value
