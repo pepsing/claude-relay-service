@@ -469,6 +469,25 @@ const externalModelOptions = computed(() => {
   return normalizeModelOptions(options[props.serviceType] || [])
 })
 
+const getApiKeyModeBaseModels = () => {
+  const directModels = modelsFromApi.value[props.serviceType]
+  if (directModels) {
+    return directModels
+  }
+
+  const platformModels = modelsFromApi.value.platforms?.[props.serviceType]
+  if (platformModels) {
+    return platformModels
+  }
+
+  const endpointModels = modelsFromApi.value.endpointConfigs?.[props.serviceType]?.whitelistModels
+  if (endpointModels) {
+    return endpointModels
+  }
+
+  return []
+}
+
 const availableModels = computed(() => {
   let baseModels = []
   if (props.mode === 'account') {
@@ -481,7 +500,7 @@ const availableModels = computed(() => {
     baseModels = modelsFromApi.value.platforms?.[platform] || []
   } else {
     // apikey 模式
-    baseModels = modelsFromApi.value[props.serviceType] || []
+    baseModels = getApiKeyModeBaseModels()
   }
 
   if (isOpenAIChatCompletionsAccount.value) {
@@ -555,6 +574,18 @@ const apikeyServiceConfigs = {
     endpoint: '/api-key/test-openai',
     defaultModel: 'gpt-5',
     displayEndpoint: '/openai/responses'
+  },
+  'openai-responses': {
+    name: 'Codex',
+    endpoint: '/api-key/test-openai',
+    defaultModel: 'gpt-5',
+    displayEndpoint: '/openai/responses'
+  },
+  'openai-chat': {
+    name: 'OpenAI Chat',
+    endpoint: '/api-key/test-openai-chat',
+    defaultModel: 'gpt-5',
+    displayEndpoint: '/openai/v1/chat/completions'
   }
 }
 

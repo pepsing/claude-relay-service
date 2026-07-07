@@ -157,7 +157,7 @@ const { apiKey, statsData, multiKeyMode } = storeToRefs(apiStatsStore)
 
 const loading = ref(false)
 const error = ref('')
-const modelData = ref({ claude: [], gemini: [], openai: [] })
+const modelData = ref({ claude: [], openai: [], 'openai-responses': [], 'openai-chat': [] })
 
 const serviceMeta = [
   {
@@ -168,18 +168,18 @@ const serviceMeta = [
     iconBg: 'bg-gradient-to-br from-orange-500 to-amber-500'
   },
   {
-    key: 'gemini',
-    name: 'Gemini',
-    endpoint: '/gemini/v1/models',
-    icon: 'fa-gem',
-    iconBg: 'bg-gradient-to-br from-blue-500 to-sky-500'
-  },
-  {
-    key: 'openai',
+    key: 'openai-responses',
     name: 'Codex',
     endpoint: '/openai/responses',
     icon: 'fa-code',
     iconBg: 'bg-gradient-to-br from-green-500 to-emerald-500'
+  },
+  {
+    key: 'openai-chat',
+    name: 'OpenAI Chat',
+    endpoint: '/openai/v1/chat/completions',
+    icon: 'fa-comments',
+    iconBg: 'bg-gradient-to-br from-blue-500 to-indigo-500'
   }
 ]
 
@@ -224,6 +224,21 @@ const parseRestrictedModels = (restrictions) => {
   return Array.isArray(list) ? list : []
 }
 
+const permissionKeyForService = (serviceKey) => {
+  if (serviceKey === 'openai-chat' || serviceKey === 'openai-responses') {
+    return 'openai'
+  }
+  return serviceKey
+}
+
+const getGlobalModelsForService = (serviceKey) =>
+  normalizeModels(
+    modelData.value?.[serviceKey] ||
+      modelData.value?.platforms?.[serviceKey] ||
+      modelData.value?.endpointConfigs?.[serviceKey]?.whitelistModels ||
+      []
+  )
+
 const hasSingleApiKey = computed(() => !multiKeyMode.value && apiKey.value.trim().length >= 10)
 
 const maskedApiKey = computed(() => {
@@ -240,12 +255,13 @@ const serviceCards = computed(() => {
 
   return serviceMeta.map((service) => {
     const keyOptions = normalizeModels(statsData.value?.testModelOptions?.[service.key] || [])
-    const globalOptions = normalizeModels(modelData.value?.[service.key] || [])
+    const globalOptions = getGlobalModelsForService(service.key)
     const sourceModels = keyOptions.length > 0 ? keyOptions : globalOptions
     const models = isRestricted
       ? sourceModels.filter((model) => !restrictedModels.includes(model.value))
       : sourceModels
-    const canUse = permissions.length === 0 || permissions.includes(service.key)
+    const permissionKey = permissionKeyForService(service.key)
+    const canUse = permissions.length === 0 || permissions.includes(permissionKey)
     const testDisabled = !hasSingleApiKey.value || !canUse
 
     return {

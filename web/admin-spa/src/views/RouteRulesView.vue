@@ -85,11 +85,13 @@
           <div class="text-xs font-black uppercase text-gray-500 dark:text-gray-400">
             接受的 Model
           </div>
-          <div class="text-xs font-bold text-gray-400">{{ modelRoutes.length }}</div>
+          <div class="text-xs font-bold text-gray-400">
+            {{ visibleModelRoutes.length }} / {{ modelRoutes.length }}
+          </div>
         </div>
         <div class="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-1">
           <button
-            v-for="model in modelRoutes"
+            v-for="model in visibleModelRoutes"
             :key="model.id"
             :class="[
               'model-btn',
@@ -102,6 +104,35 @@
             <span class="min-w-0 flex-1 truncate text-left">{{ model.id }}</span>
             <span class="model-count">{{ model.routableCount ?? 0 }}</span>
           </button>
+        </div>
+        <div v-if="collapsedModelRoutes.length" class="mt-3">
+          <button
+            class="model-collapse-toggle"
+            type="button"
+            @click="showEmptyModelRoutes = !showEmptyModelRoutes"
+          >
+            <span class="min-w-0 truncate"> 无账户模型 {{ collapsedModelRoutes.length }} </span>
+            <i :class="['fas', showEmptyModelRoutes ? 'fa-chevron-up' : 'fa-chevron-down']" />
+          </button>
+          <div
+            v-if="showEmptyModelRoutes"
+            class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-1"
+          >
+            <button
+              v-for="model in collapsedModelRoutes"
+              :key="model.id"
+              :class="[
+                'model-btn',
+                selectedModel === model.id
+                  ? 'model-btn-active'
+                  : 'bg-gray-50 text-gray-500 hover:bg-indigo-50 dark:bg-gray-900/30 dark:text-gray-400 dark:hover:bg-indigo-950/30'
+              ]"
+              @click="selectModel(model.id)"
+            >
+              <span class="min-w-0 flex-1 truncate text-left">{{ model.id }}</span>
+              <span class="model-count">{{ model.routableCount ?? 0 }}</span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -290,6 +321,7 @@ const liveLoading = ref(false)
 const errorMessage = ref('')
 const showEditAccountModal = ref(false)
 const editingAccount = ref(null)
+const showEmptyModelRoutes = ref(false)
 let refreshTimer = null
 
 const selectedEndpointMeta = computed(
@@ -305,6 +337,17 @@ const modelRoutes = computed(() => {
   }
   return selectedEndpointMeta.value?.models || []
 })
+
+const hasModelProvider = (model) =>
+  Number(model?.sourceCount || 0) > 0 || Number(model?.routableCount || 0) > 0
+
+const visibleModelRoutes = computed(() =>
+  modelRoutes.value.filter((model) => hasModelProvider(model) || model.id === selectedModel.value)
+)
+
+const collapsedModelRoutes = computed(() =>
+  modelRoutes.value.filter((model) => !hasModelProvider(model) && model.id !== selectedModel.value)
+)
 
 const liveSummary = computed(
   () =>
@@ -560,6 +603,7 @@ const refreshAll = async () => {
 const handleEndpointChange = async () => {
   const endpoint = endpointOptions.value.find((item) => item.id === selectedEndpoint.value)
   selectedModel.value = endpoint?.defaultModel || endpoint?.models?.[0]?.id || ''
+  showEmptyModelRoutes.value = false
   await loadExplain()
 }
 
@@ -823,6 +867,44 @@ onBeforeUnmount(() => {
 
 .model-btn-active .model-count {
   color: rgb(79, 70, 229);
+}
+
+.model-collapse-toggle {
+  display: flex;
+  min-height: 34px;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px dashed rgba(148, 163, 184, 0.55);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.74);
+  padding: 0 10px;
+  color: rgb(100, 116, 139);
+  font-size: 12px;
+  font-weight: 900;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.model-collapse-toggle:hover {
+  border-color: rgba(99, 102, 241, 0.55);
+  background: rgba(238, 242, 255, 0.9);
+  color: rgb(79, 70, 229);
+}
+
+:global(.dark) .model-collapse-toggle {
+  border-color: rgba(71, 85, 105, 0.8);
+  background: rgba(15, 23, 42, 0.5);
+  color: rgb(148, 163, 184);
+}
+
+:global(.dark) .model-collapse-toggle:hover {
+  border-color: rgba(129, 140, 248, 0.55);
+  background: rgba(30, 41, 59, 0.78);
+  color: rgb(199, 210, 254);
 }
 
 .mapping-line {

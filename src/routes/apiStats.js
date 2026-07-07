@@ -11,11 +11,13 @@ const ccrAccountService = require('../services/account/ccrAccountService')
 const geminiAccountService = require('../services/account/geminiAccountService')
 const geminiApiAccountService = require('../services/account/geminiApiAccountService')
 const openaiAccountService = require('../services/account/openaiAccountService')
+const openaiResponsesAccountService = require('../services/account/openaiResponsesAccountService')
 const accountGroupService = require('../services/accountGroupService')
 const serviceRatesService = require('../services/serviceRatesService')
 const claudeRelayConfigService = require('../services/claudeRelayConfigService')
 const {
   createClaudeTestPayload,
+  createChatCompletionsTestPayload,
   OPENAI_CODEX_TEST_INSTRUCTIONS,
   getClaudeCodeTestHeaders,
   extractErrorMessage,
@@ -24,6 +26,10 @@ const {
 const modelsConfig = require('../../config/models')
 const { getSafeMessage } = require('../utils/errorSanitizer')
 const { getEffectiveModel } = require('../utils/modelHelper')
+const {
+  PROVIDER_ENDPOINT_CHAT_COMPLETIONS,
+  normalizeOpenAIProviderEndpoint
+} = require('../utils/openaiProviderEndpoint')
 
 const router = express.Router()
 
@@ -31,6 +37,7 @@ const MODEL_ENDPOINT_ALIASES = {
   'claude-console': 'claude',
   droid: 'droid',
   ccr: 'ccr',
+  'openai-chat': 'openai',
   azure_openai: 'azure-openai',
   'gemini-api': 'gemini',
   'gemini-antigravity': 'gemini'
@@ -149,6 +156,8 @@ const buildConfiguredModelData = async () => {
     claude: claudeModels,
     gemini: geminiModels,
     openai: openaiModels,
+    'openai-chat': openaiModels,
+    'openai-responses': openaiResponsesModels,
     other: modelsConfig.OTHER_MODELS,
     all: mergeModelOptions(
       ...Object.values(endpointConfigs).map(
@@ -396,13 +405,18 @@ async function collectAccountSourceModelOptions({
   bindingValue,
   bindingPrefix = '',
   loadAccounts,
-  valuePrefix = ''
+  valuePrefix = '',
+  accountFilter = null
 }) {
   const resolvedBindingValue = bindingValue !== undefined ? bindingValue : keyData[bindingField]
   const boundIds = await resolveBoundAccountIds(resolvedBindingValue, bindingPrefix)
   const accounts = await loadAccounts()
 
   for (const account of accounts || []) {
+    if (typeof accountFilter === 'function' && !accountFilter(account)) {
+      continue
+    }
+
     const accountId = account?.id || account?.accountId
     if (!accountId) {
       continue
@@ -430,7 +444,9 @@ async function buildApiKeyTestModelOptions(keyData = {}) {
   const optionMaps = {
     claude: new Map(),
     gemini: new Map(),
-    openai: new Map()
+    openai: new Map(),
+    'openai-chat': new Map(),
+    'openai-responses': new Map()
   }
 
   if (apiKeyService.hasPermission(keyData.permissions, 'claude')) {
@@ -469,6 +485,30 @@ async function buildApiKeyTestModelOptions(keyData = {}) {
       bindingField: 'geminiAccountId',
       bindingPrefix: 'api:',
       loadAccounts: () => geminiApiAccountService.getAllAccounts(true)
+    })
+  }
+
+  if (apiKeyService.hasPermission(keyData.permissions, 'openai')) {
+    await collectAccountSourceModelOptions({
+      optionMaps,
+      service: 'openai-chat',
+      keyData,
+      bindingField: 'openaiAccountId',
+      loadAccounts: () => openaiResponsesAccountService.getAllAccounts(true),
+      accountFilter: (account) =>
+        normalizeOpenAIProviderEndpoint(account.providerEndpoint) ===
+        PROVIDER_ENDPOINT_CHAT_COMPLETIONS
+    })
+
+    await collectAccountSourceModelOptions({
+      optionMaps,
+      service: 'openai-responses',
+      keyData,
+      bindingField: 'openaiAccountId',
+      loadAccounts: () => openaiResponsesAccountService.getAllAccounts(true),
+      accountFilter: (account) =>
+        normalizeOpenAIProviderEndpoint(account.providerEndpoint) !==
+        PROVIDER_ENDPOINT_CHAT_COMPLETIONS
     })
   }
 
@@ -1519,6 +1559,44 @@ const ALLOWED_MAX_TOKENS = [100, 500, 1000, 2000, 4096]
 const sanitizeMaxTokens = (value) =>
   ALLOWED_MAX_TOKENS.includes(Number(value)) ? Number(value) : 1000
 
+const extractChatCompletionText = (data) => {
+  if (!data || typeof data !== 'object') {
+    return ''
+  }
+
+  if (Array.isArray(data.choices)) {
+    return data.choices
+      .map((choice) => {
+        const content = choice?.message?.content ?? choice?.delta?.content
+        if (typeof content === 'string') {
+          return content
+        }
+        if (Array.isArray(content)) {
+          return content
+            .map((part) =>
+              typeof part === 'string'
+                ? part
+                : typeof part?.text === 'string'
+                  ? part.text
+                  : typeof part?.content === 'string'
+                    ? part.content
+                    : ''
+            )
+            .join('')
+        }
+        return ''
+      })
+      .join('')
+      .trim()
+  }
+
+  if (typeof data.output_text === 'string') {
+    return data.output_text.trim()
+  }
+
+  return ''
+}
+
 // 🧪 API Key 端点测试接口 - 测试API Key是否能正常访问服务
 router.post('/api-key/test', async (req, res) => {
   const config = require('../../config/config')
@@ -1881,6 +1959,125 @@ router.post('/api-key/test-openai', async (req, res) => {
     }
   } catch (error) {
     logger.error('❌ OpenAI API Key test failed:', error)
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        error: 'Test failed',
+        message: getSafeMessage(error)
+      })
+    }
+
+    res.write(`data: ${JSON.stringify({ type: 'error', error: getSafeMessage(error) })}\n\n`)
+    res.end()
+  }
+})
+
+// 🧪 OpenAI Chat Completions API Key 端点测试接口
+router.post('/api-key/test-openai-chat', async (req, res) => {
+  const config = require('../../config/config')
+
+  try {
+    const { apiKey, model = 'gpt-5', prompt = 'hi' } = req.body
+    const maxTokens = sanitizeMaxTokens(req.body.maxTokens)
+
+    if (!apiKey) {
+      return res.status(400).json({
+        error: 'API Key is required',
+        message: 'Please provide your API Key'
+      })
+    }
+
+    if (typeof apiKey !== 'string' || apiKey.length < 10 || apiKey.length > 512) {
+      return res.status(400).json({
+        error: 'Invalid API key format',
+        message: 'API key format is invalid'
+      })
+    }
+
+    const validation = await apiKeyService.validateApiKeyForStats(apiKey)
+    if (!validation.valid) {
+      return res.status(401).json({
+        error: 'Invalid API key',
+        message: validation.error
+      })
+    }
+
+    if (!apiKeyService.hasPermission(validation.keyData.permissions, 'openai')) {
+      return res.status(403).json({
+        error: 'Permission denied',
+        message: 'This API key does not have OpenAI permission'
+      })
+    }
+
+    logger.api(
+      `🧪 OpenAI Chat API Key test started for: ${validation.keyData.name} (${validation.keyData.id})`
+    )
+
+    const port = config.server.port || 3000
+    const apiUrl = `http://127.0.0.1:${port}/openai/v1/chat/completions`
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    })
+
+    res.write(`data: ${JSON.stringify({ type: 'test_start', message: 'Test started' })}\n\n`)
+
+    const axios = require('axios')
+    const payload = {
+      ...createChatCompletionsTestPayload(model, { prompt, maxTokens }),
+      stream: false
+    }
+
+    try {
+      const response = await axios.post(apiUrl, payload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'User-Agent': 'openai-chat-test/1.0'
+        },
+        timeout: 60000,
+        validateStatus: () => true
+      })
+
+      if (response.status !== 200) {
+        let errorMsg = `API Error: ${response.status}`
+        if (response.data) {
+          if (typeof response.data === 'string') {
+            errorMsg = response.data.length < 200 ? response.data : errorMsg
+          } else {
+            errorMsg = extractErrorMessage(response.data, errorMsg)
+          }
+        }
+        res.write(
+          `data: ${JSON.stringify({ type: 'test_complete', success: false, error: sanitizeErrorMsg(errorMsg, response.status) })}\n\n`
+        )
+        res.end()
+        return
+      }
+
+      const text = extractChatCompletionText(response.data)
+      if (!text) {
+        res.write(
+          `data: ${JSON.stringify({ type: 'test_complete', success: false, error: 'No response content' })}\n\n`
+        )
+        res.end()
+        return
+      }
+
+      res.write(`data: ${JSON.stringify({ type: 'content', text })}\n\n`)
+      res.write(`data: ${JSON.stringify({ type: 'test_complete', success: true })}\n\n`)
+      res.end()
+    } catch (axiosError) {
+      res.write(
+        `data: ${JSON.stringify({ type: 'test_complete', success: false, error: getSafeMessage(axiosError) })}\n\n`
+      )
+      res.end()
+    }
+  } catch (error) {
+    logger.error('❌ OpenAI Chat API Key test failed:', error)
 
     if (!res.headersSent) {
       return res.status(500).json({
