@@ -26,7 +26,182 @@ const {
   handleAnthropicMessagesToGemini,
   handleAnthropicCountTokensToGemini
 } = require('../services/anthropicGeminiBridgeService')
+const modelsConfig = require('../../config/models')
 const router = express.Router()
+
+const ANTHROPIC_MODEL_DEFAULT_CREATED_AT = '1970-01-01T00:00:00Z'
+const ANTHROPIC_MODEL_DEFAULT_MAX_INPUT_TOKENS = 200000
+const ANTHROPIC_MODEL_DEFAULT_MAX_TOKENS = 64000
+
+const ANTHROPIC_DEFAULT_CAPABILITIES = {
+  batch: { supported: true },
+  citations: { supported: true },
+  code_execution: { supported: false },
+  context_management: {
+    supported: true,
+    clear_thinking_20251015: { supported: false },
+    clear_tool_uses_20250919: { supported: false },
+    compact_20260112: { supported: false }
+  },
+  effort: {
+    supported: false,
+    low: { supported: false },
+    medium: { supported: false },
+    high: { supported: false },
+    max: { supported: false }
+  },
+  image_input: { supported: true },
+  pdf_input: { supported: true },
+  structured_output: { supported: true },
+  thinking: {
+    supported: true,
+    types: {
+      adaptive: { supported: false },
+      enabled: { supported: true }
+    }
+  }
+}
+
+function buildAnthropicModelDisplayName(modelId) {
+  const value = typeof modelId === 'string' ? modelId.trim() : ''
+  if (!value) {
+    return ''
+  }
+
+  return value
+    .replace(/^anthropic[.:/-]/i, '')
+    .split('-')
+    .filter(Boolean)
+    .map((part, index) => {
+      if (/^\d+$/.test(part)) {
+        return part
+      }
+      if (index === 0 && part.toLowerCase() === 'claude') {
+        return 'Claude'
+      }
+      return part.charAt(0).toUpperCase() + part.slice(1)
+    })
+    .join(' ')
+}
+
+function getAnthropicModelCreatedAt(modelId) {
+  const value = typeof modelId === 'string' ? modelId : ''
+  const match = value.match(/(20\d{2})(\d{2})(\d{2})/)
+  if (!match) {
+    return ANTHROPIC_MODEL_DEFAULT_CREATED_AT
+  }
+
+  const [, year, month, day] = match
+  return `${year}-${month}-${day}T00:00:00Z`
+}
+
+function toAnthropicModelInfo(model) {
+  const modelId = typeof model === 'string' ? model : model?.value || model?.id || model?.model
+  const id = String(modelId || '').trim()
+
+  return {
+    type: 'model',
+    id,
+    display_name: buildAnthropicModelDisplayName(id),
+    created_at: getAnthropicModelCreatedAt(id),
+    max_input_tokens: ANTHROPIC_MODEL_DEFAULT_MAX_INPUT_TOKENS,
+    max_tokens: ANTHROPIC_MODEL_DEFAULT_MAX_TOKENS,
+    capabilities: ANTHROPIC_DEFAULT_CAPABILITIES
+  }
+}
+
+function isModelRestrictedForAnthropicApiKey(apiKeyData = {}, modelId) {
+  if (!apiKeyData.enableModelRestriction || !Array.isArray(apiKeyData.restrictedModels)) {
+    return false
+  }
+
+  const normalizedModelId = String(modelId || '').toLowerCase()
+  const normalizedEffectiveModel = getEffectiveModel(modelId || '').toLowerCase()
+  return apiKeyData.restrictedModels.some((restrictedModel) => {
+    const normalizedRestrictedModel = String(restrictedModel || '').toLowerCase()
+    return (
+      normalizedRestrictedModel === normalizedModelId ||
+      normalizedRestrictedModel === normalizedEffectiveModel
+    )
+  })
+}
+
+function getAnthropicModelInfos(apiKeyData = {}) {
+  return modelsConfig.CLAUDE_MODELS.map(toAnthropicModelInfo)
+    .filter((model) => model.id)
+    .filter((model) => !isModelRestrictedForAnthropicApiKey(apiKeyData, model.id))
+}
+
+function parseAnthropicModelsLimit(value) {
+  if (value === undefined || value === null || value === '') {
+    return 20
+  }
+
+  const limit = Number(value)
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    const error = new Error('limit must be an integer between 1 and 1000')
+    error.statusCode = 400
+    throw error
+  }
+
+  return limit
+}
+
+function buildAnthropicModelsPage(models, query = {}) {
+  const limit = parseAnthropicModelsLimit(query.limit)
+  const afterId = typeof query.after_id === 'string' ? query.after_id : ''
+  const beforeId = typeof query.before_id === 'string' ? query.before_id : ''
+
+  if (afterId && beforeId) {
+    const error = new Error('after_id and before_id cannot both be provided')
+    error.statusCode = 400
+    throw error
+  }
+
+  let startIndex = 0
+  let endIndex = Math.min(models.length, limit)
+  let hasMore = endIndex < models.length
+
+  if (afterId) {
+    const cursorIndex = models.findIndex((model) => model.id === afterId)
+    if (cursorIndex === -1) {
+      const error = new Error(`Model cursor not found: ${afterId}`)
+      error.statusCode = 400
+      throw error
+    }
+    startIndex = cursorIndex + 1
+    endIndex = Math.min(models.length, startIndex + limit)
+    hasMore = endIndex < models.length
+  } else if (beforeId) {
+    const cursorIndex = models.findIndex((model) => model.id === beforeId)
+    if (cursorIndex === -1) {
+      const error = new Error(`Model cursor not found: ${beforeId}`)
+      error.statusCode = 400
+      throw error
+    }
+    endIndex = cursorIndex
+    startIndex = Math.max(0, endIndex - limit)
+    hasMore = startIndex > 0
+  }
+
+  const data = models.slice(startIndex, endIndex)
+  return {
+    data,
+    first_id: data[0]?.id || null,
+    has_more: hasMore,
+    last_id: data[data.length - 1]?.id || null
+  }
+}
+
+function sendAnthropicInvalidRequest(res, message) {
+  return res.status(400).json({
+    type: 'error',
+    error: {
+      type: 'invalid_request_error',
+      message
+    }
+  })
+}
 
 function queueRateLimitUpdate(
   rateLimitInfo,
@@ -1555,27 +1730,19 @@ router.get('/v1/models', authenticateApiKey, async (req, res) => {
       return res.json({ object: 'list', data: filteredModels })
     }
 
-    const modelService = require('../services/modelService')
-
-    // 从 modelService 获取所有支持的模型
-    const models = modelService.getAllModels()
-
-    // 可选：根据 API Key 的模型限制过滤
-    let filteredModels = models
-    if (req.apiKey.enableModelRestriction && req.apiKey.restrictedModels?.length > 0) {
-      // 将 restrictedModels 视为黑名单：过滤掉受限模型
-      filteredModels = models.filter((model) => !req.apiKey.restrictedModels.includes(model.id))
+    return res.json(buildAnthropicModelsPage(getAnthropicModelInfos(req.apiKey), req.query || {}))
+  } catch (error) {
+    if (error.statusCode === 400) {
+      return sendAnthropicInvalidRequest(res, error.message)
     }
 
-    res.json({
-      object: 'list',
-      data: filteredModels
-    })
-  } catch (error) {
     logger.error('❌ Models list error:', error)
-    res.status(500).json({
-      error: 'Failed to get models list',
-      message: error.message
+    return res.status(500).json({
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: 'Failed to get models list'
+      }
     })
   }
 })
@@ -1956,3 +2123,5 @@ router.post('/api/event_logging/batch', (req, res) => {
 
 module.exports = router
 module.exports.handleMessagesRequest = handleMessagesRequest
+module.exports.getAnthropicModelInfos = getAnthropicModelInfos
+module.exports.buildAnthropicModelsPage = buildAnthropicModelsPage

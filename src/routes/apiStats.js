@@ -100,6 +100,36 @@ const resolveModelEndpointKey = (service, endpointConfigs = {}) => {
   return MODEL_ENDPOINT_ALIASES[service] || service
 }
 
+async function buildOpenAIChatConfiguredModels() {
+  const options = new Map()
+  const accounts = await openaiResponsesAccountService.getAllAccounts(true)
+
+  for (const account of accounts || []) {
+    if (
+      normalizeOpenAIProviderEndpoint(account.providerEndpoint) !==
+        PROVIDER_ENDPOINT_CHAT_COMPLETIONS ||
+      (account.accountType && account.accountType !== 'shared') ||
+      !isSchedulableForTestOptions(account)
+    ) {
+      continue
+    }
+
+    for (const sourceModel of extractConfiguredSourceModels(account.supportedModels)) {
+      const model = typeof sourceModel === 'string' ? sourceModel.trim() : ''
+      if (!model || modelsConfig.isHiddenDefaultUiModel(model)) {
+        continue
+      }
+
+      options.set(model, {
+        value: model,
+        label: model
+      })
+    }
+  }
+
+  return [...options.values()]
+}
+
 const buildConfiguredModelData = async () => {
   const config = await claudeRelayConfigService.getConfig()
   const defaultEndpointConfigs = claudeRelayConfigService.getDefaultModelEndpointConfigs()
@@ -140,11 +170,18 @@ const buildConfiguredModelData = async () => {
   const bedrockModels = bedrockConfig.whitelistModels
   const droidModels = droidConfig.whitelistModels
   const ccrModels = ccrConfig.whitelistModels
+  const openaiChatModels = await buildOpenAIChatConfiguredModels()
+  const openaiChatConfig = {
+    label: 'OpenAI Chat',
+    whitelistModels: openaiChatModels,
+    mappingPresets: openaiConfig.mappingPresets || []
+  }
   const endpointConfigs = {
     ...savedEndpointConfigs,
     claude: claudeConfig,
     gemini: geminiConfig,
     openai: openaiConfig,
+    'openai-chat': openaiChatConfig,
     'openai-responses': openaiResponsesConfig,
     'azure-openai': azureOpenaiConfig,
     bedrock: bedrockConfig,
@@ -156,7 +193,7 @@ const buildConfiguredModelData = async () => {
     claude: claudeModels,
     gemini: geminiModels,
     openai: openaiModels,
-    'openai-chat': openaiModels,
+    'openai-chat': openaiChatModels,
     'openai-responses': openaiResponsesModels,
     other: modelsConfig.OTHER_MODELS,
     all: mergeModelOptions(
@@ -174,6 +211,7 @@ const buildConfiguredModelData = async () => {
       'gemini-api': geminiModels,
       'gemini-antigravity': geminiModels,
       openai: openaiModels,
+      'openai-chat': openaiChatModels,
       'openai-responses': openaiResponsesModels,
       'azure-openai': azureOpenaiModels,
       azure_openai: azureOpenaiModels,
@@ -494,6 +532,7 @@ async function buildApiKeyTestModelOptions(keyData = {}) {
       service: 'openai-chat',
       keyData,
       bindingField: 'openaiAccountId',
+      bindingPrefix: 'responses:',
       loadAccounts: () => openaiResponsesAccountService.getAllAccounts(true),
       accountFilter: (account) =>
         normalizeOpenAIProviderEndpoint(account.providerEndpoint) ===
@@ -505,6 +544,7 @@ async function buildApiKeyTestModelOptions(keyData = {}) {
       service: 'openai-responses',
       keyData,
       bindingField: 'openaiAccountId',
+      bindingPrefix: 'responses:',
       loadAccounts: () => openaiResponsesAccountService.getAllAccounts(true),
       accountFilter: (account) =>
         normalizeOpenAIProviderEndpoint(account.providerEndpoint) !==

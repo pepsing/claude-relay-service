@@ -265,7 +265,7 @@
                   <i v-else class="fas fa-sort ml-1 text-gray-400" />
                 </th>
                 <th
-                  class="w-[120px] min-w-[180px] max-w-[200px] cursor-pointer px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
+                  class="w-[110px] min-w-[110px] max-w-[110px] cursor-pointer px-2 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
                   @click="sortAccounts('status')"
                 >
                   状态
@@ -589,11 +589,11 @@
                       </div>
                     </div>
                   </td>
-                  <td class="w-[100px] min-w-[100px] max-w-[100px] whitespace-nowrap px-3 py-4">
+                  <td class="w-[110px] min-w-[110px] max-w-[110px] whitespace-nowrap px-2 py-4">
                     <div class="flex flex-col gap-1">
                       <span
                         :class="[
-                          'inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold',
+                          'inline-flex items-center rounded-full px-2 py-1 text-xs font-semibold',
                           account.status === 'blocked'
                             ? 'bg-orange-100 text-orange-800'
                             : account.status === 'unauthorized'
@@ -607,7 +607,7 @@
                       >
                         <div
                           :class="[
-                            'mr-2 h-2 w-2 rounded-full',
+                            'mr-1.5 h-2 w-2 rounded-full',
                             account.status === 'blocked'
                               ? 'bg-orange-500'
                               : account.status === 'unauthorized'
@@ -636,7 +636,7 @@
                           (account.rateLimitStatus && account.rateLimitStatus.isRateLimited) ||
                           account.rateLimitStatus === 'limited'
                         "
-                        class="inline-flex items-center rounded-full bg-yellow-100 px-3 py-1 text-xs font-semibold text-yellow-800"
+                        class="inline-flex items-center rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800"
                       >
                         <i class="fas fa-exclamation-triangle mr-1" />
                         限流中
@@ -653,7 +653,7 @@
                       </span>
                       <span
                         v-if="getSchedulableRecoveryText(account)"
-                        class="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
+                        class="inline-flex items-center rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
                         :title="getSchedulableRecoveryTitle(account)"
                       >
                         <i class="fas fa-clock mr-1" />
@@ -661,7 +661,7 @@
                       </span>
                       <span
                         v-if="account.tempUnavailable"
-                        class="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                        class="inline-flex items-center rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
                       >
                         <i class="fas fa-clock mr-1" />
                         临时暂停

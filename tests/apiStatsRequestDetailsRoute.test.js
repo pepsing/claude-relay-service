@@ -41,6 +41,9 @@ jest.mock('../src/services/account/geminiApiAccountService', () => ({
   getAllAccounts: jest.fn(() => [])
 }))
 jest.mock('../src/services/account/openaiAccountService', () => ({}))
+jest.mock('../src/services/account/openaiResponsesAccountService', () => ({
+  getAllAccounts: jest.fn(() => [])
+}))
 jest.mock('../src/services/accountGroupService', () => ({
   getGroupMembers: jest.fn(() => [])
 }))
@@ -89,6 +92,7 @@ const claudeConsoleAccountService = require('../src/services/account/claudeConso
 const ccrAccountService = require('../src/services/account/ccrAccountService')
 const geminiAccountService = require('../src/services/account/geminiAccountService')
 const geminiApiAccountService = require('../src/services/account/geminiApiAccountService')
+const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
 const modelsConfig = require('../config/models')
 require('../src/routes/apiStats')
 
@@ -145,6 +149,7 @@ describe('apiStats request detail routes', () => {
     ccrAccountService.getAllAccounts.mockReset()
     geminiAccountService.getAllAccounts.mockReset()
     geminiApiAccountService.getAllAccounts.mockReset()
+    openaiResponsesAccountService.getAllAccounts.mockReset()
     redis.getClientSafe.mockReturnValue({
       get: jest.fn(async (key) => (key === 'usage:cost:total:key_current' ? '0.5' : null))
     })
@@ -156,6 +161,7 @@ describe('apiStats request detail routes', () => {
     ccrAccountService.getAllAccounts.mockResolvedValue([])
     geminiAccountService.getAllAccounts.mockResolvedValue([])
     geminiApiAccountService.getAllAccounts.mockResolvedValue([])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([])
     apiKeyService.validateApiKeyForStats.mockResolvedValue({
       valid: true,
       keyData: {
@@ -275,7 +281,7 @@ describe('apiStats request detail routes', () => {
       keyData: {
         id: 'key_current',
         name: 'Current Key',
-        permissions: ['claude', 'gemini'],
+        permissions: ['claude', 'gemini', 'openai'],
         usage: {
           total: {
             requests: 0,
@@ -320,6 +326,26 @@ describe('apiStats request detail routes', () => {
         supportedModels: ['qwen3.6-plus']
       }
     ])
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'chat_1',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        providerEndpoint: 'chat-completions',
+        supportedModels: ['kimi-k2.7']
+      },
+      {
+        id: 'responses_1',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        providerEndpoint: 'responses',
+        supportedModels: ['gpt-5']
+      }
+    ])
 
     const handler = findPostHandler('/api/user-stats')
     const res = createResponse()
@@ -345,6 +371,71 @@ describe('apiStats request detail routes', () => {
       { value: 'qwen3.6-plus', label: 'qwen3.6-plus' }
     ])
     expect(res.body.data.testModelOptions.openai).toEqual([])
+    expect(res.body.data.testModelOptions['openai-chat']).toEqual([
+      { value: 'kimi-k2.7', label: 'kimi-k2.7' }
+    ])
+    expect(res.body.data.testModelOptions['openai-responses']).toEqual([
+      { value: 'gpt-5', label: 'gpt-5' }
+    ])
+  })
+
+  test('uses responses-prefixed OpenAI binding for current key test model options', async () => {
+    apiKeyService.validateApiKeyForStats.mockResolvedValue({
+      valid: true,
+      keyData: {
+        id: 'key_current',
+        name: 'Current Key',
+        permissions: ['openai'],
+        openaiAccountId: 'responses:chat_1',
+        usage: {
+          total: {
+            requests: 0,
+            allTokens: 0
+          }
+        },
+        enableModelRestriction: false,
+        restrictedModels: []
+      }
+    })
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'chat_1',
+        isActive: true,
+        status: 'active',
+        accountType: 'dedicated',
+        schedulable: true,
+        providerEndpoint: 'chat-completions',
+        supportedModels: ['kimi-for-coding']
+      },
+      {
+        id: 'responses_1',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        providerEndpoint: 'responses',
+        supportedModels: ['gpt-5']
+      }
+    ])
+
+    const handler = findPostHandler('/api/user-stats')
+    const res = createResponse()
+
+    await handler(
+      {
+        body: {
+          apiKey: 'cr_valid_key_for_test'
+        },
+        ip: '127.0.0.1'
+      },
+      res
+    )
+
+    expect(res.body.success).toBe(true)
+    expect(res.body.data.testModelOptions['openai-chat']).toEqual([
+      { value: 'kimi-for-coding', label: 'kimi-for-coding' }
+    ])
+    expect(res.body.data.testModelOptions['openai-responses']).toEqual([])
   })
 
   test('merges default mapping presets into saved endpoint model configs', async () => {
@@ -367,6 +458,17 @@ describe('apiStats request detail routes', () => {
         }
       }
     })
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'chat_1',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        providerEndpoint: 'chat-completions',
+        supportedModels: ['kimi-k2.7']
+      }
+    ])
 
     const handler = findGetHandler('/models')
     const res = createResponse()
@@ -387,6 +489,10 @@ describe('apiStats request detail routes', () => {
         { label: '+ custom-sonnet', from: 'custom-sonnet', to: 'claude-sonnet-4-6' }
       ])
     )
+    expect(res.body.data['openai-chat']).toEqual([{ value: 'kimi-k2.7', label: 'kimi-k2.7' }])
+    expect(res.body.data.endpointConfigs['openai-chat'].whitelistModels).toEqual([
+      { value: 'kimi-k2.7', label: 'kimi-k2.7' }
+    ])
   })
 
   test('rejects request detail query when apiId does not match the submitted key', async () => {

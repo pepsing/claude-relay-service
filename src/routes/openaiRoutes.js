@@ -3,16 +3,19 @@ const axios = require('axios')
 const router = express.Router()
 const logger = require('../utils/logger')
 const config = require('../../config/config')
+const modelsConfig = require('../../config/models')
 const redis = require('../models/redis')
 const { authenticateApiKey } = require('../middleware/auth')
 const unifiedOpenAIScheduler = require('../services/scheduler/unifiedOpenAIScheduler')
 const openaiAccountService = require('../services/account/openaiAccountService')
 const openaiResponsesAccountService = require('../services/account/openaiResponsesAccountService')
 const openaiResponsesRelayService = require('../services/relay/openaiResponsesRelayService')
+const accountGroupService = require('../services/accountGroupService')
 const apiKeyService = require('../services/apiKeyService')
 const usageStatsService = require('../services/usageStatsService')
 const crypto = require('crypto')
 const ProxyHelper = require('../utils/proxyHelper')
+const upstreamErrorHelper = require('../utils/upstreamErrorHelper')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const { IncrementalSSEParser } = require('../utils/sseParser')
 const { getSafeMessage } = require('../utils/errorSanitizer')
@@ -60,6 +63,224 @@ function getLocalOpenAIClientErrorMessage(error, status) {
   }
 
   return null
+}
+
+function isTruthyFlag(value) {
+  return value === true || value === 'true'
+}
+
+function isSchedulableFlag(value) {
+  return value !== false && value !== 'false'
+}
+
+function isAccountRateLimitedForModels(account = {}) {
+  const { rateLimitStatus } = account
+  return (
+    account.status === 'rateLimited' ||
+    account.status === 'rate_limited' ||
+    rateLimitStatus === 'limited' ||
+    rateLimitStatus?.isRateLimited === true
+  )
+}
+
+function getConfiguredOpenAIModelIds() {
+  return modelsConfig.OPENAI_MODELS.map((model) => model.value).filter(Boolean)
+}
+
+function addModelId(modelIds, modelId) {
+  const value = typeof modelId === 'string' ? modelId.trim() : ''
+  if (value) {
+    modelIds.add(value)
+  }
+}
+
+function getSupportedModelIds(account = {}) {
+  const { supportedModels } = account
+  if (!supportedModels) {
+    return []
+  }
+
+  if (Array.isArray(supportedModels)) {
+    return supportedModels
+      .map((model) => (typeof model === 'string' ? model.trim() : ''))
+      .filter(Boolean)
+  }
+
+  if (typeof supportedModels === 'object') {
+    return Object.keys(supportedModels)
+      .map((model) => model.trim())
+      .filter(Boolean)
+  }
+
+  return []
+}
+
+function addAccountModelIds(modelIds, account = {}) {
+  const supportedModelIds = getSupportedModelIds(account)
+  const sourceModelIds =
+    supportedModelIds.length > 0 ? supportedModelIds : getConfiguredOpenAIModelIds()
+  sourceModelIds.forEach((modelId) => addModelId(modelIds, modelId))
+}
+
+function isModelRestrictedByApiKey(apiKeyData = {}, modelId) {
+  if (!apiKeyData.enableModelRestriction || !Array.isArray(apiKeyData.restrictedModels)) {
+    return false
+  }
+
+  const normalizedModelId = String(modelId || '').toLowerCase()
+  return apiKeyData.restrictedModels.some(
+    (restrictedModel) => String(restrictedModel || '').toLowerCase() === normalizedModelId
+  )
+}
+
+function toOpenAIModel(modelId) {
+  return {
+    id: modelId,
+    object: 'model',
+    created: 0,
+    owned_by: 'openai'
+  }
+}
+
+async function isOpenAIModelSourceAccountAvailable(account, accountType) {
+  if (!account || !isTruthyFlag(account.isActive) || account.status === 'error') {
+    return false
+  }
+
+  if (account.status === 'unauthorized' || isAccountRateLimitedForModels(account)) {
+    return false
+  }
+
+  if (!isSchedulableFlag(account.schedulable)) {
+    return false
+  }
+
+  if (await upstreamErrorHelper.isTempUnavailable(account.id, accountType)) {
+    return false
+  }
+
+  if (accountType === 'openai') {
+    const tokenExpired = openaiAccountService.isTokenExpired(account)
+    if (tokenExpired && !account.refreshToken && !account.hasRefreshToken) {
+      return false
+    }
+    return true
+  }
+
+  if (accountType === 'openai-responses') {
+    return !openaiResponsesAccountService.isSubscriptionExpired(account)
+  }
+
+  return false
+}
+
+async function loadOpenAIModelSourceAccountsFromGroup(groupId) {
+  const group = await accountGroupService.getGroup(groupId)
+  if (!group || group.platform !== 'openai') {
+    return []
+  }
+
+  const memberIds = await accountGroupService.getGroupMembers(groupId)
+  const accounts = []
+  for (const memberId of memberIds) {
+    let account = await openaiAccountService.getAccount(memberId)
+    let accountType = 'openai'
+
+    if (!account) {
+      account = await openaiResponsesAccountService.getAccount(memberId)
+      accountType = 'openai-responses'
+    }
+
+    if (await isOpenAIModelSourceAccountAvailable(account, accountType)) {
+      accounts.push({ account, accountType })
+    }
+  }
+
+  return accounts
+}
+
+async function loadOpenAIModelSourceAccounts(apiKeyData = {}) {
+  const binding = typeof apiKeyData.openaiAccountId === 'string' ? apiKeyData.openaiAccountId : ''
+  if (binding) {
+    if (binding.startsWith('group:')) {
+      return loadOpenAIModelSourceAccountsFromGroup(binding.replace('group:', ''))
+    }
+
+    const isResponsesAccount = binding.startsWith('responses:')
+    const accountId = isResponsesAccount ? binding.replace('responses:', '') : binding
+    const accountType = isResponsesAccount ? 'openai-responses' : 'openai'
+    const account = isResponsesAccount
+      ? await openaiResponsesAccountService.getAccount(accountId)
+      : await openaiAccountService.getAccount(accountId)
+
+    return (await isOpenAIModelSourceAccountAvailable(account, accountType))
+      ? [{ account, accountType }]
+      : []
+  }
+
+  const accounts = []
+  const openaiAccounts = await openaiAccountService.getAllAccounts()
+  for (const account of openaiAccounts) {
+    if (
+      (account.accountType === 'shared' || !account.accountType) &&
+      (await isOpenAIModelSourceAccountAvailable(account, 'openai'))
+    ) {
+      accounts.push({ account, accountType: 'openai' })
+    }
+  }
+
+  const openaiResponsesAccounts = await openaiResponsesAccountService.getAllAccounts()
+  for (const account of openaiResponsesAccounts) {
+    if (
+      (account.accountType === 'shared' || !account.accountType) &&
+      (await isOpenAIModelSourceAccountAvailable(account, 'openai-responses'))
+    ) {
+      accounts.push({ account, accountType: 'openai-responses' })
+    }
+  }
+
+  return accounts
+}
+
+async function buildOpenAIModelsList(apiKeyData = {}) {
+  const modelIds = new Set()
+  const accounts = await loadOpenAIModelSourceAccounts(apiKeyData)
+
+  accounts.forEach(({ account }) => addAccountModelIds(modelIds, account))
+
+  return [...modelIds]
+    .filter((modelId) => !isModelRestrictedByApiKey(apiKeyData, modelId))
+    .sort((a, b) => a.localeCompare(b))
+    .map(toOpenAIModel)
+}
+
+async function handleModels(req, res) {
+  try {
+    const apiKeyData = req.apiKey
+    if (!checkOpenAIPermissions(apiKeyData)) {
+      return res.status(403).json({
+        error: {
+          message: 'This API key does not have permission to access OpenAI',
+          type: 'permission_denied',
+          code: 'permission_denied'
+        }
+      })
+    }
+
+    return res.json({
+      object: 'list',
+      data: await buildOpenAIModelsList(apiKeyData)
+    })
+  } catch (error) {
+    logger.error('❌ Failed to get OpenAI models:', error)
+    return res.status(500).json({
+      error: {
+        message: 'Failed to retrieve models',
+        type: 'server_error',
+        code: 'internal_error'
+      }
+    })
+  }
 }
 
 function normalizeHeaders(headers = {}) {
@@ -1121,6 +1342,9 @@ const handleResponses = async (req, res) => {
   }
 }
 
+// OpenAI 标准模型列表端点
+router.get('/v1/models', authenticateApiKey, handleModels)
+
 // 注册两个路由路径，都使用相同的处理函数
 router.post('/responses', authenticateApiKey, handleResponses)
 router.post('/v1/responses', authenticateApiKey, handleResponses)
@@ -1193,4 +1417,6 @@ router.get('/key-info', authenticateApiKey, async (req, res) => {
 
 module.exports = router
 module.exports.handleResponses = handleResponses
+module.exports.buildOpenAIModelsList = buildOpenAIModelsList
+module.exports.handleModels = handleModels
 module.exports.CODEX_CLI_INSTRUCTIONS = CODEX_CLI_INSTRUCTIONS
