@@ -4,6 +4,7 @@ const logger = require('../utils/logger')
 const apiKeyService = require('../services/apiKeyService')
 const requestDetailService = require('../services/requestDetailService')
 const usageStatsService = require('../services/usageStatsService')
+const routeRulesVisualizationService = require('../services/routeRulesVisualizationService')
 const CostCalculator = require('../utils/costCalculator')
 const claudeAccountService = require('../services/account/claudeAccountService')
 const claudeConsoleAccountService = require('../services/account/claudeConsoleAccountService')
@@ -32,6 +33,7 @@ const {
 } = require('../utils/openaiProviderEndpoint')
 
 const router = express.Router()
+const API_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
 
 const MODEL_ENDPOINT_ALIASES = {
   'claude-console': 'claude',
@@ -98,6 +100,84 @@ const resolveModelEndpointKey = (service, endpointConfigs = {}) => {
     return service
   }
   return MODEL_ENDPOINT_ALIASES[service] || service
+}
+
+function stripRouteRuleApiKeyFilter(query = {}) {
+  const { apiKeyId: _apiKeyId, ...safeQuery } = query
+  return safeQuery
+}
+
+function toPublicRouteRulesData(data) {
+  if (!data || typeof data !== 'object') {
+    return data
+  }
+
+  const safeData = { ...data }
+  if (Array.isArray(safeData.accounts)) {
+    safeData.accounts = safeData.accounts.map((account) => {
+      const { editAccount: _editAccount, ...safeAccount } = account
+      return safeAccount
+    })
+  }
+  if (Array.isArray(safeData.apiKeys)) {
+    safeData.apiKeys = []
+  }
+  if (Object.prototype.hasOwnProperty.call(safeData, 'selectedApiKey')) {
+    safeData.selectedApiKey = null
+  }
+  return safeData
+}
+
+async function validateRouteRulesApiId(apiId) {
+  if (!apiId || typeof apiId !== 'string' || !API_ID_PATTERN.test(apiId)) {
+    const error = new Error('API ID must be a valid UUID')
+    error.statusCode = 400
+    error.error = 'Invalid API ID format'
+    throw error
+  }
+
+  const keyData = await redis.getApiKey(apiId)
+  if (!keyData || Object.keys(keyData).length === 0) {
+    const error = new Error('The specified API key does not exist')
+    error.statusCode = 404
+    error.error = 'API key not found'
+    throw error
+  }
+
+  if (keyData.isActive !== true && keyData.isActive !== 'true') {
+    const keyName = keyData.name || 'Unknown'
+    const error = new Error(`API Key "${keyName}" 已被禁用`)
+    error.statusCode = 403
+    error.error = 'API key is disabled'
+    throw error
+  }
+
+  if (keyData.expiresAt && new Date() > new Date(keyData.expiresAt)) {
+    const keyName = keyData.name || 'Unknown'
+    const error = new Error(`API Key "${keyName}" 已过期`)
+    error.statusCode = 403
+    error.error = 'API key has expired'
+    throw error
+  }
+
+  return keyData
+}
+
+function sendRouteRulesError(res, error, logMessage) {
+  if (error?.statusCode && error.statusCode < 500) {
+    return res.status(error.statusCode).json({
+      success: false,
+      error: error.error || 'Route rule access denied',
+      message: error.message
+    })
+  }
+
+  logger.error(logMessage, error)
+  return res.status(500).json({
+    success: false,
+    error: 'Failed to load route rules',
+    message: error.message
+  })
 }
 
 async function buildOpenAIChatConfiguredModels() {
@@ -584,6 +664,52 @@ router.get('/models', async (req, res) => {
       error: 'Failed to get model list',
       message: error.message
     })
+  }
+})
+
+// 🧭 路由规则可视化端点（公开统计页只读，需提供有效 apiId）
+router.get('/route-rules/endpoints', async (req, res) => {
+  try {
+    await validateRouteRulesApiId(req.query.apiId)
+    const data = await routeRulesVisualizationService.getEndpoints()
+    return res.json({
+      success: true,
+      data: toPublicRouteRulesData(data)
+    })
+  } catch (error) {
+    return sendRouteRulesError(res, error, '❌ Failed to get API stats route rule endpoints:')
+  }
+})
+
+// 🧭 解释路由规则（公开统计页只读，不按 API Key 过滤候选）
+router.get('/route-rules/explain', async (req, res) => {
+  try {
+    await validateRouteRulesApiId(req.query.apiId)
+    const data = await routeRulesVisualizationService.getExplain(
+      stripRouteRuleApiKeyFilter(req.query || {})
+    )
+    return res.json({
+      success: true,
+      data: toPublicRouteRulesData(data)
+    })
+  } catch (error) {
+    return sendRouteRulesError(res, error, '❌ Failed to explain API stats route rules:')
+  }
+})
+
+// 🧭 获取路由规则实时数据（公开统计页只读，不按 API Key 过滤候选）
+router.get('/route-rules/live', async (req, res) => {
+  try {
+    await validateRouteRulesApiId(req.query.apiId)
+    const data = await routeRulesVisualizationService.getLive(
+      stripRouteRuleApiKeyFilter(req.query || {})
+    )
+    return res.json({
+      success: true,
+      data
+    })
+  } catch (error) {
+    return sendRouteRulesError(res, error, '❌ Failed to get API stats route rule live data:')
   }
 })
 

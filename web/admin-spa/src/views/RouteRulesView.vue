@@ -3,10 +3,10 @@
     <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div class="min-w-0">
         <h2 class="text-xl font-bold text-gray-900 dark:text-gray-100 sm:text-2xl">
-          路由规则可视化
+          {{ props.title }}
         </h2>
         <p class="mt-2 text-sm font-medium text-gray-600 dark:text-gray-300">
-          Live 查看 endpoint 接受的模型、5 分钟 QPM/TPM，以及这些模型按调度规则流向哪些账户。
+          {{ props.description }}
         </p>
       </div>
 
@@ -209,6 +209,7 @@
                     {{ routeStatusLabel(account.routeStatus) }}
                   </span>
                   <button
+                    v-if="!props.readOnly"
                     class="icon-action-btn"
                     title="编辑账户"
                     type="button"
@@ -286,13 +287,18 @@
     </div>
 
     <CcrAccountForm
-      v-if="showEditAccountModal && editingAccount && editingAccount.platform === 'ccr'"
+      v-if="
+        !props.readOnly &&
+        showEditAccountModal &&
+        editingAccount &&
+        editingAccount.platform === 'ccr'
+      "
       :account="editingAccount"
       @close="closeAccountEditor"
       @success="handleAccountEditSuccess"
     />
     <AccountForm
-      v-else-if="showEditAccountModal"
+      v-else-if="!props.readOnly && showEditAccountModal"
       :account="editingAccount"
       @close="closeAccountEditor"
       @success="handleAccountEditSuccess"
@@ -303,6 +309,9 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
+  getApiStatsRouteRuleEndpointsApi,
+  getApiStatsRouteRuleExplainApi,
+  getApiStatsRouteRuleLiveApi,
   getRouteRuleEndpointsApi,
   getRouteRuleExplainApi,
   getRouteRuleLiveApi
@@ -310,6 +319,29 @@ import {
 import { showToast } from '@/utils/tools'
 import AccountForm from '@/components/accounts/AccountForm.vue'
 import CcrAccountForm from '@/components/accounts/CcrAccountForm.vue'
+
+const props = defineProps({
+  scope: {
+    type: String,
+    default: 'admin'
+  },
+  readOnly: {
+    type: Boolean,
+    default: false
+  },
+  apiId: {
+    type: String,
+    default: ''
+  },
+  title: {
+    type: String,
+    default: '路由规则可视化'
+  },
+  description: {
+    type: String,
+    default: 'Live 查看 endpoint 接受的模型、5 分钟 QPM/TPM，以及这些模型按调度规则流向哪些账户。'
+  }
+})
 
 const endpointOptions = ref([])
 const selectedEndpoint = ref('claude')
@@ -423,7 +455,32 @@ const displayAccounts = computed(() => {
     })
 })
 
+const routeRuleApis = computed(() => {
+  if (props.scope === 'api-stats') {
+    return {
+      getEndpoints: getApiStatsRouteRuleEndpointsApi,
+      getExplain: getApiStatsRouteRuleExplainApi,
+      getLive: getApiStatsRouteRuleLiveApi
+    }
+  }
+
+  return {
+    getEndpoints: getRouteRuleEndpointsApi,
+    getExplain: getRouteRuleExplainApi,
+    getLive: getRouteRuleLiveApi
+  }
+})
+
+const getBaseQueryParams = () => {
+  const params = {}
+  if (props.apiId) {
+    params.apiId = props.apiId
+  }
+  return params
+}
+
 const getQueryParams = () => ({
+  ...getBaseQueryParams(),
   endpoint: selectedEndpoint.value,
   model: selectedModel.value,
   windowSeconds: 300
@@ -545,7 +602,7 @@ const historyClass = (bucket) => {
 const historyBars = (account) => account.live?.history || Array.from({ length: 60 }, () => 'empty')
 
 const loadEndpoints = async () => {
-  const response = await getRouteRuleEndpointsApi()
+  const response = await routeRuleApis.value.getEndpoints(getBaseQueryParams())
   if (!response.success) {
     throw new Error(response.message || '加载 endpoint 失败')
   }
@@ -564,7 +621,7 @@ const loadExplain = async () => {
 
   loading.value = true
   try {
-    const response = await getRouteRuleExplainApi(getQueryParams())
+    const response = await routeRuleApis.value.getExplain(getQueryParams())
     if (!response.success) {
       throw new Error(response.message || '加载路由规则失败')
     }
@@ -586,7 +643,7 @@ const refreshLive = async () => {
 
   liveLoading.value = true
   try {
-    const response = await getRouteRuleLiveApi(getQueryParams())
+    const response = await routeRuleApis.value.getLive(getQueryParams())
     if (response.success) {
       live.value = response.data
     }
@@ -616,6 +673,9 @@ const selectModel = async (modelId) => {
 }
 
 const openAccountEditor = (account) => {
+  if (props.readOnly) {
+    return
+  }
   editingAccount.value = account.editAccount || account
   showEditAccountModal.value = true
 }

@@ -18,7 +18,9 @@
                 ? '额度卡'
                 : currentTab === 'models'
                   ? '可用模型'
-                  : '使用教程'
+                  : currentTab === 'route-rules'
+                    ? '路由规则'
+                    : '使用教程'
           "
           :title="oemSettings.siteName"
         />
@@ -60,7 +62,7 @@
     <div class="mb-4 sm:mb-6 md:mb-8">
       <div class="flex justify-center">
         <div
-          class="inline-flex w-full max-w-3xl flex-wrap justify-center gap-1 rounded-full border border-white/20 bg-white/10 p-1 shadow-lg backdrop-blur-xl sm:w-auto sm:flex-nowrap"
+          class="inline-flex w-full max-w-5xl flex-wrap justify-center gap-1 rounded-full border border-white/20 bg-white/10 p-1 shadow-lg backdrop-blur-xl sm:w-auto sm:flex-nowrap"
         >
           <button
             :class="['tab-pill-button', currentTab === 'stats' ? 'active' : '']"
@@ -82,6 +84,13 @@
           >
             <i class="fas fa-layer-group mr-1 md:mr-2" />
             <span class="text-sm md:text-base">可用模型</span>
+          </button>
+          <button
+            :class="['tab-pill-button', currentTab === 'route-rules' ? 'active' : '']"
+            @click="currentTab = 'route-rules'"
+          >
+            <i class="fas fa-route mr-1 md:mr-2" />
+            <span class="text-sm md:text-base">路由规则</span>
           </button>
           <button
             :class="['tab-pill-button', currentTab === 'tutorial' ? 'active' : '']"
@@ -248,6 +257,32 @@
     <!-- 可用模型内容 -->
     <div v-if="currentTab === 'models'" class="tab-content">
       <AvailableModelsPanel @test="openTestModal" />
+    </div>
+
+    <!-- 路由规则内容 -->
+    <div v-if="currentTab === 'route-rules'" class="tab-content">
+      <div v-if="!apiId" class="glass-strong rounded-2xl p-8 text-center shadow-xl sm:rounded-3xl">
+        <div class="mb-4 text-gray-500 dark:text-gray-400">
+          <i class="fas fa-key mb-4 block text-4xl opacity-50" />
+          <p>请先在「统计查询」页面输入您的 API Key</p>
+        </div>
+        <button
+          class="rounded-xl bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-2.5 font-medium text-white transition-all hover:from-blue-600 hover:to-cyan-600"
+          @click="currentTab = 'stats'"
+        >
+          前往输入 API Key
+        </button>
+      </div>
+      <div v-else class="glass-strong rounded-2xl p-3 shadow-xl sm:rounded-3xl sm:p-4 md:p-6">
+        <RouteRulesView
+          :key="apiId"
+          :api-id="apiId"
+          description="查看当前服务端 endpoint 接受的模型、实时 QPM/TPM，以及这些模型按调度规则流向哪些账户。"
+          read-only
+          scope="api-stats"
+          title="路由规则可视化"
+        />
+      </div>
     </div>
 
     <!-- 额度卡内容（含二级 tab） -->
@@ -562,6 +597,7 @@ import ServiceCostCards from '@/components/apistats/ServiceCostCards.vue'
 import ApiKeyRequestDetails from '@/components/apistats/ApiKeyRequestDetails.vue'
 import AvailableModelsPanel from '@/components/apistats/AvailableModelsPanel.vue'
 import TutorialView from './TutorialView.vue'
+import RouteRulesView from './RouteRulesView.vue'
 import UnifiedTestModal from '@/components/common/UnifiedTestModal.vue'
 
 const route = useRoute()

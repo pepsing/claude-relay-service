@@ -77,12 +77,18 @@ export const purgeRequestDetailBodyPreviewApi = (config) =>
   request({ url: '/admin/request-details/body-preview-purge', method: 'POST', ...config })
 export const getRequestDetailApi = (requestId) =>
   request({ url: `/admin/request-details/${requestId}`, method: 'GET' })
-export const getRouteRuleEndpointsApi = () =>
-  request({ url: '/admin/route-rules/endpoints', method: 'GET' })
+export const getRouteRuleEndpointsApi = (params) =>
+  request({ url: '/admin/route-rules/endpoints', method: 'GET', params })
 export const getRouteRuleExplainApi = (params) =>
   request({ url: '/admin/route-rules/explain', method: 'GET', params })
 export const getRouteRuleLiveApi = (params) =>
   request({ url: '/admin/route-rules/live', method: 'GET', params })
+export const getApiStatsRouteRuleEndpointsApi = (params) =>
+  request({ url: '/apiStats/route-rules/endpoints', method: 'GET', params })
+export const getApiStatsRouteRuleExplainApi = (params) =>
+  request({ url: '/apiStats/route-rules/explain', method: 'GET', params })
+export const getApiStatsRouteRuleLiveApi = (params) =>
+  request({ url: '/apiStats/route-rules/live', method: 'GET', params })
 
 // 客户端
 export const getSupportedClientsApi = () =>
