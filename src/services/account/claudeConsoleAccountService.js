@@ -659,7 +659,16 @@ class ClaudeConsoleAccountService {
       logger.debug(
         `[DEBUG] Update request received with fields: ${Object.keys(updates).join(', ')}`
       )
-      logger.debug(`[DEBUG] Updates content: ${JSON.stringify(updates, null, 2)}`)
+      logger.debug(
+        `[DEBUG] Updates content: ${JSON.stringify(
+          {
+            ...updates,
+            apiKey: updates.apiKey ? '***' : updates.apiKey
+          },
+          null,
+          2
+        )}`
+      )
 
       if (updates.name !== undefined) {
         updatedData.name = updates.name

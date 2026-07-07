@@ -10,9 +10,15 @@
             管理 Claude、Gemini、OpenAI 等账户与代理配置
           </p>
         </div>
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div
+          ref="accountControlsRef"
+          class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+        >
           <!-- 筛选器组 -->
-          <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+          <div
+            ref="accountFiltersRef"
+            class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3"
+          >
             <!-- 排序选择器 -->
             <div class="group relative min-w-[160px]">
               <div
@@ -96,190 +102,106 @@
             </div>
           </div>
 
-          <div class="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
-            <button
-              class="flex min-h-[42px] w-full items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:bg-gray-50 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 sm:hidden"
-              type="button"
-              @click="mobileAccountActionsExpanded = !mobileAccountActionsExpanded"
-            >
-              <span class="flex items-center gap-2">
-                <i class="fas fa-sliders-h text-indigo-500" />
-                <span>更多操作</span>
-              </span>
-              <span class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                <span v-if="selectedAccounts.length > 0">{{ selectedAccounts.length }} 已选</span>
-                <span v-else>6 项</span>
-                <i
-                  :class="[
-                    'fas fa-chevron-down text-[11px] transition-transform duration-200',
-                    mobileAccountActionsExpanded ? 'rotate-180' : ''
-                  ]"
-                />
-              </span>
-            </button>
+          <div
+            ref="accountActionsRowRef"
+            class="flex w-full flex-col gap-3 sm:min-w-0 sm:flex-1 sm:flex-row sm:flex-nowrap sm:items-center sm:justify-end sm:gap-3"
+          >
+            <input
+              ref="openAIJsonImportInput"
+              accept=".json,application/json"
+              class="hidden"
+              multiple
+              type="file"
+              @change="handleOpenAIJsonImportFile"
+            />
+            <input
+              ref="accountJsonImportInput"
+              accept=".json,application/json"
+              class="hidden"
+              type="file"
+              @change="handleAccountJsonImportFile"
+            />
 
             <div
-              :class="[
-                mobileAccountActionsExpanded ? 'grid' : 'hidden',
-                'grid-cols-2 gap-2 sm:contents'
-              ]"
+              ref="accountActionsPanelRef"
+              class="relative flex min-w-0 items-center justify-end gap-3"
             >
-              <!-- 账户统计按钮 -->
-              <div class="relative">
-                <el-tooltip content="查看账户统计汇总" effect="dark" placement="bottom">
-                  <button
-                    class="group relative flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 sm:w-auto"
-                    @click="showAccountStatsModal = true"
-                  >
-                    <div
-                      class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-violet-500 to-purple-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
-                    ></div>
-                    <i class="fas fa-chart-bar relative text-violet-500" />
-                    <span class="relative">统计</span>
-                  </button>
-                </el-tooltip>
-              </div>
-
-              <!-- 刷新按钮 -->
-              <div class="relative">
-                <el-tooltip
-                  content="刷新数据 (Ctrl/⌘+点击强制刷新所有缓存)"
-                  effect="dark"
-                  placement="bottom"
+              <div
+                ref="accountActionsMeasureRef"
+                aria-hidden="true"
+                class="pointer-events-none invisible absolute -z-10 flex gap-3 whitespace-nowrap"
+              >
+                <button
+                  v-for="action in accountToolbarActions"
+                  :key="`measure-${action.key}`"
+                  :class="getAccountToolbarButtonClass(action)"
+                  :data-action-key="action.key"
+                  tabindex="-1"
+                  type="button"
                 >
-                  <button
-                    class="group relative flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 sm:w-auto"
-                    :disabled="accountsLoading"
-                    @click.ctrl.exact="loadAccounts(true)"
-                    @click.exact="loadAccounts(false)"
-                    @click.meta.exact="loadAccounts(true)"
-                  >
-                    <div
-                      class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-green-500 to-teal-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
-                    ></div>
-                    <i
-                      :class="[
-                        'fas relative text-green-500',
-                        accountsLoading ? 'fa-spinner fa-spin' : 'fa-sync-alt'
-                      ]"
-                    />
-                    <span class="relative">刷新</span>
-                  </button>
-                </el-tooltip>
+                  <div :class="getAccountToolbarGlowClass(action)"></div>
+                  <i :class="getAccountToolbarIconClass(action)" />
+                  <span class="relative">{{ action.label }}</span>
+                </button>
               </div>
 
-              <!-- 刷新余额按钮 -->
-              <div class="relative">
-                <el-tooltip :content="refreshBalanceTooltip" effect="dark" placement="bottom">
-                  <button
-                    class="group relative flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 sm:w-auto"
-                    :disabled="accountsLoading || refreshingBalances || !canRefreshVisibleBalances"
-                    @click="refreshVisibleBalances"
-                  >
-                    <div
-                      class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
-                    ></div>
-                    <i
-                      :class="[
-                        'fas relative text-blue-500',
-                        refreshingBalances ? 'fa-spinner fa-spin' : 'fa-wallet'
-                      ]"
-                    />
-                    <span class="relative">刷新余额</span>
-                  </button>
-                </el-tooltip>
-              </div>
-
-              <!-- 选择/取消选择按钮 -->
-              <button
-                class="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:bg-gray-50 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 sm:w-auto"
-                @click="toggleSelectionMode"
+              <div
+                v-for="action in accountToolbarInlineActions"
+                :key="action.key"
+                class="relative shrink-0"
               >
-                <i :class="showCheckboxes ? 'fas fa-times' : 'fas fa-check-square'"></i>
-                <span>{{ showCheckboxes ? '取消选择' : '选择' }}</span>
-              </button>
-
-              <!-- 分组管理按钮 -->
-              <div class="relative">
-                <el-tooltip content="管理账户分组" effect="dark" placement="bottom">
+                <el-tooltip :content="action.tooltip" effect="dark" placement="bottom">
                   <button
-                    class="group relative flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 sm:w-auto"
-                    @click="showGroupManagementModal = true"
+                    :class="getAccountToolbarButtonClass(action)"
+                    :disabled="action.disabled"
+                    type="button"
+                    @click="handleAccountToolbarAction(action, $event)"
                   >
-                    <div
-                      class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
-                    ></div>
-                    <i class="fas fa-layer-group relative text-purple-500" />
-                    <span class="relative">分组</span>
+                    <div :class="getAccountToolbarGlowClass(action)"></div>
+                    <i :class="getAccountToolbarIconClass(action)" />
+                    <span class="relative">{{ action.label }}</span>
                   </button>
                 </el-tooltip>
               </div>
 
-              <input
-                ref="openAIJsonImportInput"
-                accept=".json,application/json"
-                class="hidden"
-                multiple
-                type="file"
-                @change="handleOpenAIJsonImportFile"
-              />
-
-              <!-- OpenAI JSON 导入按钮 -->
-              <div class="relative">
-                <el-tooltip
-                  content="批量导入 OpenAI Codex JSON 账号"
-                  effect="dark"
-                  placement="bottom"
-                >
+              <el-popover
+                v-if="accountToolbarOverflowActions.length > 0"
+                v-model:visible="accountOverflowMenuVisible"
+                placement="bottom-end"
+                trigger="click"
+                :width="224"
+              >
+                <template #reference>
                   <button
-                    class="group relative flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 sm:w-auto"
-                    :disabled="importingOpenAIJson"
-                    @click="triggerOpenAIJsonImport"
+                    ref="accountMoreButtonRef"
+                    aria-label="更多操作"
+                    class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-600 shadow-sm transition-all duration-200 hover:border-gray-300 hover:bg-gray-50 hover:text-gray-800 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-gray-100"
+                    type="button"
                   >
-                    <div
-                      class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-emerald-500 to-cyan-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
-                    ></div>
-                    <i
-                      :class="[
-                        'fas relative text-emerald-500',
-                        importingOpenAIJson ? 'fa-spinner fa-spin' : 'fa-file-import'
-                      ]"
-                    />
-                    <span class="relative">导入 OpenAI</span>
+                    <i class="fas fa-ellipsis-h" />
                   </button>
-                </el-tooltip>
-              </div>
+                </template>
 
-              <!-- 批量编辑按钮 -->
-              <button
-                v-if="selectedAccounts.length > 0"
-                class="group relative flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 shadow-sm transition-all duration-200 hover:border-blue-300 hover:bg-blue-100 hover:shadow-md dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50 sm:w-auto"
-                @click="openBatchEditAccounts"
-              >
-                <div
-                  class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
-                ></div>
-                <i class="fas fa-edit relative text-blue-600 dark:text-blue-400" />
-                <span class="relative">编辑选中 ({{ selectedAccounts.length }})</span>
-              </button>
-
-              <!-- 批量删除按钮 -->
-              <button
-                v-if="selectedAccounts.length > 0"
-                class="group relative flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 shadow-sm transition-all duration-200 hover:border-red-300 hover:bg-red-100 hover:shadow-md dark:border-red-700 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50 sm:w-auto"
-                @click="batchDeleteAccounts"
-              >
-                <div
-                  class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-red-500 to-pink-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
-                ></div>
-                <i class="fas fa-trash relative text-red-600 dark:text-red-400" />
-                <span class="relative">删除选中 ({{ selectedAccounts.length }})</span>
-              </button>
+                <div class="grid gap-2">
+                  <button
+                    v-for="action in accountToolbarOverflowActions"
+                    :key="`overflow-${action.key}`"
+                    :class="getAccountToolbarOverflowButtonClass(action)"
+                    :disabled="action.disabled"
+                    type="button"
+                    @click="handleAccountToolbarAction(action, $event)"
+                  >
+                    <i :class="getAccountToolbarOverflowIconClass(action)" />
+                    <span>{{ action.label }}</span>
+                  </button>
+                </div>
+              </el-popover>
             </div>
 
             <!-- 添加账户按钮 -->
             <button
-              class="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-green-500 to-green-600 px-5 py-2.5 text-sm font-medium text-white shadow-md transition-all duration-200 hover:from-green-600 hover:to-green-700 hover:shadow-lg sm:w-auto"
+              ref="accountAddButtonRef"
+              class="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-green-500 to-green-600 px-5 py-2.5 text-sm font-medium text-white shadow-md transition-all duration-200 hover:from-green-600 hover:to-green-700 hover:shadow-lg sm:w-auto sm:shrink-0 sm:whitespace-nowrap"
               @click.stop="openCreateAccountModal"
             >
               <i class="fas fa-plus"></i>
@@ -2346,6 +2268,143 @@
       @confirm="handleConfirm"
     />
 
+    <el-dialog
+      v-model="accountImportConflictModal.show"
+      append-to-body
+      :close-on-click-modal="!accountConflictResolving"
+      :close-on-press-escape="!accountConflictResolving"
+      title="发现同名账户"
+      width="520px"
+    >
+      <div class="space-y-4 text-sm text-gray-700 dark:text-gray-200">
+        <p>
+          {{ accountConflictSourceLabel }}有
+          <span class="font-semibold text-orange-600 dark:text-orange-300">
+            {{ accountImportConflictModal.conflicts.length }}
+          </span>
+          个账户与现有账户同名，请选择处理策略。
+        </p>
+        <div
+          class="max-h-56 space-y-2 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800"
+        >
+          <div
+            v-for="conflict in accountImportConflictModal.conflicts"
+            :key="`${conflict.platform}:${conflict.name}:${conflict.index}`"
+            class="flex items-center justify-between gap-3 rounded-md bg-white px-3 py-2 shadow-sm dark:bg-gray-900"
+          >
+            <div class="min-w-0">
+              <div class="truncate font-medium text-gray-900 dark:text-gray-100">
+                {{ conflict.name }}
+              </div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">
+                {{ conflict.platform }}
+              </div>
+            </div>
+            <span class="shrink-0 text-xs text-gray-400">#{{ conflict.index + 1 }}</span>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+            :disabled="accountConflictResolving"
+            @click="resolveAccountImportConflict('abort')"
+          >
+            终止
+          </button>
+          <button
+            class="rounded-lg border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-medium text-orange-700 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-orange-700 dark:bg-orange-900/30 dark:text-orange-300 dark:hover:bg-orange-900/50"
+            :disabled="accountConflictResolving"
+            @click="resolveAccountImportConflict('skip')"
+          >
+            跳过同名
+          </button>
+          <button
+            class="rounded-lg bg-gradient-to-r from-blue-500 to-indigo-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:from-blue-600 hover:to-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="accountConflictResolving"
+            @click="resolveAccountImportConflict('overwrite')"
+          >
+            覆盖同名
+          </button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="showAccountSyncModal"
+      append-to-body
+      :close-on-click-modal="!syncingAccountsJson"
+      :close-on-press-escape="!syncingAccountsJson"
+      title="同步远端 CRS 账户"
+      width="520px"
+    >
+      <div class="space-y-4">
+        <label class="block">
+          <span class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
+            主地址
+          </span>
+          <input
+            v-model.trim="accountSyncForm.baseUrl"
+            class="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 placeholder-gray-400 shadow-sm focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/20 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:placeholder-gray-500"
+            placeholder="https://crs.example.com"
+            type="url"
+          />
+        </label>
+        <label class="block">
+          <span class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
+            用户名
+          </span>
+          <input
+            v-model.trim="accountSyncForm.username"
+            autocomplete="username"
+            class="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 placeholder-gray-400 shadow-sm focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/20 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:placeholder-gray-500"
+            placeholder="admin"
+            type="text"
+          />
+        </label>
+        <label class="block">
+          <span class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
+            密码
+          </span>
+          <input
+            v-model="accountSyncForm.password"
+            autocomplete="current-password"
+            class="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 placeholder-gray-400 shadow-sm focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/20 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:placeholder-gray-500"
+            placeholder="远端管理员密码"
+            type="password"
+            @keyup.enter="syncAccountsFromRemote('ask')"
+          />
+        </label>
+      </div>
+
+      <template #footer>
+        <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+            :disabled="syncingAccountsJson"
+            @click="closeAccountSyncModal"
+          >
+            取消
+          </button>
+          <button
+            class="rounded-lg bg-gradient-to-r from-fuchsia-500 to-violet-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:from-fuchsia-600 hover:to-violet-600 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="syncingAccountsJson"
+            @click="syncAccountsFromRemote('ask')"
+          >
+            <i
+              :class="[
+                'fas mr-2',
+                syncingAccountsJson ? 'fa-spinner fa-spin' : 'fa-cloud-download-alt'
+              ]"
+            />
+            {{ syncingAccountsJson ? '同步中...' : '同步' }}
+          </button>
+        </div>
+      </template>
+    </el-dialog>
+
     <AccountUsageDetailModal
       v-if="showAccountUsageModal"
       :account="selectedAccountForUsage || {}"
@@ -2610,6 +2669,23 @@ const accountsLoading = ref(false)
 const refreshingBalances = ref(false)
 const openAIJsonImportInput = ref(null)
 const importingOpenAIJson = ref(false)
+const accountJsonImportInput = ref(null)
+const importingAccountsJson = ref(false)
+const exportingAccountsJson = ref(false)
+const syncingAccountsJson = ref(false)
+const showAccountSyncModal = ref(false)
+const accountSyncForm = ref({
+  baseUrl: '',
+  username: '',
+  password: ''
+})
+const accountImportConflictModal = ref({
+  show: false,
+  conflicts: [],
+  records: [],
+  source: 'file',
+  syncForm: null
+})
 const tempUnavailableNowTs = ref(Date.now())
 const accountsSortBy = ref('name')
 const accountsSortOrder = ref('asc')
@@ -2620,6 +2696,13 @@ const groupFilter = ref('all')
 const platformFilter = ref('all')
 const statusFilter = ref('all') // 状态过滤 (normal/rateLimited/other/all)
 const searchKeyword = ref('')
+const accountControlsRef = ref(null)
+const accountFiltersRef = ref(null)
+const accountActionsRowRef = ref(null)
+const accountActionsPanelRef = ref(null)
+const accountActionsMeasureRef = ref(null)
+const accountMoreButtonRef = ref(null)
+const accountAddButtonRef = ref(null)
 const PAGE_SIZE_STORAGE_KEY = 'accountsPageSize'
 const getInitialPageSize = () => {
   const saved = localStorage.getItem(PAGE_SIZE_STORAGE_KEY)
@@ -2642,13 +2725,222 @@ const selectedAccounts = ref([])
 const selectAllChecked = ref(false)
 const isIndeterminate = ref(false)
 const showCheckboxes = ref(false)
-const mobileAccountActionsExpanded = ref(false)
+const accountToolbarVisibleCount = ref(0)
+const accountOverflowMenuVisible = ref(false)
 const showBatchEditModal = ref(false)
 const batchEditSaving = ref(false)
 const selectedAccountObjects = computed(() => {
   const accountMap = new Map(accounts.value.map((account) => [account.id, account]))
   return selectedAccounts.value.map((id) => accountMap.get(id)).filter((account) => !!account)
 })
+const accountConflictResolving = computed(
+  () => importingAccountsJson.value || syncingAccountsJson.value
+)
+const accountConflictSourceLabel = computed(() =>
+  accountImportConflictModal.value.source === 'sync' ? '远端 CRS 同步数据中' : '导入文件中'
+)
+const accountToolbarActions = computed(() => {
+  const actions = [
+    {
+      key: 'stats',
+      label: '统计',
+      tooltip: '查看账户统计汇总',
+      icon: 'fa-chart-bar',
+      iconClass: 'text-violet-500',
+      glowClass: 'bg-gradient-to-r from-violet-500 to-purple-500',
+      buttonClass:
+        'border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500',
+      overflowClass: 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800',
+      handler: () => {
+        showAccountStatsModal.value = true
+      }
+    },
+    {
+      key: 'refresh',
+      label: '刷新',
+      tooltip: '刷新数据 (Ctrl/⌘+点击强制刷新所有缓存)',
+      icon: 'fa-sync-alt',
+      iconClass: 'text-green-500',
+      glowClass: 'bg-gradient-to-r from-green-500 to-teal-500',
+      buttonClass:
+        'border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500',
+      overflowClass: 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800',
+      disabled: accountsLoading.value,
+      loading: accountsLoading.value,
+      handler: (event) => {
+        loadAccounts(Boolean(event?.ctrlKey || event?.metaKey))
+      }
+    },
+    {
+      key: 'refresh-balance',
+      label: '刷新余额',
+      tooltip: refreshBalanceTooltip.value,
+      icon: 'fa-wallet',
+      iconClass: 'text-blue-500',
+      glowClass: 'bg-gradient-to-r from-blue-500 to-indigo-500',
+      buttonClass:
+        'border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500',
+      overflowClass: 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800',
+      disabled:
+        accountsLoading.value || refreshingBalances.value || !canRefreshVisibleBalances.value,
+      loading: refreshingBalances.value,
+      handler: () => {
+        refreshVisibleBalances()
+      }
+    },
+    {
+      key: 'select',
+      label: showCheckboxes.value ? '取消选择' : '选择',
+      tooltip: showCheckboxes.value ? '取消批量选择' : '批量选择账户',
+      icon: showCheckboxes.value ? 'fa-times' : 'fa-check-square',
+      iconClass: 'text-slate-600 dark:text-slate-300',
+      glowClass: 'bg-gradient-to-r from-slate-400 to-gray-500',
+      buttonClass:
+        'border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700',
+      overflowClass: 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800',
+      handler: () => {
+        toggleSelectionMode()
+      }
+    },
+    {
+      key: 'group',
+      label: '分组',
+      tooltip: '管理账户分组',
+      icon: 'fa-layer-group',
+      iconClass: 'text-purple-500',
+      glowClass: 'bg-gradient-to-r from-purple-500 to-pink-500',
+      buttonClass:
+        'border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500',
+      overflowClass: 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800',
+      handler: () => {
+        showGroupManagementModal.value = true
+      }
+    },
+    {
+      key: 'import-openai',
+      label: '导入 OpenAI',
+      tooltip: '批量导入 OpenAI Codex JSON 账号',
+      icon: 'fa-file-import',
+      iconClass: 'text-emerald-500',
+      glowClass: 'bg-gradient-to-r from-emerald-500 to-cyan-500',
+      buttonClass:
+        'border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500',
+      overflowClass: 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800',
+      disabled: importingOpenAIJson.value,
+      loading: importingOpenAIJson.value,
+      handler: () => {
+        triggerOpenAIJsonImport()
+      }
+    },
+    {
+      key: 'import-json',
+      label: '导入 JSON',
+      tooltip: '导入账户 JSON 数组',
+      icon: 'fa-file-upload',
+      iconClass: 'text-cyan-500',
+      glowClass: 'bg-gradient-to-r from-cyan-500 to-sky-500',
+      buttonClass:
+        'border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500',
+      overflowClass: 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800',
+      disabled: importingAccountsJson.value,
+      loading: importingAccountsJson.value,
+      handler: () => {
+        triggerAccountJsonImport()
+      }
+    },
+    {
+      key: 'export-all',
+      label: '导出全部',
+      tooltip: '导出全部支持的账户 JSON',
+      icon: 'fa-file-export',
+      iconClass: 'text-amber-500',
+      glowClass: 'bg-gradient-to-r from-amber-500 to-orange-500',
+      buttonClass:
+        'border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500',
+      overflowClass: 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800',
+      disabled: exportingAccountsJson.value,
+      loading: exportingAccountsJson.value,
+      handler: () => {
+        exportAccountsJson('all')
+      }
+    },
+    {
+      key: 'sync-crs',
+      label: '同步 CRS',
+      tooltip: '从另一个 CRS 同步账户',
+      icon: 'fa-cloud-download-alt',
+      iconClass: 'text-fuchsia-500',
+      glowClass: 'bg-gradient-to-r from-fuchsia-500 to-violet-500',
+      buttonClass:
+        'border border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500',
+      overflowClass: 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800',
+      disabled: syncingAccountsJson.value,
+      loading: syncingAccountsJson.value,
+      handler: () => {
+        openAccountSyncModal()
+      }
+    }
+  ]
+
+  if (selectedAccounts.value.length > 0) {
+    actions.push(
+      {
+        key: 'export-selected',
+        label: `导出选中 (${selectedAccounts.value.length})`,
+        tooltip: '导出选中的账户 JSON',
+        icon: 'fa-file-export',
+        iconClass: 'text-amber-600 dark:text-amber-400',
+        glowClass: 'bg-gradient-to-r from-amber-500 to-orange-500',
+        buttonClass:
+          'border border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50',
+        overflowClass:
+          'text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-900/30',
+        disabled: exportingAccountsJson.value,
+        loading: exportingAccountsJson.value,
+        handler: () => {
+          exportAccountsJson('selected')
+        }
+      },
+      {
+        key: 'batch-edit',
+        label: `编辑选中 (${selectedAccounts.value.length})`,
+        tooltip: '批量编辑选中的账户',
+        icon: 'fa-edit',
+        iconClass: 'text-blue-600 dark:text-blue-400',
+        glowClass: 'bg-gradient-to-r from-blue-500 to-indigo-500',
+        buttonClass:
+          'border border-blue-200 bg-blue-50 text-blue-700 hover:border-blue-300 hover:bg-blue-100 hover:shadow-md dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50',
+        overflowClass:
+          'text-blue-700 hover:bg-blue-50 dark:text-blue-300 dark:hover:bg-blue-900/30',
+        handler: () => {
+          openBatchEditAccounts()
+        }
+      },
+      {
+        key: 'batch-delete',
+        label: `删除选中 (${selectedAccounts.value.length})`,
+        tooltip: '删除选中的账户',
+        icon: 'fa-trash',
+        iconClass: 'text-red-600 dark:text-red-400',
+        glowClass: 'bg-gradient-to-r from-red-500 to-pink-500',
+        buttonClass:
+          'border border-red-200 bg-red-50 text-red-700 hover:border-red-300 hover:bg-red-100 hover:shadow-md dark:border-red-700 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-900/50',
+        overflowClass: 'text-red-700 hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-900/30',
+        handler: () => {
+          batchDeleteAccounts()
+        }
+      }
+    )
+  }
+
+  return actions
+})
+const accountToolbarInlineActions = computed(() =>
+  accountToolbarActions.value.slice(0, accountToolbarVisibleCount.value)
+)
+const accountToolbarOverflowActions = computed(() =>
+  accountToolbarActions.value.slice(accountToolbarVisibleCount.value)
+)
 
 // 错误历史弹窗状态
 const showErrorHistoryModal = ref(false)
@@ -3929,9 +4221,13 @@ const toggleSelectionMode = () => {
     selectAllChecked.value = false
     isIndeterminate.value = false
   } else {
-    mobileAccountActionsExpanded.value = true
+    accountOverflowMenuVisible.value = false
     updateSelectAllState()
   }
+
+  nextTick(() => {
+    scheduleAccountActionsLayoutUpdate()
+  })
 }
 
 const cleanupSelectedAccounts = () => {
@@ -4209,7 +4505,7 @@ const loadAccounts = async (forceReload = false) => {
   }
 }
 
-const readOpenAIJsonImportFile = (file) => {
+const readJsonFile = (file) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
 
@@ -4243,6 +4539,335 @@ const collectOpenAIJsonImportRecords = (payload) => {
   return [payload]
 }
 
+const collectAccountJsonImportRecords = (payload) => {
+  if (!Array.isArray(payload)) {
+    throw new Error('账户 JSON 必须是数组')
+  }
+
+  return payload
+}
+
+const triggerAccountJsonImport = () => {
+  if (importingAccountsJson.value) {
+    return
+  }
+
+  accountJsonImportInput.value?.click()
+}
+
+const formatExportTimestamp = () => {
+  const now = new Date()
+  const pad = (value) => String(value).padStart(2, '0')
+  return [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+    pad(now.getHours()),
+    pad(now.getMinutes()),
+    pad(now.getSeconds())
+  ].join('')
+}
+
+const downloadAccountsJson = (records) => {
+  const jsonText = JSON.stringify(records, null, 2)
+  const blob = new Blob([jsonText], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `accounts-export-${formatExportTimestamp()}.json`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+const buildAccountExportItems = (targets) => {
+  return targets.map((account) => ({
+    id: account.id,
+    platform: account.platform,
+    name: account.name || account.email || account.accountName || account.id
+  }))
+}
+
+const exportAccountsJson = async (scope) => {
+  if (exportingAccountsJson.value) {
+    return
+  }
+
+  const isSelectedExport = scope === 'selected'
+  const targets = isSelectedExport ? selectedAccountObjects.value : []
+  if (isSelectedExport && targets.length === 0) {
+    showToast('请先选择要导出的账户', 'warning')
+    return
+  }
+
+  exportingAccountsJson.value = true
+  try {
+    const response = await httpApis.exportAccountsJsonApi(
+      isSelectedExport ? { accounts: buildAccountExportItems(targets) } : {}
+    )
+
+    if (!response.success) {
+      showToast(response.message || '导出账户 JSON 失败', 'error')
+      return
+    }
+
+    const data = response.data || {}
+    const records = Array.isArray(data.accounts) ? data.accounts : []
+    if (records.length === 0) {
+      const skipped = Number(data.skipped || 0)
+      showToast(skipped > 0 ? '选中的账户暂不支持导出' : '没有可导出的账户', 'warning')
+      return
+    }
+
+    downloadAccountsJson(records)
+
+    const skipped = Number(data.skipped || 0)
+    showToast(
+      skipped > 0
+        ? `已导出 ${records.length} 个账户，跳过 ${skipped} 个暂不支持的账户`
+        : `已导出 ${records.length} 个账户`,
+      skipped > 0 ? 'warning' : 'success'
+    )
+  } catch (error) {
+    showToast(error?.message || '导出账户 JSON 失败', 'error')
+  } finally {
+    exportingAccountsJson.value = false
+  }
+}
+
+const summarizeAccountJsonImport = (summary) => {
+  const imported = Number(summary.imported || 0)
+  const overwritten = Number(summary.overwritten || 0)
+  const skipped = Number(summary.skipped || 0)
+  const failed = Number(summary.failed || 0)
+  const parts = []
+
+  if (imported > 0) parts.push(`新增 ${imported}`)
+  if (overwritten > 0) parts.push(`覆盖 ${overwritten}`)
+  if (skipped > 0) parts.push(`跳过 ${skipped}`)
+  if (failed > 0) parts.push(`失败 ${failed}`)
+
+  return parts.length > 0 ? `导入完成：${parts.join('，')}` : '没有导入任何账户'
+}
+
+const resetAccountImportConflictModal = () => {
+  accountImportConflictModal.value = {
+    show: false,
+    conflicts: [],
+    records: [],
+    source: 'file',
+    syncForm: null
+  }
+}
+
+const runAccountJsonImport = async (records, strategy = 'ask') => {
+  const response = await httpApis.importAccountsJsonApi({
+    accounts: records,
+    strategy
+  })
+
+  if (!response.success && response.code === 'ACCOUNT_NAME_CONFLICT') {
+    accountImportConflictModal.value = {
+      show: true,
+      conflicts: response.data?.conflicts || [],
+      records,
+      source: 'file',
+      syncForm: null
+    }
+    return false
+  }
+
+  const summary = response.data || {}
+  if (!response.success) {
+    const firstFailure = Array.isArray(summary.results)
+      ? summary.results.find((item) => !item.success)
+      : null
+    const detail = firstFailure ? `：${firstFailure.name || `第 ${firstFailure.index + 1} 个`}` : ''
+    showToast(`${response.message || '导入账户 JSON 失败'}${detail}`, 'error')
+    return false
+  }
+
+  const failed = Number(summary.failed || 0)
+  showToast(summarizeAccountJsonImport(summary), failed > 0 ? 'warning' : 'success')
+  clearCache()
+  await loadAccounts(true)
+  return true
+}
+
+const summarizeAccountSync = (summary) => {
+  const remote = summary.remote || {}
+  const baseSummary = summarizeAccountJsonImport(summary)
+  const remoteSkipped = Number(remote.skipped || 0)
+
+  if (remoteSkipped > 0) {
+    return `${baseSummary}，远端跳过 ${remoteSkipped} 个暂不支持的账户`
+  }
+
+  return baseSummary
+}
+
+const openAccountSyncModal = () => {
+  showAccountSyncModal.value = true
+}
+
+const clearAccountSyncPassword = () => {
+  accountSyncForm.value.password = ''
+}
+
+const closeAccountSyncModal = () => {
+  if (syncingAccountsJson.value) {
+    return
+  }
+
+  showAccountSyncModal.value = false
+  clearAccountSyncPassword()
+}
+
+const validateAccountSyncForm = (form) => {
+  if (!form.baseUrl || !form.username || !form.password) {
+    showToast('请填写远端 CRS 主地址、用户名和密码', 'warning')
+    return false
+  }
+
+  return true
+}
+
+const syncAccountsFromRemote = async (strategy = 'ask', formOverride = null) => {
+  if (syncingAccountsJson.value) {
+    return false
+  }
+
+  const form = formOverride || { ...accountSyncForm.value }
+  if (!validateAccountSyncForm(form)) {
+    return false
+  }
+
+  syncingAccountsJson.value = true
+  try {
+    const response = await httpApis.syncAccountsJsonApi({
+      baseUrl: form.baseUrl,
+      username: form.username,
+      password: form.password,
+      strategy
+    })
+
+    if (!response.success && response.code === 'ACCOUNT_NAME_CONFLICT') {
+      accountImportConflictModal.value = {
+        show: true,
+        conflicts: response.data?.conflicts || [],
+        records: [],
+        source: 'sync',
+        syncForm: { ...form }
+      }
+      showAccountSyncModal.value = false
+      clearAccountSyncPassword()
+      return false
+    }
+
+    const summary = response.data || {}
+    if (!response.success) {
+      const firstFailure = Array.isArray(summary.results)
+        ? summary.results.find((item) => !item.success)
+        : null
+      const detail = firstFailure
+        ? `：${firstFailure.name || `第 ${firstFailure.index + 1} 个`}`
+        : ''
+      showToast(`${response.message || '同步远端 CRS 账户失败'}${detail}`, 'error')
+      return false
+    }
+
+    const failed = Number(summary.failed || 0)
+    const remoteSkipped = Number(summary.remote?.skipped || 0)
+    showToast(
+      summarizeAccountSync(summary),
+      failed > 0 || remoteSkipped > 0 ? 'warning' : 'success'
+    )
+
+    resetAccountImportConflictModal()
+    showAccountSyncModal.value = false
+    clearAccountSyncPassword()
+    clearCache()
+    await loadAccounts(true)
+    return true
+  } catch (error) {
+    showToast(error?.message || '同步远端 CRS 账户失败', 'error')
+    return false
+  } finally {
+    syncingAccountsJson.value = false
+  }
+}
+
+const handleAccountJsonImportFile = async (event) => {
+  const input = event.target
+  const file = input.files?.[0]
+
+  if (!file) {
+    return
+  }
+
+  importingAccountsJson.value = true
+
+  try {
+    const fileText = await readJsonFile(file)
+    const payload = JSON.parse(fileText)
+    const records = collectAccountJsonImportRecords(payload)
+
+    if (records.length === 0) {
+      showToast('账户 JSON 数组为空', 'warning')
+      return
+    }
+
+    await runAccountJsonImport(records, 'ask')
+  } catch (error) {
+    showToast(error?.message || '导入账户 JSON 失败', 'error')
+  } finally {
+    importingAccountsJson.value = false
+    input.value = ''
+  }
+}
+
+const resolveAccountImportConflict = async (strategy) => {
+  if (strategy === 'abort') {
+    if (accountImportConflictModal.value.source === 'sync') {
+      clearAccountSyncPassword()
+    }
+    resetAccountImportConflictModal()
+    showToast('已终止操作，未写入任何账户', 'info')
+    return
+  }
+
+  if (accountImportConflictModal.value.source === 'sync') {
+    const form = accountImportConflictModal.value.syncForm
+    if (!form) {
+      resetAccountImportConflictModal()
+      return
+    }
+
+    const finished = await syncAccountsFromRemote(strategy, form)
+    if (finished) {
+      resetAccountImportConflictModal()
+    }
+    return
+  }
+
+  const records = accountImportConflictModal.value.records
+  if (!records || records.length === 0) {
+    accountImportConflictModal.value.show = false
+    return
+  }
+
+  importingAccountsJson.value = true
+  try {
+    const finished = await runAccountJsonImport(records, strategy)
+    if (finished) {
+      resetAccountImportConflictModal()
+    }
+  } finally {
+    importingAccountsJson.value = false
+  }
+}
+
 const triggerOpenAIJsonImport = () => {
   if (importingOpenAIJson.value) {
     return
@@ -4267,7 +4892,7 @@ const handleOpenAIJsonImportFile = async (event) => {
 
     for (const file of files) {
       try {
-        const fileText = await readOpenAIJsonImportFile(file)
+        const fileText = await readJsonFile(file)
         const payload = JSON.parse(fileText)
         const fileRecords = collectOpenAIJsonImportRecords(payload)
 
@@ -6265,7 +6890,38 @@ watch(paginatedAccounts, () => {
 
 watch(accounts, () => {
   cleanupSelectedAccounts()
+  nextTick(() => {
+    scheduleAccountActionsLayoutUpdate()
+  })
 })
+
+watch(
+  () => [selectedAccounts.value.length, showCheckboxes.value],
+  () => {
+    nextTick(() => {
+      scheduleAccountActionsLayoutUpdate()
+    })
+  }
+)
+
+watch(
+  () =>
+    accountToolbarActions.value
+      .map((action) =>
+        [
+          action.key,
+          action.label,
+          action.disabled ? 'disabled' : 'enabled',
+          action.loading ? 'loading' : 'idle'
+        ].join(':')
+      )
+      .join('|'),
+  () => {
+    nextTick(() => {
+      scheduleAccountActionsLayoutUpdate()
+    })
+  }
+)
 // 到期时间相关方法
 const formatExpireDate = (dateString) => {
   if (!dateString) return ''
@@ -6373,8 +7029,158 @@ const checkHorizontalScroll = () => {
   }
 }
 
+const ACCOUNT_TOOLBAR_GAP = 12
+const ACCOUNT_TOOLBAR_MORE_WIDTH = 40
+const ACCOUNT_TOOLBAR_FALLBACK_ACTION_WIDTH = 96
+const accountToolbarButtonBaseClass =
+  'group relative flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium shadow-sm transition-all duration-200 sm:w-auto sm:shrink-0 sm:whitespace-nowrap'
+const accountToolbarGlowBaseClass =
+  'absolute -inset-0.5 rounded-lg opacity-0 blur transition duration-300 group-hover:opacity-20'
+
+const getAccountToolbarButtonClass = (action) => [accountToolbarButtonBaseClass, action.buttonClass]
+
+const getAccountToolbarGlowClass = (action) => [accountToolbarGlowBaseClass, action.glowClass]
+
+const getAccountToolbarIconClass = (action) => [
+  'fas relative',
+  action.loading ? 'fa-spinner fa-spin' : action.icon,
+  action.iconClass
+]
+
+const getAccountToolbarOverflowButtonClass = (action) => [
+  'flex min-h-[38px] w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+  action.overflowClass || 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-800'
+]
+
+const getAccountToolbarOverflowIconClass = (action) => [
+  'fas w-4 shrink-0',
+  action.loading ? 'fa-spinner fa-spin' : action.icon,
+  action.iconClass
+]
+
+const handleAccountToolbarAction = (action, event) => {
+  if (action.disabled) {
+    return
+  }
+
+  action.handler?.(event)
+  accountOverflowMenuVisible.value = false
+  nextTick(() => {
+    scheduleAccountActionsLayoutUpdate()
+  })
+}
+
+const getMeasuredAccountToolbarActionWidths = () => {
+  const widths = new Map()
+  const measure = accountActionsMeasureRef.value
+  if (!measure) {
+    return widths
+  }
+
+  Array.from(measure.children).forEach((child) => {
+    const key = child.dataset?.actionKey
+    const width = child.getBoundingClientRect().width
+    if (key && width > 0) {
+      widths.set(key, width)
+    }
+  })
+
+  return widths
+}
+
+const getAccountToolbarActionWidth = (action, measuredWidths) =>
+  measuredWidths.get(action.key) || ACCOUNT_TOOLBAR_FALLBACK_ACTION_WIDTH
+
+const getAccountToolbarActionsWidth = (actions, measuredWidths) =>
+  actions.reduce((sum, action, index) => {
+    return (
+      sum +
+      getAccountToolbarActionWidth(action, measuredWidths) +
+      (index > 0 ? ACCOUNT_TOOLBAR_GAP : 0)
+    )
+  }, 0)
+
+const getVisibleAccountToolbarCount = (actions, measuredWidths, availableWidth) => {
+  let usedWidth = 0
+  let visibleCount = 0
+
+  for (const action of actions) {
+    const nextWidth =
+      getAccountToolbarActionWidth(action, measuredWidths) +
+      (visibleCount > 0 ? ACCOUNT_TOOLBAR_GAP : 0)
+
+    if (usedWidth + nextWidth > availableWidth) {
+      break
+    }
+
+    usedWidth += nextWidth
+    visibleCount += 1
+  }
+
+  return visibleCount
+}
+
+const updateAccountActionsLayout = () => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  const row = accountActionsRowRef.value
+  if (!row) {
+    return
+  }
+
+  const actions = accountToolbarActions.value
+  if (actions.length === 0) {
+    accountToolbarVisibleCount.value = 0
+    return
+  }
+
+  const rowWidth = row.getBoundingClientRect().width
+  const addButtonWidth = accountAddButtonRef.value?.getBoundingClientRect().width || 116
+  const availableWidth = Math.max(0, rowWidth - addButtonWidth - ACCOUNT_TOOLBAR_GAP)
+  const measuredWidths = getMeasuredAccountToolbarActionWidths()
+  const fullActionsWidth = getAccountToolbarActionsWidth(actions, measuredWidths)
+
+  if (fullActionsWidth <= availableWidth) {
+    accountToolbarVisibleCount.value = actions.length
+    accountOverflowMenuVisible.value = false
+    return
+  }
+
+  const moreButtonWidth =
+    accountMoreButtonRef.value?.getBoundingClientRect().width || ACCOUNT_TOOLBAR_MORE_WIDTH
+  const availableWithMoreButton = Math.max(
+    0,
+    availableWidth - moreButtonWidth - ACCOUNT_TOOLBAR_GAP
+  )
+
+  accountToolbarVisibleCount.value = getVisibleAccountToolbarCount(
+    actions,
+    measuredWidths,
+    availableWithMoreButton
+  )
+}
+
+let accountActionsLayoutRaf = null
+const scheduleAccountActionsLayoutUpdate = () => {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  if (accountActionsLayoutRaf) {
+    cancelAnimationFrame(accountActionsLayoutRaf)
+  }
+
+  accountActionsLayoutRaf = requestAnimationFrame(() => {
+    accountActionsLayoutRaf = null
+    updateAccountActionsLayout()
+  })
+}
+
 // 窗口大小变化时重新检测
 let resizeObserver = null
+let accountActionsResizeObserver = null
 let tempUnavailableCountdownTimer = null
 
 onMounted(() => {
@@ -6395,21 +7201,49 @@ onMounted(() => {
       resizeObserver.observe(tableContainerRef.value)
       checkHorizontalScroll()
     }
+
+    accountActionsResizeObserver = new ResizeObserver(() => {
+      scheduleAccountActionsLayoutUpdate()
+    })
+    const accountActionLayoutElements = [
+      accountControlsRef.value,
+      accountFiltersRef.value,
+      accountActionsRowRef.value,
+      accountActionsPanelRef.value,
+      accountActionsMeasureRef.value,
+      accountMoreButtonRef.value,
+      accountAddButtonRef.value
+    ]
+    accountActionLayoutElements.forEach((element) => {
+      if (element) {
+        accountActionsResizeObserver.observe(element)
+      }
+    })
+    scheduleAccountActionsLayoutUpdate()
   })
 
   // 监听窗口大小变化
   window.addEventListener('resize', checkHorizontalScroll)
+  window.addEventListener('resize', scheduleAccountActionsLayoutUpdate)
 })
 
 onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect()
   }
+  if (accountActionsResizeObserver) {
+    accountActionsResizeObserver.disconnect()
+  }
+  if (accountActionsLayoutRaf) {
+    cancelAnimationFrame(accountActionsLayoutRaf)
+    accountActionsLayoutRaf = null
+  }
   if (tempUnavailableCountdownTimer) {
     clearInterval(tempUnavailableCountdownTimer)
     tempUnavailableCountdownTimer = null
   }
   window.removeEventListener('resize', checkHorizontalScroll)
+  window.removeEventListener('resize', scheduleAccountActionsLayoutUpdate)
 })
 </script>
 

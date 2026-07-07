@@ -260,6 +260,12 @@ export const getClaudeAccountsUsageApi = () =>
   request({ url: '/admin/claude-accounts/usage', method: 'GET' })
 export const getAccountsBindingCountsApi = () =>
   request({ url: '/admin/accounts/binding-counts', method: 'GET' })
+export const exportAccountsJsonApi = (data) =>
+  request({ url: '/admin/accounts/export-json', method: 'POST', data })
+export const importAccountsJsonApi = (data) =>
+  request({ url: '/admin/accounts/import-json', method: 'POST', data })
+export const syncAccountsJsonApi = (data) =>
+  request({ url: '/admin/accounts/sync-json', method: 'POST', data })
 export const getAccountUsageHistoryApi = (id, platform, days = 30) =>
   request({
     url: `/admin/accounts/${id}/usage-history?platform=${platform}&days=${days}`,
