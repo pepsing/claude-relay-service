@@ -24,7 +24,10 @@ const {
   extractOpenAICacheReadTokens
 } = require('../utils/requestDetailHelper')
 const requestBodyRuleService = require('../services/requestBodyRuleService')
-const { PROVIDER_ENDPOINT_CHAT_COMPLETIONS } = require('../utils/openaiProviderEndpoint')
+const {
+  PROVIDER_ENDPOINT_CHAT_COMPLETIONS,
+  PROVIDER_ENDPOINT_RESPONSES
+} = require('../utils/openaiProviderEndpoint')
 
 // Codex CLI 系统提示词（非 Codex CLI 客户端请求时注入，统一端点也使用）
 const CODEX_CLI_INSTRUCTIONS =
@@ -731,7 +734,7 @@ const handleResponses = async (req, res) => {
 
     const schedulerOptions = req._fromUnifiedChatCompletions
       ? { requiredProviderEndpoint: PROVIDER_ENDPOINT_CHAT_COMPLETIONS }
-      : {}
+      : { requiredProviderEndpoint: PROVIDER_ENDPOINT_RESPONSES }
 
     // 使用调度器选择账户
     ;({ accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(

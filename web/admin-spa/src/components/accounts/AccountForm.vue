@@ -4076,6 +4076,57 @@ const emit = defineEmits(['close', 'success', 'platform-changed'])
 
 const accountsStore = useAccountsStore()
 
+const accountStoreKeysForNameCheck = [
+  'claudeAccounts',
+  'claudeConsoleAccounts',
+  'bedrockAccounts',
+  'geminiAccounts',
+  'openaiAccounts',
+  'azureOpenaiAccounts',
+  'openaiResponsesAccounts',
+  'droidAccounts'
+]
+
+const normalizeAccountNameForCheck = (name) =>
+  String(name || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+
+const getKnownAccountsForNameCheck = () =>
+  accountStoreKeysForNameCheck.flatMap((key) =>
+    Array.isArray(accountsStore[key]) ? accountsStore[key] : []
+  )
+
+const validateUniqueAccountName = async () => {
+  const normalizedName = normalizeAccountNameForCheck(form.value.name)
+  if (!normalizedName) {
+    return true
+  }
+
+  if (typeof accountsStore.fetchAllAccounts === 'function') {
+    try {
+      await accountsStore.fetchAllAccounts()
+    } catch {
+      // 后端仍会做最终校验，这里只保留已有前端缓存检查。
+    }
+  }
+
+  const duplicateAccount = getKnownAccountsForNameCheck().find(
+    (account) =>
+      account?.id !== props.account?.id &&
+      normalizeAccountNameForCheck(account?.name) === normalizedName
+  )
+
+  if (!duplicateAccount) {
+    return true
+  }
+
+  errors.value.name = `账户名称已存在：${duplicateAccount.name}`
+  showToast('账户名称已存在，请换一个名称', 'error')
+  return false
+}
+
 // 确认弹窗状态
 const showConfirmModal = ref(false)
 const confirmOptions = ref({ title: '', message: '', confirmText: '继续', cancelText: '取消' })
@@ -5360,6 +5411,10 @@ const createAccount = async () => {
     hasError = true
   }
 
+  if (!hasError && !(await validateUniqueAccountName())) {
+    hasError = true
+  }
+
   // Claude Console 验证
   if (form.value.platform === 'claude-console') {
     if (!form.value.apiUrl || form.value.apiUrl.trim() === '') {
@@ -5775,6 +5830,10 @@ const updateAccount = async () => {
   // 验证账户名称
   if (!form.value.name || form.value.name.trim() === '') {
     errors.value.name = '请填写账户名称'
+    return
+  }
+
+  if (!(await validateUniqueAccountName())) {
     return
   }
 

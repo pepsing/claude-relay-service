@@ -112,6 +112,75 @@ describe('UnifiedOpenAIScheduler', () => {
   })
 
   describe('selectAccountForApiKey', () => {
+    it('allows shared OpenAI accounts when the endpoint requires responses', async () => {
+      openaiAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'oauth-1',
+          name: 'OAuth',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          supportedModels: ['gpt-5']
+        }
+      ])
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'chat-1',
+          name: 'Chat provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'chat-completions',
+          supportedModels: { 'gpt-5': 'gpt-5' }
+        }
+      ])
+
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        null,
+        'gpt-5',
+        { requiredProviderEndpoint: 'responses' }
+      )
+
+      expect(result).toEqual({ accountId: 'oauth-1', accountType: 'openai' })
+    })
+
+    it('uses only responses OpenAI-Responses accounts when the endpoint requires responses', async () => {
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'chat-1',
+          name: 'Chat provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'chat-completions',
+          supportedModels: { 'gpt-5': 'gpt-5' }
+        },
+        {
+          id: 'responses-1',
+          name: 'Responses provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'responses',
+          supportedModels: { 'gpt-5': 'gpt-5' }
+        }
+      ])
+
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        null,
+        'gpt-5',
+        { requiredProviderEndpoint: 'responses' }
+      )
+
+      expect(result).toEqual({ accountId: 'responses-1', accountType: 'openai-responses' })
+    })
+
     it('uses only chat-completions OpenAI-Responses accounts when the endpoint requires it', async () => {
       openaiAccountService.getAllAccounts.mockResolvedValue([
         {

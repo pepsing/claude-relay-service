@@ -5,7 +5,10 @@ const redis = require('../../models/redis')
 const logger = require('../../utils/logger')
 const { isSchedulable, sortAccountsByPriority } = require('../../utils/commonHelper')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
-const { normalizeOpenAIProviderEndpoint } = require('../../utils/openaiProviderEndpoint')
+const {
+  PROVIDER_ENDPOINT_RESPONSES,
+  normalizeOpenAIProviderEndpoint
+} = require('../../utils/openaiProviderEndpoint')
 
 class UnifiedOpenAIScheduler {
   constructor() {
@@ -157,6 +160,10 @@ class UnifiedOpenAIScheduler {
     const normalizedRequired = normalizeOpenAIProviderEndpoint(requiredProviderEndpoint, null)
     if (!normalizedRequired) {
       return true
+    }
+
+    if (accountType === 'openai') {
+      return normalizedRequired === PROVIDER_ENDPOINT_RESPONSES
     }
 
     if (accountType !== 'openai-responses') {
@@ -463,12 +470,19 @@ class UnifiedOpenAIScheduler {
   // 📋 获取所有可用账户（仅共享池）
   async _getAllAvailableAccounts(apiKeyData, requestedModel = null, options = {}) {
     const availableAccounts = []
+    const normalizedRequiredProviderEndpoint = normalizeOpenAIProviderEndpoint(
+      options.requiredProviderEndpoint,
+      null
+    )
+    const shouldLoadOpenAIAccounts =
+      !normalizedRequiredProviderEndpoint ||
+      normalizedRequiredProviderEndpoint === PROVIDER_ENDPOINT_RESPONSES
 
     // 注意：专属账户的处理已经在 selectAccountForApiKey 中完成
     // 这里只处理共享池账户
 
     // 获取所有OpenAI账户（共享池）
-    if (!options.requiredProviderEndpoint) {
+    if (shouldLoadOpenAIAccounts) {
       const openaiAccounts = await openaiAccountService.getAllAccounts()
       for (let account of openaiAccounts) {
         if (

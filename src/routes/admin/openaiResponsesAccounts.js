@@ -100,6 +100,27 @@ function assertOpenAITestResponseHasText(responseText, responseData) {
   throw new Error(`Test response has no content${detail}`)
 }
 
+function normalizeAccountName(name) {
+  return String(name || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+}
+
+async function findDuplicateAccountByName(name, excludeId = null) {
+  const normalizedName = normalizeAccountName(name)
+  if (!normalizedName) {
+    return null
+  }
+
+  const accounts = await openaiResponsesAccountService.getAllAccounts(true)
+  return (
+    accounts.find(
+      (account) => account.id !== excludeId && normalizeAccountName(account.name) === normalizedName
+    ) || null
+  )
+}
+
 // ==================== OpenAI-Responses 账户管理 API ====================
 
 // 获取所有 OpenAI-Responses 账户
@@ -227,6 +248,14 @@ router.get('/openai-responses-accounts', authenticateAdmin, async (req, res) => 
 router.post('/openai-responses-accounts', authenticateAdmin, async (req, res) => {
   try {
     const accountData = req.body
+    const duplicateAccount = await findDuplicateAccountByName(accountData.name)
+    if (duplicateAccount) {
+      return res.status(409).json({
+        success: false,
+        error: 'Account name already exists',
+        message: `OpenAI-Responses account name already exists: ${duplicateAccount.name}`
+      })
+    }
 
     // 验证分组类型
     if (
@@ -298,6 +327,16 @@ router.put('/openai-responses-accounts/:id', authenticateAdmin, async (req, res)
 
     // ✅ 【新增】映射字段名：前端的 expiresAt -> 后端的 subscriptionExpiresAt
     const mappedUpdates = mapExpiryField(updates, 'OpenAI-Responses', id)
+    if (mappedUpdates.name !== undefined) {
+      const duplicateAccount = await findDuplicateAccountByName(mappedUpdates.name, id)
+      if (duplicateAccount) {
+        return res.status(409).json({
+          success: false,
+          error: 'Account name already exists',
+          message: `OpenAI-Responses account name already exists: ${duplicateAccount.name}`
+        })
+      }
+    }
 
     // 验证priority的有效性（1-100）
     if (mappedUpdates.priority !== undefined) {
