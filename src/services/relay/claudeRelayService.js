@@ -8,6 +8,7 @@ const unifiedClaudeScheduler = require('../scheduler/unifiedClaudeScheduler')
 const sessionHelper = require('../../utils/sessionHelper')
 const logger = require('../../utils/logger')
 const config = require('../../../config/config')
+const { getRateLimitModelFamily } = require('../../utils/modelHelper')
 const claudeCodeHeadersService = require('../claudeCodeHeadersService')
 const redis = require('../../models/redis')
 const ClaudeCodeValidator = require('../../validators/clients/claudeCodeValidator')
@@ -476,10 +477,9 @@ class ClaudeRelayService {
         requestedModel: requestBody.model
       })
 
-      const isOpusModelRequest =
-        typeof requestBody?.model === 'string' && requestBody.model.toLowerCase().includes('opus')
-      const isFableModelRequest =
-        typeof requestBody?.model === 'string' && requestBody.model.toLowerCase().includes('fable')
+      // 请求模型所属的限流家族（opus/sonnet/haiku/fable），决定 429 记入哪个限流桶
+      const requestModelFamily = getRateLimitModelFamily(requestBody?.model)
+      const isOpusModelRequest = requestModelFamily === 'opus'
 
       // 生成会话哈希用于sticky会话
       const sessionHash = sessionHelper.generateSessionHash(requestBody)
@@ -504,6 +504,20 @@ class ClaudeRelayService {
             body: JSON.stringify({
               error: 'upstream_rate_limited',
               message: limitMessage
+            }),
+            accountId: error.accountId
+          }
+        }
+        if (error.code === 'CLAUDE_DEDICATED_UNAVAILABLE') {
+          logger.warn(
+            `🚫 Dedicated account ${error.accountId} is unavailable (${error.reason}) for API key ${apiKeyData.name}, returning 503`
+          )
+          return {
+            statusCode: 503,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              error: 'dedicated_account_unavailable',
+              message: `该 API Key 绑定的专属账号当前不可用（${error.reason}），请稍后重试。`
             }),
             accountId: error.accountId
           }
@@ -836,13 +850,18 @@ class ClaudeRelayService {
               : null
             const parsedResetTimestamp = resetHeader ? parseInt(resetHeader, 10) : NaN
 
-            if (isOpusModelRequest && !Number.isNaN(parsedResetTimestamp)) {
-              await claudeAccountService.markAccountOpusRateLimited(accountId, parsedResetTimestamp)
+            if (requestModelFamily && !Number.isNaN(parsedResetTimestamp)) {
+              // 模型级限额：只停用该模型家族，不改写为账号级限流
+              await claudeAccountService.markAccountModelRateLimited(
+                accountId,
+                requestModelFamily,
+                parsedResetTimestamp
+              )
               logger.warn(
-                `🚫 Account ${accountId} hit Opus limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
+                `🚫 Account ${accountId} hit ${requestModelFamily} limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
               )
 
-              if (isDedicatedOfficialAccount) {
+              if (isOpusModelRequest && isDedicatedOfficialAccount) {
                 const limitMessage = this._buildOpusLimitMessage(parsedResetTimestamp)
                 return {
                   statusCode: 403,
@@ -854,14 +873,6 @@ class ClaudeRelayService {
                   accountId
                 }
               }
-            } else if (isFableModelRequest && !Number.isNaN(parsedResetTimestamp)) {
-              await claudeAccountService.markAccountFableRateLimited(
-                accountId,
-                parsedResetTimestamp
-              )
-              logger.warn(
-                `🚫 Account ${accountId} hit Fable limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
-              )
             } else {
               isRateLimited = true
               if (!Number.isNaN(parsedResetTimestamp)) {
@@ -1896,6 +1907,23 @@ class ClaudeRelayService {
           responseStream.end()
           return
         }
+        if (error.code === 'CLAUDE_DEDICATED_UNAVAILABLE') {
+          logger.warn(
+            `🚫 [Stream] Dedicated account ${error.accountId} is unavailable (${error.reason}) for API key ${apiKeyData.name}, returning 503`
+          )
+          if (!responseStream.headersSent) {
+            responseStream.status(503)
+            responseStream.setHeader('Content-Type', 'application/json')
+          }
+          responseStream.write(
+            JSON.stringify({
+              error: 'dedicated_account_unavailable',
+              message: `该 API Key 绑定的专属账号当前不可用（${error.reason}），请稍后重试。`
+            })
+          )
+          responseStream.end()
+          return
+        }
         throw error
       }
       const { accountId } = accountSelection
@@ -2118,10 +2146,9 @@ class ClaudeRelayService {
     // 获取账户信息用于统一 User-Agent
     const account = await claudeAccountService.getAccount(accountId)
 
-    const isOpusModelRequest =
-      typeof body?.model === 'string' && body.model.toLowerCase().includes('opus')
-    const isFableModelRequest =
-      typeof body?.model === 'string' && body.model.toLowerCase().includes('fable')
+    // 请求模型所属的限流家族（opus/sonnet/haiku/fable），决定 429 记入哪个限流桶
+    const requestModelFamily = getRateLimitModelFamily(body?.model)
+    const isOpusModelRequest = requestModelFamily === 'opus'
 
     // 使用公共方法准备请求头和 payload
     const prepared = await this._prepareRequestHeadersAndPayload(
@@ -2227,18 +2254,20 @@ class ClaudeRelayService {
               : null
             const parsedResetTimestamp = resetHeader ? parseInt(resetHeader, 10) : NaN
 
-            if (isOpusModelRequest) {
+            if (requestModelFamily) {
               if (!Number.isNaN(parsedResetTimestamp)) {
-                await claudeAccountService.markAccountOpusRateLimited(
+                // 模型级限额：只停用该模型家族，不改写为账号级限流
+                await claudeAccountService.markAccountModelRateLimited(
                   accountId,
+                  requestModelFamily,
                   parsedResetTimestamp
                 )
                 logger.warn(
-                  `🚫 [Stream] Account ${accountId} hit Opus limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
+                  `🚫 [Stream] Account ${accountId} hit ${requestModelFamily} limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
                 )
               }
 
-              if (isDedicatedOfficialAccount) {
+              if (isOpusModelRequest && isDedicatedOfficialAccount) {
                 const limitMessage = this._buildOpusLimitMessage(parsedResetTimestamp)
                 if (!responseStream.headersSent) {
                   responseStream.status(403)
@@ -2253,16 +2282,6 @@ class ClaudeRelayService {
                 responseStream.end()
                 resolve()
                 return
-              }
-            } else if (isFableModelRequest) {
-              if (!Number.isNaN(parsedResetTimestamp)) {
-                await claudeAccountService.markAccountFableRateLimited(
-                  accountId,
-                  parsedResetTimestamp
-                )
-                logger.warn(
-                  `🚫 [Stream] Account ${accountId} hit Fable limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
-                )
               }
             } else {
               const rateLimitResetTimestamp = Number.isNaN(parsedResetTimestamp)
@@ -2937,18 +2956,15 @@ class ClaudeRelayService {
               : null
             const parsedResetTimestamp = resetHeader ? parseInt(resetHeader, 10) : NaN
 
-            if (isOpusModelRequest && !Number.isNaN(parsedResetTimestamp)) {
-              await claudeAccountService.markAccountOpusRateLimited(accountId, parsedResetTimestamp)
-              logger.warn(
-                `🚫 [Stream] Account ${accountId} hit Opus limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
-              )
-            } else if (isFableModelRequest && !Number.isNaN(parsedResetTimestamp)) {
-              await claudeAccountService.markAccountFableRateLimited(
+            if (requestModelFamily && !Number.isNaN(parsedResetTimestamp)) {
+              // 模型级限额：只停用该模型家族，不改写为账号级限流
+              await claudeAccountService.markAccountModelRateLimited(
                 accountId,
+                requestModelFamily,
                 parsedResetTimestamp
               )
               logger.warn(
-                `🚫 [Stream] Account ${accountId} hit Fable limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
+                `🚫 [Stream] Account ${accountId} hit ${requestModelFamily} limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
               )
             } else if (this._isAgentViewAuxiliaryRequest(body, clientHeaders)) {
               logger.warn(
