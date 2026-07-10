@@ -218,6 +218,38 @@ describe('openai responses payload toggles', () => {
     )
   })
 
+  test.each(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])(
+    'keeps GPT-5.6 model %s unchanged for scheduling and relay',
+    async (model) => {
+      const req = createReq({
+        body: {
+          model,
+          prompt_cache_key: `session-${model}`
+        },
+        apiKeyOverrides: {
+          enableOpenAIResponsesCodexAdaptation: false,
+          enableOpenAIResponsesPayloadRules: false
+        }
+      })
+
+      await openaiRoutes.handleResponses(req, createRes())
+
+      expect(req.body.model).toBe(model)
+      expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+        req.apiKey,
+        createHash(`session-${model}`),
+        model,
+        { requiredProviderEndpoint: 'responses' }
+      )
+      expect(openaiResponsesRelayService.handleRequest).toHaveBeenCalledWith(
+        req,
+        expect.anything(),
+        expect.anything(),
+        req.apiKey
+      )
+    }
+  )
+
   test('requires chat-completions provider endpoint for unified chat-completions requests', async () => {
     const req = createReq({
       body: {
