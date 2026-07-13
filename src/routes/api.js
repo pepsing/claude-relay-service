@@ -132,6 +132,99 @@ function getAnthropicModelInfos(apiKeyData = {}) {
     .filter((model) => !isModelRestrictedForAnthropicApiKey(apiKeyData, model.id))
 }
 
+function isTruthyFlag(value) {
+  return value === true || value === 'true'
+}
+
+function isSchedulableFlag(value) {
+  return value !== false && value !== 'false'
+}
+
+function getClaudeConsoleInboundModelIds(account = {}) {
+  const { supportedModels } = account
+  if (Array.isArray(supportedModels)) {
+    return supportedModels
+      .map((model) => (typeof model === 'string' ? model.trim() : ''))
+      .filter(Boolean)
+  }
+
+  if (supportedModels && typeof supportedModels === 'object') {
+    return Object.keys(supportedModels)
+      .map((model) => model.trim())
+      .filter(Boolean)
+  }
+
+  return []
+}
+
+function isClaudeConsoleModelSourceAccountAvailable(account) {
+  if (
+    !account ||
+    !isTruthyFlag(account.isActive) ||
+    account.status !== 'active' ||
+    !isSchedulableFlag(account.schedulable)
+  ) {
+    return false
+  }
+
+  return !claudeConsoleAccountService.isSubscriptionExpired(account)
+}
+
+async function loadClaudeConsoleModelSourceAccounts(apiKeyData = {}) {
+  const binding =
+    typeof apiKeyData.claudeConsoleAccountId === 'string'
+      ? apiKeyData.claudeConsoleAccountId.trim()
+      : ''
+
+  if (binding) {
+    const boundAccount = await claudeConsoleAccountService.getAccount(binding)
+    if (isClaudeConsoleModelSourceAccountAvailable(boundAccount)) {
+      return [boundAccount]
+    }
+  }
+
+  const accounts = await claudeConsoleAccountService.getAllAccounts()
+  return accounts.filter(
+    (account) =>
+      account.accountType === 'shared' && isClaudeConsoleModelSourceAccountAvailable(account)
+  )
+}
+
+async function buildAnthropicModelsList(apiKeyData = {}) {
+  const accounts = await loadClaudeConsoleModelSourceAccounts(apiKeyData)
+  const inboundModelIds = new Set()
+  let includeConfiguredModels = accounts.length === 0
+
+  accounts.forEach((account) => {
+    const accountModelIds = getClaudeConsoleInboundModelIds(account)
+    if (accountModelIds.length === 0) {
+      includeConfiguredModels = true
+    }
+    accountModelIds.forEach((modelId) => inboundModelIds.add(modelId))
+  })
+
+  const modelIds = []
+  const seen = new Set()
+  const addModelId = (modelId) => {
+    const value = typeof modelId === 'string' ? modelId.trim() : ''
+    if (!value || seen.has(value)) {
+      return
+    }
+    seen.add(value)
+    modelIds.push(value)
+  }
+
+  if (includeConfiguredModels) {
+    modelsConfig.CLAUDE_MODELS.forEach((model) => addModelId(model?.value))
+  }
+  const sortedInboundModelIds = [...inboundModelIds].sort((a, b) => a.localeCompare(b))
+  sortedInboundModelIds.forEach(addModelId)
+
+  return modelIds
+    .filter((modelId) => !isModelRestrictedForAnthropicApiKey(apiKeyData, modelId))
+    .map(toAnthropicModelInfo)
+}
+
 function parseAnthropicModelsLimit(value) {
   if (value === undefined || value === null || value === '') {
     return 20
@@ -1730,7 +1823,8 @@ router.get('/v1/models', authenticateApiKey, async (req, res) => {
       return res.json({ object: 'list', data: filteredModels })
     }
 
-    return res.json(buildAnthropicModelsPage(getAnthropicModelInfos(req.apiKey), req.query || {}))
+    const models = await buildAnthropicModelsList(req.apiKey)
+    return res.json(buildAnthropicModelsPage(models, req.query || {}))
   } catch (error) {
     if (error.statusCode === 400) {
       return sendAnthropicInvalidRequest(res, error.message)
@@ -2124,4 +2218,5 @@ router.post('/api/event_logging/batch', (req, res) => {
 module.exports = router
 module.exports.handleMessagesRequest = handleMessagesRequest
 module.exports.getAnthropicModelInfos = getAnthropicModelInfos
+module.exports.buildAnthropicModelsList = buildAnthropicModelsList
 module.exports.buildAnthropicModelsPage = buildAnthropicModelsPage

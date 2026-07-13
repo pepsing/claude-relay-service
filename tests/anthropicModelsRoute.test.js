@@ -20,7 +20,11 @@ jest.mock('../src/services/scheduler/unifiedClaudeScheduler', () => ({}))
 jest.mock('../src/utils/sessionHelper', () => ({}))
 jest.mock('../src/services/claudeRelayConfigService', () => ({}))
 jest.mock('../src/services/account/claudeAccountService', () => ({}))
-jest.mock('../src/services/account/claudeConsoleAccountService', () => ({}))
+jest.mock('../src/services/account/claudeConsoleAccountService', () => ({
+  getAccount: jest.fn(),
+  getAllAccounts: jest.fn(),
+  isSubscriptionExpired: jest.fn(() => false)
+}))
 jest.mock('../src/utils/rateLimitHelper', () => ({
   updateRateLimitCounters: jest.fn()
 }))
@@ -69,6 +73,7 @@ jest.mock('../config/models', () => ({
 }))
 
 const apiKeyService = require('../src/services/apiKeyService')
+const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
 const apiRoutes = require('../src/routes/api')
 const registeredGetRoutes = [...mockRouter.get.mock.calls]
 
@@ -97,6 +102,9 @@ describe('Anthropic models route', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     apiKeyService.hasPermission.mockReturnValue(true)
+    claudeConsoleAccountService.getAccount.mockResolvedValue(null)
+    claudeConsoleAccountService.getAllAccounts.mockResolvedValue([])
+    claudeConsoleAccountService.isSubscriptionExpired.mockReturnValue(false)
   })
 
   test('returns Anthropic-native model list shape with pagination metadata', async () => {
@@ -145,6 +153,115 @@ describe('Anthropic models route', () => {
       'claude-sonnet-5',
       'claude-haiku-4-5-20251001'
     ])
+  })
+
+  test('returns inbound model ids from available shared Claude Console mappings', async () => {
+    claudeConsoleAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'console-1',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        supportedModels: {
+          'sonnet-inbound': 'upstream-sonnet',
+          'glm-inbound': 'upstream-glm'
+        }
+      },
+      {
+        id: 'console-dedicated',
+        isActive: true,
+        status: 'active',
+        accountType: 'dedicated',
+        schedulable: true,
+        supportedModels: { 'private-inbound': 'private-upstream' }
+      },
+      {
+        id: 'console-disabled',
+        isActive: false,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        supportedModels: { 'disabled-inbound': 'disabled-upstream' }
+      }
+    ])
+
+    const models = await apiRoutes.buildAnthropicModelsList({ permissions: ['claude'] })
+
+    expect(models.map((model) => model.id)).toEqual(['glm-inbound', 'sonnet-inbound'])
+  })
+
+  test('uses only an available bound Claude Console account', async () => {
+    claudeConsoleAccountService.getAccount.mockResolvedValue({
+      id: 'console-dedicated',
+      isActive: true,
+      status: 'active',
+      accountType: 'dedicated',
+      schedulable: true,
+      supportedModels: { 'dedicated-inbound': 'dedicated-upstream' }
+    })
+
+    const models = await apiRoutes.buildAnthropicModelsList({
+      permissions: ['claude'],
+      claudeConsoleAccountId: 'console-dedicated'
+    })
+
+    expect(models.map((model) => model.id)).toEqual(['dedicated-inbound'])
+    expect(claudeConsoleAccountService.getAllAccounts).not.toHaveBeenCalled()
+  })
+
+  test('includes configured Claude models when an available account has no mapping', async () => {
+    claudeConsoleAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'console-unrestricted',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        supportedModels: {}
+      },
+      {
+        id: 'console-mapped',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        supportedModels: { 'custom-inbound': 'custom-upstream' }
+      }
+    ])
+
+    const models = await apiRoutes.buildAnthropicModelsList({ permissions: ['claude'] })
+
+    expect(models.map((model) => model.id)).toEqual([
+      'claude-sonnet-5',
+      'claude-fable-5',
+      'claude-haiku-4-5-20251001',
+      'custom-inbound'
+    ])
+  })
+
+  test('applies API key blacklist to Console inbound models', async () => {
+    claudeConsoleAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'console-1',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        supportedModels: {
+          'allowed-inbound': 'allowed-upstream',
+          'blocked-inbound': 'blocked-upstream'
+        }
+      }
+    ])
+
+    const models = await apiRoutes.buildAnthropicModelsList({
+      permissions: ['claude'],
+      enableModelRestriction: true,
+      restrictedModels: ['blocked-inbound']
+    })
+
+    expect(models.map((model) => model.id)).toEqual(['allowed-inbound'])
   })
 
   test('returns Anthropic error shape for invalid pagination parameters', async () => {
