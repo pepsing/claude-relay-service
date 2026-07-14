@@ -426,7 +426,13 @@ const extractConfiguredSourceModels = (supportedModels) => {
   return []
 }
 
-const accountMappingModelPlatforms = new Set(['claude-console', 'ccr', 'gemini', 'gemini-api'])
+const accountMappingModelPlatforms = new Set([
+  'claude-console',
+  'ccr',
+  'gemini',
+  'gemini-api',
+  'openai-responses'
+])
 
 const normalizeProviderEndpointType = (value) => {
   const text = typeof value === 'string' ? value.trim().toLowerCase() : ''

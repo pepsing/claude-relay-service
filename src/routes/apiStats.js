@@ -529,6 +529,7 @@ async function collectAccountSourceModelOptions({
   const resolvedBindingValue = bindingValue !== undefined ? bindingValue : keyData[bindingField]
   const boundIds = await resolveBoundAccountIds(resolvedBindingValue, bindingPrefix)
   const accounts = await loadAccounts()
+  let hasUnrestrictedAccount = false
 
   for (const account of accounts || []) {
     if (typeof accountFilter === 'function' && !accountFilter(account)) {
@@ -552,10 +553,17 @@ async function collectAccountSourceModelOptions({
       continue
     }
 
-    for (const sourceModel of extractConfiguredSourceModels(account.supportedModels)) {
+    const sourceModels = extractConfiguredSourceModels(account.supportedModels)
+    if (sourceModels.length === 0) {
+      hasUnrestrictedAccount = true
+    }
+
+    for (const sourceModel of sourceModels) {
       addTestModelOption(optionMaps, service, `${valuePrefix}${sourceModel}`, keyData)
     }
   }
+
+  return { hasUnrestrictedAccount }
 }
 
 async function buildApiKeyTestModelOptions(keyData = {}) {
@@ -619,7 +627,7 @@ async function buildApiKeyTestModelOptions(keyData = {}) {
         PROVIDER_ENDPOINT_CHAT_COMPLETIONS
     })
 
-    await collectAccountSourceModelOptions({
+    const responsesResult = await collectAccountSourceModelOptions({
       optionMaps,
       service: 'openai-responses',
       keyData,
@@ -630,6 +638,16 @@ async function buildApiKeyTestModelOptions(keyData = {}) {
         normalizeOpenAIProviderEndpoint(account.providerEndpoint) !==
         PROVIDER_ENDPOINT_CHAT_COMPLETIONS
     })
+
+    if (responsesResult.hasUnrestrictedAccount) {
+      const modelData = await buildConfiguredModelData()
+      const configuredModels =
+        modelData.endpointConfigs?.['openai-responses']?.whitelistModels || []
+
+      for (const model of configuredModels) {
+        addTestModelOption(optionMaps, 'openai-responses', model?.value, keyData)
+      }
+    }
   }
 
   return Object.fromEntries(

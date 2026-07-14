@@ -379,6 +379,75 @@ describe('apiStats request detail routes', () => {
     ])
   })
 
+  test('merges configured Responses models when an available account accepts any model', async () => {
+    apiKeyService.validateApiKeyForStats.mockResolvedValue({
+      valid: true,
+      keyData: {
+        id: 'key_current',
+        name: 'Current Key',
+        permissions: ['openai'],
+        enableModelRestriction: false,
+        restrictedModels: []
+      }
+    })
+    claudeRelayConfigService.getDefaultModelEndpointConfigs.mockReturnValue({
+      'openai-responses': {
+        label: 'Codex',
+        whitelistModels: [{ value: 'gpt-5.4', label: 'gpt-5.4' }],
+        mappingPresets: []
+      }
+    })
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      modelEndpointConfigs: {
+        'openai-responses': {
+          label: 'Codex',
+          whitelistModels: [{ value: 'gpt-5.3-codex', label: 'gpt-5.3-codex' }],
+          mappingPresets: []
+        }
+      }
+    })
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'responses_unrestricted',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        providerEndpoint: 'responses',
+        supportedModels: {}
+      },
+      {
+        id: 'responses_grok',
+        isActive: true,
+        status: 'active',
+        accountType: 'shared',
+        schedulable: true,
+        providerEndpoint: 'responses',
+        supportedModels: ['grok-4.5']
+      }
+    ])
+
+    const handler = findPostHandler('/api/user-stats')
+    const res = createResponse()
+
+    await handler(
+      {
+        body: {
+          apiKey: 'cr_valid_key_for_test'
+        },
+        ip: '127.0.0.1'
+      },
+      res
+    )
+
+    expect(res.body.success).toBe(true)
+    expect(res.body.data.testModelOptions['openai-responses']).toEqual([
+      { value: 'grok-4.5', label: 'grok-4.5' },
+      { value: 'gpt-5.4', label: 'gpt-5.4' },
+      { value: 'gpt-5.3-codex', label: 'gpt-5.3-codex' }
+    ])
+  })
+
   test('uses responses-prefixed OpenAI binding for current key test model options', async () => {
     apiKeyService.validateApiKeyForStats.mockResolvedValue({
       valid: true,
