@@ -223,6 +223,14 @@
               <div class="mt-3 flex flex-wrap gap-2">
                 <span class="tag tag-blue">{{ account.platform }}</span>
                 <span class="tag tag-slate">priority {{ account.priority }}</span>
+                <span
+                  v-if="account.stickySession?.supported"
+                  :class="['tag', stickySessionTagClass(account.stickySession)]"
+                  :title="stickySessionTitle(account.stickySession)"
+                >
+                  <i class="fas fa-thumbtack mr-1.5" />
+                  {{ stickySessionLabel(account.stickySession) }}
+                </span>
                 <span v-if="account.routeStatus !== 'routable'" class="tag tag-red">
                   {{ account.routeReason }}
                 </span>
@@ -559,6 +567,30 @@ const normalizeAccountKind = (kind) => {
     return '共享'
   }
   return kind
+}
+
+const stickySessionLabel = (policy = {}) => {
+  const rule = policy.effectiveMode === 'fallback' ? '故障切换' : '关闭'
+  const sources = {
+    account: '账户',
+    'global-default': '继承全局',
+    'global-disabled': '全局总开关'
+  }
+  return `粘滞：${rule}（${sources[policy.source] || '未知'}）`
+}
+
+const stickySessionTagClass = (policy = {}) =>
+  policy.effectiveMode === 'fallback' ? 'tag-green' : 'tag-slate'
+
+const stickySessionTitle = (policy = {}) => {
+  if (policy.source === 'global-disabled') {
+    return '全局粘滞总开关已关闭，账户配置暂不生效'
+  }
+
+  const prefix = policy.source === 'account' ? '账户规则' : '继承全局默认规则'
+  return policy.effectiveMode === 'fallback'
+    ? `${prefix}：保持会话粘滞，仅在账户并发满或不可用时切换`
+    : `${prefix}：关闭会话粘滞，按正常调度选择账户`
 }
 
 const routeStatusLabel = (status) => {

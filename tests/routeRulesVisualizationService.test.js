@@ -72,7 +72,11 @@ describe('routeRulesVisualizationService', () => {
 
     apiKeyService.getAllApiKeysFast.mockResolvedValue([])
     apiKeyService.getApiKeyById.mockResolvedValue(null)
-    claudeRelayConfigService.getConfig.mockResolvedValue({ modelEndpointConfigs: {} })
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      modelEndpointConfigs: {},
+      stickySessionEnabled: true,
+      stickySessionDefaultMode: 'off'
+    })
     requestDetailService.listRequestDetails.mockResolvedValue({
       captureEnabled: true,
       readMode: 'redis',
@@ -170,6 +174,7 @@ describe('routeRulesVisualizationService', () => {
         status: 'active',
         schedulable: true,
         accountType: 'shared',
+        stickySessionMode: 'fallback',
         dailyQuota: 600,
         dailyUsage: 215.45,
         maxConcurrentTasks: 0,
@@ -185,6 +190,7 @@ describe('routeRulesVisualizationService', () => {
         status: 'active',
         schedulable: false,
         accountType: 'shared',
+        stickySessionMode: 'inherit',
         dailyQuota: 200,
         dailyUsage: 0
       }
@@ -245,12 +251,59 @@ describe('routeRulesVisualizationService', () => {
           mappedModel: 'claude-sonnet-4-6'
         })
       }),
+      stickySession: {
+        supported: true,
+        configuredMode: 'fallback',
+        effectiveMode: 'fallback',
+        source: 'account',
+        globalEnabled: true,
+        globalDefaultMode: 'off'
+      },
       live: expect.objectContaining({ rpm: 0.4, tpm: 1800, rateLimitedCount: 1 })
     })
     expect(routable.health.availabilityPercent).toBe(50)
     expect(routable.live.history).toHaveLength(60)
     expect(excluded.routeStatus).toBe('excluded')
+    expect(excluded.stickySession).toMatchObject({
+      configuredMode: 'inherit',
+      effectiveMode: 'off',
+      source: 'global-default'
+    })
     expect(excluded.excludedReasons).toEqual(expect.arrayContaining(['model_not_supported']))
+  })
+
+  test('shows global sticky session switch overriding an account rule', async () => {
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      modelEndpointConfigs: {},
+      stickySessionEnabled: false,
+      stickySessionDefaultMode: 'fallback'
+    })
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'responses-a',
+        name: 'Krill Responses',
+        providerEndpoint: 'responses',
+        supportedModels: ['gpt-5'],
+        stickySessionMode: 'fallback',
+        isActive: true,
+        status: 'active',
+        schedulable: true
+      }
+    ])
+
+    const result = await routeRulesVisualizationService.getExplain({
+      endpoint: 'openai-responses',
+      model: 'gpt-5'
+    })
+
+    expect(result.accounts[0].stickySession).toEqual({
+      supported: true,
+      configuredMode: 'fallback',
+      effectiveMode: 'off',
+      source: 'global-disabled',
+      globalEnabled: false,
+      globalDefaultMode: 'fallback'
+    })
   })
 
   test('uses ccr account pool when claude model has ccr prefix', async () => {

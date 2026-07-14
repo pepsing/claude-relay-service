@@ -18,11 +18,17 @@ const {
   PROVIDER_ENDPOINT_CHAT_COMPLETIONS,
   normalizeOpenAIProviderEndpoint
 } = require('../utils/openaiProviderEndpoint')
+const {
+  normalizeAccountStickySessionMode,
+  normalizeDefaultStickySessionMode,
+  resolveStickySessionMode
+} = require('../utils/stickySessionPolicy')
 const modelsConfig = require('../../config/models')
 
 const LIVE_WINDOW_SECONDS = 300
 const HISTORY_BUCKETS = 60
 const REQUEST_DETAIL_PAGE_SIZE = 200
+const STICKY_SESSION_ACCOUNT_TYPES = new Set(['claude-console', 'openai-responses'])
 
 const ENDPOINT_DEFINITIONS = [
   {
@@ -1113,6 +1119,28 @@ function buildEditableAccount(account, sourceType, loader) {
   }
 }
 
+function buildStickySessionPolicy(account, sourceType, globalConfig = {}) {
+  if (!STICKY_SESSION_ACCOUNT_TYPES.has(sourceType)) {
+    return { supported: false }
+  }
+
+  const configuredMode = normalizeAccountStickySessionMode(account.stickySessionMode)
+  const globalEnabled = globalConfig.stickySessionEnabled !== false
+
+  return {
+    supported: true,
+    configuredMode,
+    effectiveMode: resolveStickySessionMode(account, globalConfig),
+    source: !globalEnabled
+      ? 'global-disabled'
+      : configuredMode === 'inherit'
+        ? 'global-default'
+        : 'account',
+    globalEnabled,
+    globalDefaultMode: normalizeDefaultStickySessionMode(globalConfig.stickySessionDefaultMode)
+  }
+}
+
 async function normalizeAccount(account, sourceType, context) {
   const loader = ACCOUNT_LOADERS[sourceType]
   const liveStats =
@@ -1205,6 +1233,7 @@ async function normalizeAccount(account, sourceType, context) {
     modelSupported,
     modelMapping: buildModelMappingInfo(account, context.model),
     supportedModels,
+    stickySession: buildStickySessionPolicy(account, sourceType, context.globalConfig),
     daily,
     concurrency,
     health,
@@ -1374,7 +1403,8 @@ const routeRulesVisualizationService = {
           model,
           apiKey,
           live,
-          routeAccountTypes
+          routeAccountTypes,
+          globalConfig: config
         })
       )
     )
