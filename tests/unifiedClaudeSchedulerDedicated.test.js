@@ -20,7 +20,17 @@ jest.mock('../src/services/account/claudeConsoleAccountService', () => ({}))
 jest.mock('../src/services/account/bedrockAccountService', () => ({}))
 jest.mock('../src/services/account/ccrAccountService', () => ({}))
 jest.mock('../src/services/accountGroupService', () => ({}))
-jest.mock('../src/models/redis', () => ({ getClaudeAccount: jest.fn() }))
+jest.mock('../src/services/claudeRelayConfigService', () => ({ getConfig: jest.fn() }))
+const mockRedisClient = {
+  del: jest.fn(),
+  get: jest.fn(),
+  setex: jest.fn(),
+  ttl: jest.fn()
+}
+jest.mock('../src/models/redis', () => ({
+  getClaudeAccount: jest.fn(),
+  getClientSafe: jest.fn(() => mockRedisClient)
+}))
 jest.mock('../src/utils/logger', () => ({
   debug: jest.fn(),
   info: jest.fn(),
@@ -35,6 +45,7 @@ jest.mock('../src/utils/commonHelper', () => ({
 jest.mock('../src/utils/upstreamErrorHelper', () => ({}))
 
 const claudeAccountService = require('../src/services/account/claudeAccountService')
+const claudeRelayConfigService = require('../src/services/claudeRelayConfigService')
 const redis = require('../src/models/redis')
 const scheduler = require('../src/services/scheduler/unifiedClaudeScheduler')
 
@@ -63,6 +74,13 @@ describe('dedicated (bound) Claude account never silently falls back to the shar
       rateLimitEndAt: '2026-07-07T07:00:00.000Z'
     })
     claudeAccountService.getAccountModelRateLimitInfo.mockResolvedValue({ resetAt: null })
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      stickySessionEnabled: true,
+      stickySessionDefaultMode: 'fallback'
+    })
+    mockRedisClient.get.mockResolvedValue(null)
+    mockRedisClient.setex.mockResolvedValue('OK')
+    mockRedisClient.del.mockResolvedValue(1)
     tempSpy = jest.spyOn(scheduler, 'isAccountTemporarilyUnavailable').mockResolvedValue(false)
   })
 
@@ -147,6 +165,57 @@ describe('dedicated (bound) Claude account never silently falls back to the shar
       scheduler.selectAccountForApiKey(apiKeyData, null, 'claude-opus-4-8')
     ).rejects.toThrow(/No available Claude accounts/)
     expect(poolSpy).toHaveBeenCalled()
+
+    poolSpy.mockRestore()
+  })
+
+  it('does not create a shared-pool mapping when the selected Console account disables sticky', async () => {
+    const poolSpy = jest.spyOn(scheduler, '_getAllAvailableAccounts').mockResolvedValue([
+      {
+        id: 'console-1',
+        accountId: 'console-1',
+        accountType: 'claude-console',
+        name: 'Console 1',
+        priority: 50,
+        stickySessionMode: 'off'
+      }
+    ])
+
+    await expect(
+      scheduler.selectAccountForApiKey(
+        { id: 'shared-key', name: 'shared-key' },
+        'session-hash',
+        'claude-sonnet-4-6'
+      )
+    ).resolves.toEqual({ accountId: 'console-1', accountType: 'claude-console' })
+    expect(mockRedisClient.setex).not.toHaveBeenCalled()
+
+    poolSpy.mockRestore()
+  })
+
+  it('creates a shared-pool mapping when the selected Console account uses fallback sticky', async () => {
+    const poolSpy = jest.spyOn(scheduler, '_getAllAvailableAccounts').mockResolvedValue([
+      {
+        id: 'console-1',
+        accountId: 'console-1',
+        accountType: 'claude-console',
+        name: 'Console 1',
+        priority: 50,
+        stickySessionMode: 'fallback'
+      }
+    ])
+
+    await scheduler.selectAccountForApiKey(
+      { id: 'shared-key', name: 'shared-key' },
+      'session-hash',
+      'claude-sonnet-4-6'
+    )
+
+    expect(mockRedisClient.setex).toHaveBeenCalledWith(
+      'unified_claude_session_mapping:session-hash',
+      expect.any(Number),
+      expect.stringContaining('"policyVersion":1')
+    )
 
     poolSpy.mockRestore()
   })

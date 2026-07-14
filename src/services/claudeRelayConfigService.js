@@ -14,6 +14,9 @@ const SESSION_BINDING_PREFIX = 'original_session_binding:'
 // 默认配置
 const DEFAULT_CONFIG = {
   claudeCodeOnlyEnabled: false,
+  // 调度器 sticky session 总开关与默认策略。默认保持历史行为，避免升级后改变路由。
+  stickySessionEnabled: true,
+  stickySessionDefaultMode: 'fallback',
   globalSessionBindingEnabled: false,
   sessionBindingErrorMessage: '你的本地session已污染，请清理后使用。',
   sessionBindingTtlDays: 1, // 会话绑定 TTL（天），默认1天（支持 /clear 场景，避免 Redis 累积）

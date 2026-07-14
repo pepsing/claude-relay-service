@@ -13,6 +13,7 @@ const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const webhookNotifier = require('../../utils/webhookNotifier')
 const { formatAccountExpiry, mapExpiryField } = require('./utils')
+const { ACCOUNT_STICKY_SESSION_MODES } = require('../../utils/stickySessionPolicy')
 const {
   createOpenAITestPayload,
   createChatCompletionsTestPayload,
@@ -280,6 +281,13 @@ router.post('/openai-responses-accounts', authenticateAdmin, async (req, res) =>
       accountData.maxConcurrentTasks = concurrent
     }
 
+    if (
+      accountData.stickySessionMode !== undefined &&
+      !ACCOUNT_STICKY_SESSION_MODES.includes(accountData.stickySessionMode)
+    ) {
+      return res.status(400).json({ success: false, error: 'Invalid sticky session mode' })
+    }
+
     const account = await openaiResponsesAccountService.createAccount(accountData)
 
     // 如果是分组类型，处理分组绑定
@@ -362,6 +370,13 @@ router.put('/openai-responses-accounts/:id', authenticateAdmin, async (req, res)
         })
       }
       mappedUpdates.maxConcurrentTasks = concurrent
+    }
+
+    if (
+      mappedUpdates.stickySessionMode !== undefined &&
+      !ACCOUNT_STICKY_SESSION_MODES.includes(mappedUpdates.stickySessionMode)
+    ) {
+      return res.status(400).json({ success: false, error: 'Invalid sticky session mode' })
     }
 
     // 处理分组变更

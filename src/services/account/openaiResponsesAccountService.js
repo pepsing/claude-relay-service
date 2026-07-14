@@ -9,6 +9,7 @@ const {
   getOpenAIProviderEndpointValues,
   normalizeOpenAIProviderEndpoint
 } = require('../../utils/openaiProviderEndpoint')
+const { normalizeAccountStickySessionMode } = require('../../utils/stickySessionPolicy')
 
 class OpenAIResponsesAccountService {
   constructor() {
@@ -64,7 +65,8 @@ class OpenAIResponsesAccountService {
       maxConcurrentTasks = 0, // 最大并发任务数，0表示无限制
       rateLimitDuration = 60, // 限流时间（分钟）
       disableAutoProtection = false, // 是否关闭自动防护（429/401/400/529 不自动禁用）
-      providerEndpoint = 'responses' // Provider 端点类型：responses | chat-completions | auto
+      providerEndpoint = 'responses', // Provider 端点类型：responses | chat-completions | auto
+      stickySessionMode = 'inherit' // inherit | off | fallback
     } = options
 
     // 验证必填字段
@@ -127,7 +129,8 @@ class OpenAIResponsesAccountService {
       quotaStoppedAt: '',
       maxConcurrentTasks: this._normalizeMaxConcurrentTasks(maxConcurrentTasks).toString(),
       disableAutoProtection: disableAutoProtection.toString(), // 关闭自动防护
-      providerEndpoint: normalizedProviderEndpoint // Provider 端点类型：responses(默认) | chat-completions | auto
+      providerEndpoint: normalizedProviderEndpoint, // Provider 端点类型：responses(默认) | chat-completions | auto
+      stickySessionMode: normalizeAccountStickySessionMode(stickySessionMode)
     }
 
     // 保存到 Redis
@@ -170,6 +173,7 @@ class OpenAIResponsesAccountService {
     accountData.modelRestrictionMode = this._normalizeModelRestrictionMode(
       accountData.modelRestrictionMode
     )
+    accountData.stickySessionMode = normalizeAccountStickySessionMode(accountData.stickySessionMode)
 
     return accountData
   }
@@ -240,6 +244,10 @@ class OpenAIResponsesAccountService {
       updates.maxConcurrentTasks = this._normalizeMaxConcurrentTasks(
         updates.maxConcurrentTasks
       ).toString()
+    }
+
+    if (updates.stickySessionMode !== undefined) {
+      updates.stickySessionMode = normalizeAccountStickySessionMode(updates.stickySessionMode)
     }
 
     // 更新 Redis
@@ -343,6 +351,9 @@ class OpenAIResponsesAccountService {
       accountData.isActive = accountData.isActive === 'true'
       accountData.expiresAt = accountData.subscriptionExpiresAt || null
       accountData.platform = accountData.platform || 'openai-responses'
+      accountData.stickySessionMode = normalizeAccountStickySessionMode(
+        accountData.stickySessionMode
+      )
 
       accounts.push(accountData)
     }

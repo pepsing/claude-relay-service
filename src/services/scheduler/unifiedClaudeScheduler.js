@@ -13,6 +13,8 @@ const {
 const { isSchedulable, sortAccountsByPriority } = require('../../utils/commonHelper')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const config = require('../../../config/config')
+const claudeRelayConfigService = require('../claudeRelayConfigService')
+const { resolveStickySessionMode } = require('../../utils/stickySessionPolicy')
 
 /**
  * Check if account is Pro (not Max)
@@ -43,6 +45,27 @@ function isProAccount(info) {
 class UnifiedClaudeScheduler {
   constructor() {
     this.SESSION_MAPPING_PREFIX = 'unified_claude_session_mapping:'
+  }
+
+  async _resolveStickySessionMode(account, accountType = null) {
+    const globalConfig = await claudeRelayConfigService.getConfig()
+    if (globalConfig.stickySessionEnabled === false) {
+      return 'off'
+    }
+
+    let policyAccount = account
+    const resolvedAccountType = accountType || account?.accountType
+    const accountId = account?.accountId || account?.id
+
+    if (
+      resolvedAccountType === 'claude-console' &&
+      accountId &&
+      !Object.prototype.hasOwnProperty.call(account || {}, 'stickySessionMode')
+    ) {
+      policyAccount = await claudeConsoleAccountService.getAccount(accountId)
+    }
+
+    return resolveStickySessionMode(policyAccount, globalConfig)
   }
 
   // 🔍 检查账户是否支持请求的模型
@@ -431,8 +454,17 @@ class UnifiedClaudeScheduler {
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
-          // 当本次请求不是 CCR 前缀时，不允许使用指向 CCR 的粘性会话映射
-          if (vendor !== 'ccr' && mappedAccount.accountType === 'ccr') {
+          const stickySessionMode = await this._resolveStickySessionMode(
+            mappedAccount,
+            mappedAccount.accountType
+          )
+          if (stickySessionMode === 'off') {
+            logger.info(
+              `ℹ️ Sticky session disabled for mapped account ${mappedAccount.accountId}; removing mapping for session ${sessionHash}`
+            )
+            await this._deleteSessionMapping(sessionHash)
+          } else if (vendor !== 'ccr' && mappedAccount.accountType === 'ccr') {
+            // 当本次请求不是 CCR 前缀时，不允许使用指向 CCR 的粘性会话映射
             logger.info(
               `ℹ️ Skipping CCR sticky session mapping for non-CCR request; removing mapping for session ${sessionHash}`
             )
@@ -486,7 +518,11 @@ class UnifiedClaudeScheduler {
       const selectedAccount = sortedAccounts[0]
 
       // 如果有会话哈希，建立新的映射
-      if (sessionHash) {
+      if (
+        sessionHash &&
+        (await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)) ===
+          'fallback'
+      ) {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
@@ -1281,7 +1317,13 @@ class UnifiedClaudeScheduler {
   // 💾 设置会话映射
   async _setSessionMapping(sessionHash, accountId, accountType) {
     const client = redis.getClientSafe()
-    const mappingData = JSON.stringify({ accountId, accountType })
+    const mappingData = JSON.stringify({
+      accountId,
+      accountType,
+      mode: 'fallback',
+      policyVersion: 1,
+      createdAt: Date.now()
+    })
     // 依据配置设置TTL（小时）
     const appConfig = require('../../../config/config')
     const ttlHours = appConfig.session?.stickyTtlHours || 1
@@ -1545,25 +1587,31 @@ class UnifiedClaudeScheduler {
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
-          // 验证映射的账户是否属于这个分组
-          const memberIds = await accountGroupService.getGroupMembers(groupId)
-          if (memberIds.includes(mappedAccount.accountId)) {
-            // 非 CCR 请求时不允许 CCR 粘性映射
-            if (!allowCcr && mappedAccount.accountType === 'ccr') {
-              await this._deleteSessionMapping(sessionHash)
-            } else {
-              const isAvailable = await this._isAccountAvailable(
-                mappedAccount.accountId,
-                mappedAccount.accountType,
-                requestedModel
-              )
-              if (isAvailable) {
-                // 🚀 智能会话续期：续期 unified 映射键
-                await this._extendSessionMappingTTL(sessionHash)
-                logger.info(
-                  `🎯 Using sticky session account from group: ${mappedAccount.accountId} (${mappedAccount.accountType}) for session ${sessionHash}`
+          const stickySessionMode = await this._resolveStickySessionMode(
+            mappedAccount,
+            mappedAccount.accountType
+          )
+          if (stickySessionMode !== 'off') {
+            // 验证映射的账户是否属于这个分组
+            const memberIds = await accountGroupService.getGroupMembers(groupId)
+            if (memberIds.includes(mappedAccount.accountId)) {
+              // 非 CCR 请求时不允许 CCR 粘性映射
+              if (!allowCcr && mappedAccount.accountType === 'ccr') {
+                await this._deleteSessionMapping(sessionHash)
+              } else {
+                const isAvailable = await this._isAccountAvailable(
+                  mappedAccount.accountId,
+                  mappedAccount.accountType,
+                  requestedModel
                 )
-                return mappedAccount
+                if (isAvailable) {
+                  // 🚀 智能会话续期：续期 unified 映射键
+                  await this._extendSessionMappingTTL(sessionHash)
+                  logger.info(
+                    `🎯 Using sticky session account from group: ${mappedAccount.accountId} (${mappedAccount.accountType}) for session ${sessionHash}`
+                  )
+                  return mappedAccount
+                }
               }
             }
           }
@@ -1694,7 +1742,11 @@ class UnifiedClaudeScheduler {
       const selectedAccount = sortedAccounts[0]
 
       // 如果有会话哈希，建立新的映射
-      if (sessionHash) {
+      if (
+        sessionHash &&
+        (await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)) ===
+          'fallback'
+      ) {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
@@ -1726,24 +1778,32 @@ class UnifiedClaudeScheduler {
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount && mappedAccount.accountType === 'ccr') {
-          // 验证映射的CCR账户是否仍然可用
-          const isAvailable = await this._isAccountAvailable(
-            mappedAccount.accountId,
-            mappedAccount.accountType,
-            effectiveModel
+          const stickySessionMode = await this._resolveStickySessionMode(
+            mappedAccount,
+            mappedAccount.accountType
           )
-          if (isAvailable) {
-            // 🚀 智能会话续期：续期 unified 映射键
-            await this._extendSessionMappingTTL(sessionHash)
-            logger.info(
-              `🎯 Using sticky CCR session account: ${mappedAccount.accountId} for session ${sessionHash}`
-            )
-            return mappedAccount
-          } else {
-            logger.warn(
-              `⚠️ Mapped CCR account ${mappedAccount.accountId} is no longer available, selecting new account`
-            )
+          if (stickySessionMode === 'off') {
             await this._deleteSessionMapping(sessionHash)
+          } else {
+            // 验证映射的CCR账户是否仍然可用
+            const isAvailable = await this._isAccountAvailable(
+              mappedAccount.accountId,
+              mappedAccount.accountType,
+              effectiveModel
+            )
+            if (isAvailable) {
+              // 🚀 智能会话续期：续期 unified 映射键
+              await this._extendSessionMappingTTL(sessionHash)
+              logger.info(
+                `🎯 Using sticky CCR session account: ${mappedAccount.accountId} for session ${sessionHash}`
+              )
+              return mappedAccount
+            } else {
+              logger.warn(
+                `⚠️ Mapped CCR account ${mappedAccount.accountId} is no longer available, selecting new account`
+              )
+              await this._deleteSessionMapping(sessionHash)
+            }
           }
         }
       }
@@ -1762,7 +1822,10 @@ class UnifiedClaudeScheduler {
       const selectedAccount = sortedAccounts[0]
 
       // 4. 建立会话映射
-      if (sessionHash) {
+      if (
+        sessionHash &&
+        (await this._resolveStickySessionMode(selectedAccount, 'ccr')) === 'fallback'
+      ) {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,

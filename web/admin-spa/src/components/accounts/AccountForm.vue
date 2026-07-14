@@ -2006,6 +2006,23 @@
               </p>
             </div>
 
+            <div v-if="form.platform === 'claude-console' || form.platform === 'openai-responses'">
+              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                会话粘滞策略
+              </label>
+              <select
+                v-model="form.stickySessionMode"
+                class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+              >
+                <option value="inherit">继承全局设置</option>
+                <option value="off">关闭粘滞，正常负载均衡</option>
+                <option value="fallback">保持粘滞，不可用或并发满时切换</option>
+              </select>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                全局总开关关闭时，本账户设置不会生效
+              </p>
+            </div>
+
             <div v-if="form.platform === 'openai'">
               <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
                 最大并发任务数
@@ -3042,6 +3059,23 @@
             />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               数字越小优先级越高，建议范围：1-100
+            </p>
+          </div>
+
+          <div v-if="form.platform === 'claude-console' || form.platform === 'openai-responses'">
+            <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+              会话粘滞策略
+            </label>
+            <select
+              v-model="form.stickySessionMode"
+              class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+            >
+              <option value="inherit">继承全局设置</option>
+              <option value="off">关闭粘滞，正常负载均衡</option>
+              <option value="fallback">保持粘滞，不可用或并发满时切换</option>
+            </select>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              全局总开关关闭时，本账户设置不会生效
             </p>
           </div>
 
@@ -4425,6 +4459,7 @@ const form = ref({
   // OpenAI-Responses 特定字段
   baseApi: props.account?.baseApi || '',
   providerEndpoint: normalizeProviderEndpointValue(props.account?.providerEndpoint),
+  stickySessionMode: props.account?.stickySessionMode || 'inherit',
   // Gemini-API 特定字段
   baseUrl: props.account?.baseUrl || 'https://generativelanguage.googleapis.com',
   rateLimitDuration: props.account?.rateLimitDuration || 60,
@@ -5694,6 +5729,7 @@ const createAccount = async () => {
       data.rateLimitDuration = form.value.enableRateLimit ? form.value.rateLimitDuration || 60 : 0
       if (form.value.platform === 'claude-console') {
         data.interceptWarmup = !!form.value.interceptWarmup
+        data.stickySessionMode = form.value.stickySessionMode || 'inherit'
       }
       // 额度管理字段
       data.dailyQuota = form.value.dailyQuota || 0
@@ -5713,6 +5749,7 @@ const createAccount = async () => {
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      data.stickySessionMode = form.value.stickySessionMode || 'inherit'
     } else if (form.value.platform === 'gemini-antigravity') {
       // Antigravity OAuth - set oauthProvider, submission happens below
       data.oauthProvider = 'antigravity'
@@ -6058,6 +6095,7 @@ const updateAccount = async () => {
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       // 并发控制字段
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      data.stickySessionMode = form.value.stickySessionMode || 'inherit'
     }
 
     // OpenAI-Responses 特定更新
@@ -6075,6 +6113,7 @@ const updateAccount = async () => {
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      data.stickySessionMode = form.value.stickySessionMode || 'inherit'
     }
 
     // Bedrock 特定更新
@@ -6714,6 +6753,7 @@ watch(
         quotaResetTime: newAccount.quotaResetTime || '00:00',
         // 并发控制字段
         maxConcurrentTasks: newAccount.maxConcurrentTasks || 0,
+        stickySessionMode: newAccount.stickySessionMode || 'inherit',
         // 上游错误处理
         disableAutoProtection: toFormBoolean(newAccount.disableAutoProtection),
         disableTempUnavailable: toFormBoolean(newAccount.disableTempUnavailable),

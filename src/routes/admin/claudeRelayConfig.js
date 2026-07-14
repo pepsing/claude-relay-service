@@ -40,6 +40,8 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
   try {
     const {
       claudeCodeOnlyEnabled,
+      stickySessionEnabled,
+      stickySessionDefaultMode,
       globalSessionBindingEnabled,
       sessionBindingErrorMessage,
       sessionBindingTtlDays,
@@ -60,6 +62,17 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
     // 验证输入
     if (claudeCodeOnlyEnabled !== undefined && typeof claudeCodeOnlyEnabled !== 'boolean') {
       return res.status(400).json({ error: 'claudeCodeOnlyEnabled must be a boolean' })
+    }
+
+    if (stickySessionEnabled !== undefined && typeof stickySessionEnabled !== 'boolean') {
+      return res.status(400).json({ error: 'stickySessionEnabled must be a boolean' })
+    }
+
+    if (
+      stickySessionDefaultMode !== undefined &&
+      !['off', 'fallback'].includes(stickySessionDefaultMode)
+    ) {
+      return res.status(400).json({ error: 'stickySessionDefaultMode must be "off" or "fallback"' })
     }
 
     if (
@@ -219,6 +232,12 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
     const updateData = {}
     if (claudeCodeOnlyEnabled !== undefined) {
       updateData.claudeCodeOnlyEnabled = claudeCodeOnlyEnabled
+    }
+    if (stickySessionEnabled !== undefined) {
+      updateData.stickySessionEnabled = stickySessionEnabled
+    }
+    if (stickySessionDefaultMode !== undefined) {
+      updateData.stickySessionDefaultMode = stickySessionDefaultMode
     }
     if (globalSessionBindingEnabled !== undefined) {
       updateData.globalSessionBindingEnabled = globalSessionBindingEnabled

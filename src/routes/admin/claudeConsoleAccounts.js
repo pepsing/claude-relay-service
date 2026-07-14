@@ -15,6 +15,7 @@ const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const webhookNotifier = require('../../utils/webhookNotifier')
 const { formatAccountExpiry, mapExpiryField } = require('./utils')
+const { ACCOUNT_STICKY_SESSION_MODES } = require('../../utils/stickySessionPolicy')
 
 // 获取所有Claude Console账户
 router.get('/claude-console-accounts', authenticateAdmin, async (req, res) => {
@@ -134,7 +135,8 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
       quotaResetTime,
       maxConcurrentTasks,
       disableAutoProtection,
-      interceptWarmup
+      interceptWarmup,
+      stickySessionMode
     } = req.body
 
     if (!name || !apiUrl || !apiKey) {
@@ -152,6 +154,13 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
       if (!Number.isInteger(concurrent) || concurrent < 0) {
         return res.status(400).json({ error: 'maxConcurrentTasks must be a non-negative integer' })
       }
+    }
+
+    if (
+      stickySessionMode !== undefined &&
+      !ACCOUNT_STICKY_SESSION_MODES.includes(stickySessionMode)
+    ) {
+      return res.status(400).json({ error: 'Invalid sticky session mode' })
     }
 
     // 校验上游错误自动防护开关
@@ -190,7 +199,8 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
           ? Number(maxConcurrentTasks)
           : 0,
       disableAutoProtection: normalizedDisableAutoProtection,
-      interceptWarmup: interceptWarmup === true || interceptWarmup === 'true'
+      interceptWarmup: interceptWarmup === true || interceptWarmup === 'true',
+      stickySessionMode: stickySessionMode || 'inherit'
     })
 
     // 如果是分组类型，将账户添加到分组（CCR 归属 Claude 平台分组）
@@ -237,6 +247,13 @@ router.put('/claude-console-accounts/:accountId', authenticateAdmin, async (req,
       }
       // 转换为数字类型
       mappedUpdates.maxConcurrentTasks = concurrent
+    }
+
+    if (
+      mappedUpdates.stickySessionMode !== undefined &&
+      !ACCOUNT_STICKY_SESSION_MODES.includes(mappedUpdates.stickySessionMode)
+    ) {
+      return res.status(400).json({ error: 'Invalid sticky session mode' })
     }
 
     // 验证accountType的有效性

@@ -20,8 +20,18 @@ jest.mock('../src/services/account/openaiResponsesAccountService', () => ({
 }))
 
 jest.mock('../src/services/accountGroupService', () => ({}))
+jest.mock('../src/services/claudeRelayConfigService', () => ({
+  getConfig: jest.fn()
+}))
+const mockRedisClient = {
+  del: jest.fn(),
+  get: jest.fn(),
+  setex: jest.fn(),
+  ttl: jest.fn()
+}
 jest.mock('../src/models/redis', () => ({
-  getConcurrency: jest.fn()
+  getConcurrency: jest.fn(),
+  getClientSafe: jest.fn(() => mockRedisClient)
 }))
 jest.mock('../src/utils/logger', () => ({
   debug: jest.fn(),
@@ -41,6 +51,7 @@ const openaiAccountService = require('../src/services/account/openaiAccountServi
 const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
 const redis = require('../src/models/redis')
 const upstreamErrorHelper = require('../src/utils/upstreamErrorHelper')
+const claudeRelayConfigService = require('../src/services/claudeRelayConfigService')
 const unifiedOpenAIScheduler = require('../src/services/scheduler/unifiedOpenAIScheduler')
 
 const modelMappingSupports = (modelMapping, requestedModel) => {
@@ -65,6 +76,13 @@ describe('UnifiedOpenAIScheduler', () => {
     openaiResponsesAccountService.isModelSupported.mockImplementation(modelMappingSupports)
     openaiResponsesAccountService.recordUsage.mockResolvedValue(undefined)
     redis.getConcurrency.mockResolvedValue(0)
+    mockRedisClient.get.mockResolvedValue(null)
+    mockRedisClient.setex.mockResolvedValue('OK')
+    mockRedisClient.del.mockResolvedValue(1)
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      stickySessionEnabled: true,
+      stickySessionDefaultMode: 'fallback'
+    })
     upstreamErrorHelper.isTempUnavailable.mockResolvedValue(false)
   })
 
@@ -112,6 +130,61 @@ describe('UnifiedOpenAIScheduler', () => {
   })
 
   describe('selectAccountForApiKey', () => {
+    it('does not create a mapping when the selected account disables sticky sessions', async () => {
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'responses-1',
+          name: 'Responses provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'responses',
+          supportedModels: { 'gpt-5': 'gpt-5' },
+          stickySessionMode: 'off'
+        }
+      ])
+
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        'session-hash',
+        'gpt-5',
+        { requiredProviderEndpoint: 'responses' }
+      )
+
+      expect(result).toEqual({ accountId: 'responses-1', accountType: 'openai-responses' })
+      expect(mockRedisClient.setex).not.toHaveBeenCalled()
+    })
+
+    it('creates a versioned mapping for a fallback sticky account', async () => {
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'responses-1',
+          name: 'Responses provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'responses',
+          supportedModels: { 'gpt-5': 'gpt-5' },
+          stickySessionMode: 'fallback'
+        }
+      ])
+
+      await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        'session-hash',
+        'gpt-5',
+        { requiredProviderEndpoint: 'responses' }
+      )
+
+      expect(mockRedisClient.setex).toHaveBeenCalledWith(
+        'unified_openai_session_mapping:session-hash',
+        expect.any(Number),
+        expect.stringContaining('"policyVersion":1')
+      )
+    })
+
     it('allows shared OpenAI accounts when the endpoint requires responses', async () => {
       openaiAccountService.getAllAccounts.mockResolvedValue([
         {

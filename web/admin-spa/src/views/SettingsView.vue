@@ -804,6 +804,57 @@
               </div>
             </div>
 
+            <!-- 调度器会话粘滞 -->
+            <div
+              class="mb-6 rounded-lg bg-white/80 p-6 shadow-lg backdrop-blur-sm dark:bg-gray-800/80"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                  <div
+                    class="mr-3 flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-cyan-600 text-white shadow-lg"
+                  >
+                    <i class="fas fa-thumbtack"></i>
+                  </div>
+                  <div>
+                    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-200">
+                      调度器会话粘滞
+                    </h2>
+                    <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                      控制同一 session 是否持续使用同一账户；账户不可用或并发满时自动切换
+                    </p>
+                  </div>
+                </div>
+                <label class="relative inline-flex cursor-pointer items-center">
+                  <input
+                    v-model="claudeConfig.stickySessionEnabled"
+                    class="peer sr-only"
+                    type="checkbox"
+                    @change="saveClaudeConfig"
+                  />
+                  <div
+                    class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-cyan-500 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cyan-300 dark:border-gray-600 dark:bg-gray-700 dark:peer-focus:ring-cyan-800"
+                  ></div>
+                </label>
+              </div>
+
+              <div v-if="claudeConfig.stickySessionEnabled" class="mt-6">
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  全局默认策略
+                </label>
+                <select
+                  v-model="claudeConfig.stickySessionDefaultMode"
+                  class="mt-1 block w-full max-w-sm rounded-lg border border-gray-300 bg-white px-3 py-2 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 dark:border-gray-500 dark:bg-gray-700 dark:text-white sm:text-sm"
+                  @change="saveClaudeConfig"
+                >
+                  <option value="off">关闭粘滞，正常负载均衡</option>
+                  <option value="fallback">保持粘滞，不可用或并发满时切换</option>
+                </select>
+                <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  账户可选择继承、关闭或覆盖为故障切换粘滞。关闭总开关时，所有账户级设置均不生效。
+                </p>
+              </div>
+            </div>
+
             <!-- 全局会话绑定 -->
             <div
               class="mb-6 rounded-lg bg-white/80 p-6 shadow-lg backdrop-blur-sm dark:bg-gray-800/80"
@@ -2226,6 +2277,8 @@ const webhookConfig = ref({
 const claudeConfigLoading = ref(false)
 const claudeConfig = ref({
   claudeCodeOnlyEnabled: false,
+  stickySessionEnabled: true,
+  stickySessionDefaultMode: 'fallback',
   globalSessionBindingEnabled: false,
   sessionBindingErrorMessage: '你的本地session已污染，请清理后使用。',
   sessionBindingTtlDays: 1,
@@ -2874,6 +2927,8 @@ const loadClaudeConfig = async () => {
       )
       claudeConfig.value = {
         claudeCodeOnlyEnabled: response.config?.claudeCodeOnlyEnabled ?? false,
+        stickySessionEnabled: response.config?.stickySessionEnabled ?? true,
+        stickySessionDefaultMode: response.config?.stickySessionDefaultMode || 'fallback',
         globalSessionBindingEnabled: response.config?.globalSessionBindingEnabled ?? false,
         sessionBindingErrorMessage:
           response.config?.sessionBindingErrorMessage || '你的本地session已污染，请清理后使用。',
@@ -2935,6 +2990,8 @@ const saveClaudeConfig = async (options = {}) => {
 
     const payload = {
       claudeCodeOnlyEnabled: claudeConfig.value.claudeCodeOnlyEnabled,
+      stickySessionEnabled: claudeConfig.value.stickySessionEnabled,
+      stickySessionDefaultMode: claudeConfig.value.stickySessionDefaultMode,
       globalSessionBindingEnabled: claudeConfig.value.globalSessionBindingEnabled,
       sessionBindingErrorMessage: claudeConfig.value.sessionBindingErrorMessage,
       sessionBindingTtlDays: claudeConfig.value.sessionBindingTtlDays,

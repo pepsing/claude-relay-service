@@ -7,6 +7,7 @@ const logger = require('../../utils/logger')
 const config = require('../../../config/config')
 const LRUCache = require('../../utils/lruCache')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
+const { normalizeAccountStickySessionMode } = require('../../utils/stickySessionPolicy')
 
 class ClaudeConsoleAccountService {
   constructor() {
@@ -389,7 +390,8 @@ class ClaudeConsoleAccountService {
       maxConcurrentTasks = 0, // 最大并发任务数，0表示无限制
       disableAutoProtection = false, // 是否关闭自动防护（429/401/400/529 不自动禁用）
       modelRestrictionMode = 'mapping', // 模型限制 UI 模式
-      interceptWarmup = false // 拦截预热请求（标题生成、Warmup等）
+      interceptWarmup = false, // 拦截预热请求（标题生成、Warmup等）
+      stickySessionMode = 'inherit' // inherit | off | fallback
     } = options
 
     // 验证必填字段
@@ -448,7 +450,8 @@ class ClaudeConsoleAccountService {
       zhipuCodingQuotaStatus: '',
       maxConcurrentTasks: maxConcurrentTasks.toString(), // 最大并发任务数，0表示无限制
       disableAutoProtection: disableAutoProtection.toString(), // 关闭自动防护
-      interceptWarmup: interceptWarmup.toString() // 拦截预热请求
+      interceptWarmup: interceptWarmup.toString(), // 拦截预热请求
+      stickySessionMode: normalizeAccountStickySessionMode(stickySessionMode)
     }
 
     const client = redis.getClientSafe()
@@ -495,6 +498,7 @@ class ClaudeConsoleAccountService {
       maxConcurrentTasks, // 新增：返回并发限制配置
       disableAutoProtection, // 新增：返回自动防护开关
       interceptWarmup, // 新增：返回预热请求拦截开关
+      stickySessionMode: normalizeAccountStickySessionMode(stickySessionMode),
       activeTaskCount: 0 // 新增：新建账户当前并发数为0
     }
   }
@@ -576,7 +580,8 @@ class ClaudeConsoleAccountService {
             activeTaskCount,
             disableAutoProtection: accountData.disableAutoProtection === 'true',
             // 拦截预热请求
-            interceptWarmup: accountData.interceptWarmup === 'true'
+            interceptWarmup: accountData.interceptWarmup === 'true',
+            stickySessionMode: normalizeAccountStickySessionMode(accountData.stickySessionMode)
           })
         }
       }
@@ -624,6 +629,7 @@ class ClaudeConsoleAccountService {
     accountData.isActive = accountData.isActive === 'true'
     accountData.schedulable = accountData.schedulable !== 'false' // 默认为true
     accountData.disableAutoProtection = accountData.disableAutoProtection === 'true'
+    accountData.stickySessionMode = normalizeAccountStickySessionMode(accountData.stickySessionMode)
     accountData.isZhipuCodingPlan = this.isZhipuCodingPlanAccount(accountData.apiUrl)
     accountData.zhipuCodingQuotaAutoStopped = accountData.zhipuCodingQuotaAutoStopped === 'true'
     accountData.zhipuCodingQuotaStatus = this._parseOptionalJson(accountData.zhipuCodingQuotaStatus)
@@ -788,6 +794,9 @@ class ClaudeConsoleAccountService {
       }
       if (updates.interceptWarmup !== undefined) {
         updatedData.interceptWarmup = updates.interceptWarmup.toString()
+      }
+      if (updates.stickySessionMode !== undefined) {
+        updatedData.stickySessionMode = normalizeAccountStickySessionMode(updates.stickySessionMode)
       }
 
       // ✅ 直接保存 subscriptionExpiresAt（如果提供）

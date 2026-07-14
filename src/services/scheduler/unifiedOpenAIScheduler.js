@@ -5,6 +5,8 @@ const redis = require('../../models/redis')
 const logger = require('../../utils/logger')
 const { isSchedulable, sortAccountsByPriority } = require('../../utils/commonHelper')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
+const claudeRelayConfigService = require('../claudeRelayConfigService')
+const { resolveStickySessionMode } = require('../../utils/stickySessionPolicy')
 const {
   PROVIDER_ENDPOINT_RESPONSES,
   normalizeOpenAIProviderEndpoint
@@ -13,6 +15,27 @@ const {
 class UnifiedOpenAIScheduler {
   constructor() {
     this.SESSION_MAPPING_PREFIX = 'unified_openai_session_mapping:'
+  }
+
+  async _resolveStickySessionMode(account, accountType = null) {
+    const globalConfig = await claudeRelayConfigService.getConfig()
+    if (globalConfig.stickySessionEnabled === false) {
+      return 'off'
+    }
+
+    let policyAccount = account
+    const resolvedAccountType = accountType || account?.accountType
+    const accountId = account?.accountId || account?.id
+
+    if (
+      resolvedAccountType === 'openai-responses' &&
+      accountId &&
+      !Object.prototype.hasOwnProperty.call(account || {}, 'stickySessionMode')
+    ) {
+      policyAccount = await openaiResponsesAccountService.getAccount(accountId)
+    }
+
+    return resolveStickySessionMode(policyAccount, globalConfig)
   }
 
   _getAccountConcurrencyKey(accountId, accountType) {
@@ -386,26 +409,34 @@ class UnifiedOpenAIScheduler {
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
-          // 验证映射的账户是否仍然可用
-          const isAvailable = await this._isAccountAvailable(
-            mappedAccount.accountId,
-            mappedAccount.accountType,
-            { requestedModel, requiredProviderEndpoint: options.requiredProviderEndpoint }
+          const stickySessionMode = await this._resolveStickySessionMode(
+            mappedAccount,
+            mappedAccount.accountType
           )
-          if (isAvailable) {
-            // 🚀 智能会话续期（续期 unified 映射键，按配置）
-            await this._extendSessionMappingTTL(sessionHash)
-            logger.info(
-              `🎯 Using sticky session account: ${mappedAccount.accountId} (${mappedAccount.accountType}) for session ${sessionHash}`
-            )
-            // 更新账户的最后使用时间
-            await this.updateAccountLastUsed(mappedAccount.accountId, mappedAccount.accountType)
-            return mappedAccount
-          } else {
-            logger.warn(
-              `⚠️ Mapped account ${mappedAccount.accountId} is no longer available, selecting new account`
-            )
+          if (stickySessionMode === 'off') {
             await this._deleteSessionMapping(sessionHash)
+          } else {
+            // 验证映射的账户是否仍然可用
+            const isAvailable = await this._isAccountAvailable(
+              mappedAccount.accountId,
+              mappedAccount.accountType,
+              { requestedModel, requiredProviderEndpoint: options.requiredProviderEndpoint }
+            )
+            if (isAvailable) {
+              // 🚀 智能会话续期（续期 unified 映射键，按配置）
+              await this._extendSessionMappingTTL(sessionHash)
+              logger.info(
+                `🎯 Using sticky session account: ${mappedAccount.accountId} (${mappedAccount.accountType}) for session ${sessionHash}`
+              )
+              // 更新账户的最后使用时间
+              await this.updateAccountLastUsed(mappedAccount.accountId, mappedAccount.accountType)
+              return mappedAccount
+            } else {
+              logger.warn(
+                `⚠️ Mapped account ${mappedAccount.accountId} is no longer available, selecting new account`
+              )
+              await this._deleteSessionMapping(sessionHash)
+            }
           }
         }
       }
@@ -439,7 +470,11 @@ class UnifiedOpenAIScheduler {
       const selectedAccount = sortedAccounts[0]
 
       // 如果有会话哈希，建立新的映射
-      if (sessionHash) {
+      if (
+        sessionHash &&
+        (await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)) ===
+          'fallback'
+      ) {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
@@ -801,7 +836,13 @@ class UnifiedOpenAIScheduler {
   // 💾 设置会话映射
   async _setSessionMapping(sessionHash, accountId, accountType) {
     const client = redis.getClientSafe()
-    const mappingData = JSON.stringify({ accountId, accountType })
+    const mappingData = JSON.stringify({
+      accountId,
+      accountType,
+      mode: 'fallback',
+      policyVersion: 1,
+      createdAt: Date.now()
+    })
     // 依据配置设置TTL（小时）
     const appConfig = require('../../../config/config')
     const ttlHours = appConfig.session?.stickyTtlHours || 1
@@ -1017,23 +1058,29 @@ class UnifiedOpenAIScheduler {
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
-          // 验证映射的账户是否仍然可用并且在分组中
-          const isInGroup = await this._isAccountInGroup(mappedAccount.accountId, groupId)
-          if (isInGroup) {
-            const isAvailable = await this._isAccountAvailable(
-              mappedAccount.accountId,
-              mappedAccount.accountType,
-              { requestedModel, requiredProviderEndpoint: options.requiredProviderEndpoint }
-            )
-            if (isAvailable) {
-              // 🚀 智能会话续期（续期 unified 映射键，按配置）
-              await this._extendSessionMappingTTL(sessionHash)
-              logger.info(
-                `🎯 Using sticky session account from group: ${mappedAccount.accountId} (${mappedAccount.accountType})`
+          const stickySessionMode = await this._resolveStickySessionMode(
+            mappedAccount,
+            mappedAccount.accountType
+          )
+          if (stickySessionMode !== 'off') {
+            // 验证映射的账户是否仍然可用并且在分组中
+            const isInGroup = await this._isAccountInGroup(mappedAccount.accountId, groupId)
+            if (isInGroup) {
+              const isAvailable = await this._isAccountAvailable(
+                mappedAccount.accountId,
+                mappedAccount.accountType,
+                { requestedModel, requiredProviderEndpoint: options.requiredProviderEndpoint }
               )
-              // 更新账户的最后使用时间
-              await this.updateAccountLastUsed(mappedAccount.accountId, mappedAccount.accountType)
-              return mappedAccount
+              if (isAvailable) {
+                // 🚀 智能会话续期（续期 unified 映射键，按配置）
+                await this._extendSessionMappingTTL(sessionHash)
+                logger.info(
+                  `🎯 Using sticky session account from group: ${mappedAccount.accountId} (${mappedAccount.accountType})`
+                )
+                // 更新账户的最后使用时间
+                await this.updateAccountLastUsed(mappedAccount.accountId, mappedAccount.accountType)
+                return mappedAccount
+              }
             }
           }
           // 如果账户不可用或不在分组中，删除映射
@@ -1150,7 +1197,11 @@ class UnifiedOpenAIScheduler {
       const selectedAccount = sortedAccounts[0]
 
       // 如果有会话哈希，建立新的映射
-      if (sessionHash) {
+      if (
+        sessionHash &&
+        (await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)) ===
+          'fallback'
+      ) {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
