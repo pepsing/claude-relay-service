@@ -573,8 +573,12 @@ const stickySessionLabel = (policy = {}) => {
   const rule = policy.effectiveMode === 'fallback' ? '故障切换' : '关闭'
   const sources = {
     account: '账户',
+    group: '分组托管',
     'global-default': '继承全局',
     'global-disabled': '全局总开关'
+  }
+  if (policy.effectiveMode === 'fallback' && policy.group?.name) {
+    return `粘滞：组优先（${policy.group.name}）`
   }
   return `粘滞：${rule}（${sources[policy.source] || '未知'}）`
 }
@@ -587,10 +591,19 @@ const stickySessionTitle = (policy = {}) => {
     return '全局粘滞总开关已关闭，账户配置暂不生效'
   }
 
-  const prefix = policy.source === 'account' ? '账户规则' : '继承全局默认规则'
-  return policy.effectiveMode === 'fallback'
-    ? `${prefix}：保持会话粘滞，仅在账户并发满或不可用时切换`
-    : `${prefix}：关闭会话粘滞，按正常调度选择账户`
+  const prefix =
+    policy.source === 'group'
+      ? '分组托管规则'
+      : policy.source === 'account'
+        ? '账户规则'
+        : '继承全局默认规则'
+  if (policy.effectiveMode !== 'fallback') {
+    return `${prefix}：关闭会话粘滞，按正常调度选择账户`
+  }
+  const failover = policy.group?.name
+    ? `账户不可用时优先切换到“${policy.group.name}”组，整组不可用后放开到全池`
+    : '账户不可用时在全池切换'
+  return `${prefix}：保持会话粘滞；并发满时原账户排队，${failover}`
 }
 
 const routeStatusLabel = (status) => {

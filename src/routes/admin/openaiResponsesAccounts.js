@@ -8,6 +8,7 @@ const axios = require('axios')
 const openaiResponsesAccountService = require('../../services/account/openaiResponsesAccountService')
 const apiKeyService = require('../../services/apiKeyService')
 const accountGroupService = require('../../services/accountGroupService')
+const stickySessionGroupService = require('../../services/stickySessionGroupService')
 const redis = require('../../models/redis')
 const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
@@ -149,10 +150,11 @@ router.get('/openai-responses-accounts', authenticateAdmin, async (req, res) => 
     const accountIds = accounts.map((a) => a.id)
 
     // 并行获取：轻量 API Keys + 分组信息 + daily cost + 清理限流状态
-    const [allApiKeys, allGroupInfosMap, dailyCostMap] = await Promise.all([
+    const [allApiKeys, allGroupInfosMap, dailyCostMap, stickyGroupMap] = await Promise.all([
       apiKeyService.getAllApiKeysLite(),
       accountGroupService.batchGetAccountGroupsByIndex(accountIds, 'openai'),
       redis.batchGetAccountDailyCost(accountIds),
+      stickySessionGroupService.batchGetGroupsForAccounts(accountIds, 'openai-responses'),
       // 批量清理限流状态
       Promise.all(accountIds.map((id) => openaiResponsesAccountService.checkAndClearRateLimit(id)))
     ])
@@ -229,6 +231,8 @@ router.get('/openai-responses-accounts', authenticateAdmin, async (req, res) => 
       return {
         ...formattedAccount,
         groupInfos,
+        stickySessionGroup: stickyGroupMap.get(account.id) || null,
+        stickySessionGroupId: stickyGroupMap.get(account.id)?.id || '',
         boundApiKeysCount: boundCount,
         usage: {
           daily: { ...usageStats.daily, cost: dailyCost },
@@ -248,7 +252,9 @@ router.get('/openai-responses-accounts', authenticateAdmin, async (req, res) => 
 // 创建 OpenAI-Responses 账户
 router.post('/openai-responses-accounts', authenticateAdmin, async (req, res) => {
   try {
-    const accountData = req.body
+    const accountData = { ...req.body }
+    const stickySessionGroupId = accountData.stickySessionGroupId || null
+    delete accountData.stickySessionGroupId
     const duplicateAccount = await findDuplicateAccountByName(accountData.name)
     if (duplicateAccount) {
       return res.status(409).json({
@@ -288,6 +294,22 @@ router.post('/openai-responses-accounts', authenticateAdmin, async (req, res) =>
       return res.status(400).json({ success: false, error: 'Invalid sticky session mode' })
     }
 
+    if (stickySessionGroupId && accountData.accountType && accountData.accountType !== 'shared') {
+      return res.status(400).json({
+        success: false,
+        error: 'Only shared accounts can join sticky session groups'
+      })
+    }
+    if (stickySessionGroupId) {
+      const stickyGroup = await stickySessionGroupService.getGroup(stickySessionGroupId)
+      if (!stickyGroup || stickyGroup.platform !== 'openai-responses') {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid OpenAI-Responses sticky session group'
+        })
+      }
+    }
+
     const account = await openaiResponsesAccountService.createAccount(accountData)
 
     // 如果是分组类型，处理分组绑定
@@ -305,6 +327,13 @@ router.post('/openai-responses-accounts', authenticateAdmin, async (req, res) =>
           `🏢 Added OpenAI-Responses account ${account.id} to group: ${accountData.groupId}`
         )
       }
+    }
+    if (stickySessionGroupId) {
+      await stickySessionGroupService.setAccountGroup(
+        account.id,
+        'openai-responses',
+        stickySessionGroupId
+      )
     }
 
     const formattedAccount = formatAccountExpiry(account)
@@ -335,6 +364,12 @@ router.put('/openai-responses-accounts/:id', authenticateAdmin, async (req, res)
 
     // ✅ 【新增】映射字段名：前端的 expiresAt -> 后端的 subscriptionExpiresAt
     const mappedUpdates = mapExpiryField(updates, 'OpenAI-Responses', id)
+    const hasStickySessionGroupUpdate = Object.prototype.hasOwnProperty.call(
+      mappedUpdates,
+      'stickySessionGroupId'
+    )
+    const stickySessionGroupId = mappedUpdates.stickySessionGroupId || null
+    delete mappedUpdates.stickySessionGroupId
     if (mappedUpdates.name !== undefined) {
       const duplicateAccount = await findDuplicateAccountByName(mappedUpdates.name, id)
       if (duplicateAccount) {
@@ -379,6 +414,23 @@ router.put('/openai-responses-accounts/:id', authenticateAdmin, async (req, res)
       return res.status(400).json({ success: false, error: 'Invalid sticky session mode' })
     }
 
+    const nextAccountType = mappedUpdates.accountType || currentAccount.accountType || 'shared'
+    if (stickySessionGroupId && nextAccountType !== 'shared') {
+      return res.status(400).json({
+        success: false,
+        error: 'Only shared accounts can join sticky session groups'
+      })
+    }
+    if (stickySessionGroupId) {
+      const stickyGroup = await stickySessionGroupService.getGroup(stickySessionGroupId)
+      if (!stickyGroup || stickyGroup.platform !== 'openai-responses') {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid OpenAI-Responses sticky session group'
+        })
+      }
+    }
+
     // 处理分组变更
     if (mappedUpdates.accountType !== undefined) {
       // 如果之前是分组类型，需要从所有分组中移除
@@ -420,6 +472,14 @@ router.put('/openai-responses-accounts/:id', authenticateAdmin, async (req, res)
       return res.status(400).json(result)
     }
 
+    if (hasStickySessionGroupUpdate || nextAccountType !== 'shared') {
+      await stickySessionGroupService.setAccountGroup(
+        id,
+        'openai-responses',
+        nextAccountType === 'shared' ? stickySessionGroupId : null
+      )
+    }
+
     logger.success(`📝 Admin updated OpenAI-Responses account: ${id}`)
     res.json({ success: true, ...result })
   } catch (error) {
@@ -453,6 +513,7 @@ router.delete('/openai-responses-accounts/:id', authenticateAdmin, async (req, r
       logger.info(`Removed OpenAI-Responses account ${id} from all groups`)
     }
 
+    await stickySessionGroupService.removeAccount(id, 'openai-responses')
     const result = await openaiResponsesAccountService.deleteAccount(id)
 
     let message = 'OpenAI-Responses账号已成功删除'

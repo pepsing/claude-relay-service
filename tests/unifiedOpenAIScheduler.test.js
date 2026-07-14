@@ -20,6 +20,13 @@ jest.mock('../src/services/account/openaiResponsesAccountService', () => ({
 }))
 
 jest.mock('../src/services/accountGroupService', () => ({}))
+jest.mock('../src/services/stickySessionGroupService', () => ({
+  filterAccountsByGroup: jest.fn(),
+  getGroup: jest.fn(),
+  getGroupForAccount: jest.fn(),
+  getGroupMembers: jest.fn(),
+  isAccountInGroup: jest.fn()
+}))
 jest.mock('../src/services/claudeRelayConfigService', () => ({
   getConfig: jest.fn()
 }))
@@ -52,6 +59,7 @@ const openaiResponsesAccountService = require('../src/services/account/openaiRes
 const redis = require('../src/models/redis')
 const upstreamErrorHelper = require('../src/utils/upstreamErrorHelper')
 const claudeRelayConfigService = require('../src/services/claudeRelayConfigService')
+const stickySessionGroupService = require('../src/services/stickySessionGroupService')
 const unifiedOpenAIScheduler = require('../src/services/scheduler/unifiedOpenAIScheduler')
 
 const modelMappingSupports = (modelMapping, requestedModel) => {
@@ -83,6 +91,11 @@ describe('UnifiedOpenAIScheduler', () => {
       stickySessionEnabled: true,
       stickySessionDefaultMode: 'fallback'
     })
+    stickySessionGroupService.getGroupForAccount.mockResolvedValue(null)
+    stickySessionGroupService.getGroup.mockResolvedValue(null)
+    stickySessionGroupService.getGroupMembers.mockResolvedValue([])
+    stickySessionGroupService.filterAccountsByGroup.mockImplementation(async (accounts) => accounts)
+    stickySessionGroupService.isAccountInGroup.mockResolvedValue(true)
     upstreamErrorHelper.isTempUnavailable.mockResolvedValue(false)
   })
 
@@ -182,6 +195,44 @@ describe('UnifiedOpenAIScheduler', () => {
         'unified_openai_session_mapping:session-hash',
         expect.any(Number),
         expect.stringContaining('"policyVersion":1')
+      )
+    })
+
+    it('lets a sticky group override an account-level off policy', async () => {
+      stickySessionGroupService.getGroupForAccount.mockResolvedValue({
+        id: 'krill-group',
+        name: 'Krill'
+      })
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'responses-1',
+          name: 'Krill Responses',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'responses',
+          supportedModels: { 'gpt-5': 'gpt-5' },
+          stickySessionMode: 'off'
+        }
+      ])
+
+      await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        'grouped-session',
+        'gpt-5',
+        { requiredProviderEndpoint: 'responses' }
+      )
+
+      expect(mockRedisClient.setex).toHaveBeenCalledWith(
+        'unified_openai_session_mapping:grouped-session',
+        expect.any(Number),
+        expect.stringContaining('"stickySessionGroupId":"krill-group"')
+      )
+      expect(mockRedisClient.setex).toHaveBeenCalledWith(
+        'unified_openai_session_group_mapping:grouped-session',
+        expect.any(Number),
+        'krill-group'
       )
     })
 

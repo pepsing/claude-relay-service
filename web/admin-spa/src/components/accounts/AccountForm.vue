@@ -2011,15 +2011,45 @@
                 会话粘滞策略
               </label>
               <select
+                v-if="form.stickySessionGroupId"
+                class="form-input w-full border-cyan-300 bg-cyan-50 text-cyan-800 dark:border-cyan-700 dark:bg-cyan-900/20 dark:text-cyan-200"
+                disabled
+              >
+                <option>由分组管理：保持粘滞，组内故障切换</option>
+              </select>
+              <select
+                v-else
                 v-model="form.stickySessionMode"
                 class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
               >
                 <option value="inherit">继承全局设置</option>
                 <option value="off">关闭粘滞，正常负载均衡</option>
-                <option value="fallback">保持粘滞，不可用或并发满时切换</option>
+                <option value="fallback">保持粘滞，不可用时故障切换</option>
+              </select>
+              <p
+                v-if="form.stickySessionGroupId"
+                class="mt-1 text-xs text-cyan-700 dark:text-cyan-300"
+              >
+                已加入粘滞分组，分组自动接管当前策略；仅全局总开关关闭时不生效，移出分组后恢复账户原策略
+              </p>
+              <p v-else class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                全局总开关关闭时，本账户设置不会生效；并发满时保留当前账户并排队
+              </p>
+              <label class="mb-3 mt-4 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                粘滞故障切换分组
+              </label>
+              <select
+                v-model="form.stickySessionGroupId"
+                class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                :disabled="form.accountType !== 'shared' || stickySessionGroupsLoading"
+              >
+                <option value="">未分组（整池故障切换）</option>
+                <option v-for="group in stickySessionGroups" :key="group.id" :value="group.id">
+                  {{ group.name }}（{{ group.memberCount || 0 }} 个成员）
+                </option>
               </select>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                全局总开关关闭时，本账户设置不会生效
+                分组内账户优先互相切换；整组不可用后才放开到其他分组或未分组账户
               </p>
             </div>
 
@@ -3067,15 +3097,45 @@
               会话粘滞策略
             </label>
             <select
+              v-if="form.stickySessionGroupId"
+              class="form-input w-full border-cyan-300 bg-cyan-50 text-cyan-800 dark:border-cyan-700 dark:bg-cyan-900/20 dark:text-cyan-200"
+              disabled
+            >
+              <option>由分组管理：保持粘滞，组内故障切换</option>
+            </select>
+            <select
+              v-else
               v-model="form.stickySessionMode"
               class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
             >
               <option value="inherit">继承全局设置</option>
               <option value="off">关闭粘滞，正常负载均衡</option>
-              <option value="fallback">保持粘滞，不可用或并发满时切换</option>
+              <option value="fallback">保持粘滞，不可用时故障切换</option>
+            </select>
+            <p
+              v-if="form.stickySessionGroupId"
+              class="mt-1 text-xs text-cyan-700 dark:text-cyan-300"
+            >
+              已加入粘滞分组，分组自动接管当前策略；仅全局总开关关闭时不生效，移出分组后恢复账户原策略
+            </p>
+            <p v-else class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              全局总开关关闭时，本账户设置不会生效；并发满时保留当前账户并排队
+            </p>
+            <label class="mb-3 mt-4 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+              粘滞故障切换分组
+            </label>
+            <select
+              v-model="form.stickySessionGroupId"
+              class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+              :disabled="form.accountType !== 'shared' || stickySessionGroupsLoading"
+            >
+              <option value="">未分组（整池故障切换）</option>
+              <option v-for="group in stickySessionGroups" :key="group.id" :value="group.id">
+                {{ group.name }}（{{ group.memberCount || 0 }} 个成员）
+              </option>
             </select>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              全局总开关关闭时，本账户设置不会生效
+              分组内账户优先互相切换；整组不可用后才放开到其他分组或未分组账户
             </p>
           </div>
 
@@ -4241,6 +4301,8 @@ const clearingCache = ref(false)
 
 // 平台分组状态
 const platformGroup = ref('')
+const stickySessionGroups = ref([])
+const stickySessionGroupsLoading = ref(false)
 
 // API Key 管理模态框
 const showApiKeyManagement = ref(false)
@@ -4460,6 +4522,8 @@ const form = ref({
   baseApi: props.account?.baseApi || '',
   providerEndpoint: normalizeProviderEndpointValue(props.account?.providerEndpoint),
   stickySessionMode: props.account?.stickySessionMode || 'inherit',
+  stickySessionGroupId:
+    props.account?.stickySessionGroupId || props.account?.stickySessionGroup?.id || '',
   // Gemini-API 特定字段
   baseUrl: props.account?.baseUrl || 'https://generativelanguage.googleapis.com',
   rateLimitDuration: props.account?.rateLimitDuration || 60,
@@ -4523,6 +4587,26 @@ const form = ref({
   })(),
   expiresAt: props.account?.expiresAt || null
 })
+
+const loadStickySessionGroups = async () => {
+  const platform = form.value.platform
+  if (platform !== 'claude-console' && platform !== 'openai-responses') {
+    stickySessionGroups.value = []
+    form.value.stickySessionGroupId = ''
+    return
+  }
+
+  stickySessionGroupsLoading.value = true
+  try {
+    const result = await httpApis.getStickySessionGroupsApi({ platform })
+    stickySessionGroups.value = result?.success ? result.data || [] : []
+    if (!result?.success) {
+      showToast(result?.message || '加载粘滞分组失败', 'error')
+    }
+  } finally {
+    stickySessionGroupsLoading.value = false
+  }
+}
 
 const buildClaudeTempUnavailablePolicyPayload = () => ({
   disableTempUnavailable: !!form.value.disableTempUnavailable,
@@ -5730,6 +5814,7 @@ const createAccount = async () => {
       if (form.value.platform === 'claude-console') {
         data.interceptWarmup = !!form.value.interceptWarmup
         data.stickySessionMode = form.value.stickySessionMode || 'inherit'
+        data.stickySessionGroupId = form.value.stickySessionGroupId || ''
       }
       // 额度管理字段
       data.dailyQuota = form.value.dailyQuota || 0
@@ -5750,6 +5835,7 @@ const createAccount = async () => {
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       data.stickySessionMode = form.value.stickySessionMode || 'inherit'
+      data.stickySessionGroupId = form.value.stickySessionGroupId || ''
     } else if (form.value.platform === 'gemini-antigravity') {
       // Antigravity OAuth - set oauthProvider, submission happens below
       data.oauthProvider = 'antigravity'
@@ -6096,6 +6182,7 @@ const updateAccount = async () => {
       // 并发控制字段
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       data.stickySessionMode = form.value.stickySessionMode || 'inherit'
+      data.stickySessionGroupId = form.value.stickySessionGroupId || ''
     }
 
     // OpenAI-Responses 特定更新
@@ -6114,6 +6201,7 @@ const updateAccount = async () => {
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       data.stickySessionMode = form.value.stickySessionMode || 'inherit'
+      data.stickySessionGroupId = form.value.stickySessionGroupId || ''
     }
 
     // Bedrock 特定更新
@@ -6754,6 +6842,8 @@ watch(
         // 并发控制字段
         maxConcurrentTasks: newAccount.maxConcurrentTasks || 0,
         stickySessionMode: newAccount.stickySessionMode || 'inherit',
+        stickySessionGroupId:
+          newAccount.stickySessionGroupId || newAccount.stickySessionGroup?.id || '',
         // 上游错误处理
         disableAutoProtection: toFormBoolean(newAccount.disableAutoProtection),
         disableTempUnavailable: toFormBoolean(newAccount.disableTempUnavailable),
@@ -6963,6 +7053,7 @@ onMounted(() => {
 
   // 加载模型列表
   loadCommonModels()
+  loadStickySessionGroups()
 
   // 获取Claude Code统一User-Agent信息
   fetchUnifiedUserAgent()
@@ -6978,6 +7069,16 @@ watch(
   (newPlatform) => {
     if (newPlatform === 'claude') {
       fetchUnifiedUserAgent()
+    }
+    loadStickySessionGroups()
+  }
+)
+
+watch(
+  () => form.value.accountType,
+  (accountType) => {
+    if (accountType !== 'shared') {
+      form.value.stickySessionGroupId = ''
     }
   }
 )

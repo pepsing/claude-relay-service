@@ -16,6 +16,7 @@ const usageStatsService = require('../services/usageStatsService')
 const crypto = require('crypto')
 const ProxyHelper = require('../utils/proxyHelper')
 const upstreamErrorHelper = require('../utils/upstreamErrorHelper')
+const accountConcurrencyQueueService = require('../services/accountConcurrencyQueueService')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const { IncrementalSSEParser } = require('../utils/sseParser')
 const { getSafeMessage } = require('../utils/errorSanitizer')
@@ -322,7 +323,12 @@ function getMaxConcurrentTasks(account) {
   return Number.isInteger(maxConcurrentTasks) && maxConcurrentTasks > 0 ? maxConcurrentTasks : 0
 }
 
-async function acquireOpenAIAccountConcurrency(account, accountType = 'openai') {
+async function acquireOpenAIAccountConcurrency(
+  account,
+  accountType = 'openai',
+  sessionHash = null,
+  isDisconnected = () => false
+) {
   const maxConcurrentTasks = getMaxConcurrentTasks(account)
   if (maxConcurrentTasks <= 0) {
     return null
@@ -331,17 +337,39 @@ async function acquireOpenAIAccountConcurrency(account, accountType = 'openai') 
   const accountId = account.id
   const requestId = crypto.randomUUID()
   const concurrencyKey = getOpenAIAccountConcurrencyKey(accountId, accountType)
-  const newConcurrency = Number(
-    await redis.incrConcurrency(concurrencyKey, requestId, ACCOUNT_CONCURRENCY_LEASE_SECONDS)
-  )
+  const mapping =
+    sessionHash && typeof unifiedOpenAIScheduler._getSessionMapping === 'function'
+      ? await unifiedOpenAIScheduler._getSessionMapping(sessionHash)
+      : null
+  const shouldQueue =
+    mapping?.mode === 'fallback' &&
+    mapping.accountId === accountId &&
+    mapping.accountType === accountType
+  const tryAcquire = () =>
+    redis.incrConcurrency(concurrencyKey, requestId, ACCOUNT_CONCURRENCY_LEASE_SECONDS)
+  const release = () => redis.decrConcurrency(concurrencyKey, requestId)
 
-  if (newConcurrency > maxConcurrentTasks) {
-    await redis.decrConcurrency(concurrencyKey, requestId)
-    const error = new Error(
-      `${accountType} account ${account.name || accountId} concurrency limit exceeded`
-    )
-    error.statusCode = 429
-    throw error
+  let newConcurrency
+  if (shouldQueue) {
+    const queuedSlot = await accountConcurrencyQueueService.waitForSlot({
+      accountId,
+      accountName: account.name,
+      maxConcurrentTasks,
+      tryAcquire,
+      release,
+      isDisconnected
+    })
+    newConcurrency = queuedSlot.currentConcurrency
+  } else {
+    newConcurrency = Number(await tryAcquire())
+    if (newConcurrency > maxConcurrentTasks) {
+      await release()
+      const error = new Error(
+        `${accountType} account ${account.name || accountId} concurrency limit exceeded`
+      )
+      error.statusCode = 429
+      throw error
+    }
   }
 
   const refreshInterval = setInterval(() => {
@@ -750,7 +778,12 @@ const handleResponses = async (req, res) => {
       return await openaiResponsesRelayService.handleRequest(req, res, account, apiKeyData)
     }
 
-    accountConcurrencyLease = await acquireOpenAIAccountConcurrency(account, 'openai')
+    accountConcurrencyLease = await acquireOpenAIAccountConcurrency(
+      account,
+      'openai',
+      sessionHash,
+      () => req.socket?.destroyed || res.destroyed
+    )
 
     if (schedulerModel !== requestedModel) {
       logger.info(

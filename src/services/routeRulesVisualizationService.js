@@ -1,6 +1,7 @@
 const apiKeyService = require('./apiKeyService')
 const requestDetailService = require('./requestDetailService')
 const claudeRelayConfigService = require('./claudeRelayConfigService')
+const stickySessionGroupService = require('./stickySessionGroupService')
 const claudeAccountService = require('./account/claudeAccountService')
 const claudeConsoleAccountService = require('./account/claudeConsoleAccountService')
 const ccrAccountService = require('./account/ccrAccountService')
@@ -1119,25 +1120,34 @@ function buildEditableAccount(account, sourceType, loader) {
   }
 }
 
-function buildStickySessionPolicy(account, sourceType, globalConfig = {}) {
+function buildStickySessionPolicy(account, sourceType, globalConfig = {}, group = null) {
   if (!STICKY_SESSION_ACCOUNT_TYPES.has(sourceType)) {
     return { supported: false }
   }
 
   const configuredMode = normalizeAccountStickySessionMode(account.stickySessionMode)
   const globalEnabled = globalConfig.stickySessionEnabled !== false
+  const effectiveMode = !globalEnabled
+    ? 'off'
+    : group
+      ? 'fallback'
+      : resolveStickySessionMode(account, globalConfig)
 
   return {
     supported: true,
     configuredMode,
-    effectiveMode: resolveStickySessionMode(account, globalConfig),
+    effectiveMode,
     source: !globalEnabled
       ? 'global-disabled'
-      : configuredMode === 'inherit'
-        ? 'global-default'
-        : 'account',
+      : group
+        ? 'group'
+        : configuredMode === 'inherit'
+          ? 'global-default'
+          : 'account',
     globalEnabled,
-    globalDefaultMode: normalizeDefaultStickySessionMode(globalConfig.stickySessionDefaultMode)
+    globalDefaultMode: normalizeDefaultStickySessionMode(globalConfig.stickySessionDefaultMode),
+    group: group ? { id: group.id, name: group.name } : null,
+    failoverScope: group ? 'group-first' : 'pool'
   }
 }
 
@@ -1208,6 +1218,15 @@ async function normalizeAccount(account, sourceType, context) {
         ? 'degraded'
         : 'routable'
   const priority = toNumber(account.priority, 50)
+  const stickyGroup = STICKY_SESSION_ACCOUNT_TYPES.has(sourceType)
+    ? await stickySessionGroupService.getGroupForAccount(account.id, sourceType)
+    : null
+  const stickySession = buildStickySessionPolicy(
+    account,
+    sourceType,
+    context.globalConfig,
+    stickyGroup
+  )
 
   return {
     id: account.id,
@@ -1233,7 +1252,7 @@ async function normalizeAccount(account, sourceType, context) {
     modelSupported,
     modelMapping: buildModelMappingInfo(account, context.model),
     supportedModels,
-    stickySession: buildStickySessionPolicy(account, sourceType, context.globalConfig),
+    stickySession,
     daily,
     concurrency,
     health,

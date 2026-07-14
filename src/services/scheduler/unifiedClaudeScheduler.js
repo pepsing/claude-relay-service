@@ -3,6 +3,7 @@ const claudeConsoleAccountService = require('../account/claudeConsoleAccountServ
 const bedrockAccountService = require('../account/bedrockAccountService')
 const ccrAccountService = require('../account/ccrAccountService')
 const accountGroupService = require('../accountGroupService')
+const stickySessionGroupService = require('../stickySessionGroupService')
 const redis = require('../../models/redis')
 const logger = require('../../utils/logger')
 const {
@@ -45,6 +46,94 @@ function isProAccount(info) {
 class UnifiedClaudeScheduler {
   constructor() {
     this.SESSION_MAPPING_PREFIX = 'unified_claude_session_mapping:'
+    this.SESSION_GROUP_MAPPING_PREFIX = 'unified_claude_session_group_mapping:'
+  }
+
+  _isDedicatedAccountFallbackEnabled() {
+    return config.claude?.dedicatedAccountFallback === true
+  }
+
+  async _getSessionGroupMapping(sessionHash) {
+    if (!sessionHash) {
+      return null
+    }
+    const client = redis.getClientSafe()
+    return client.get(`${this.SESSION_GROUP_MAPPING_PREFIX}${sessionHash}`)
+  }
+
+  async _setSessionGroupMapping(sessionHash, groupId) {
+    if (!sessionHash) {
+      return
+    }
+    const client = redis.getClientSafe()
+    const key = `${this.SESSION_GROUP_MAPPING_PREFIX}${sessionHash}`
+    if (!groupId) {
+      await client.del(key)
+      return
+    }
+
+    const appConfig = require('../../../config/config')
+    const ttlHours = appConfig.session?.stickyTtlHours || 1
+    const ttlSeconds = Math.max(1, Math.floor(ttlHours * 60 * 60))
+    await client.setex(key, ttlSeconds, groupId)
+  }
+
+  async _deleteSessionGroupMapping(sessionHash) {
+    if (!sessionHash) {
+      return
+    }
+    const client = redis.getClientSafe()
+    await client.del(`${this.SESSION_GROUP_MAPPING_PREFIX}${sessionHash}`)
+  }
+
+  async _getAccountStickySessionGroup(accountId, accountType) {
+    if (accountType !== 'claude-console') {
+      return null
+    }
+    return stickySessionGroupService.getGroupForAccount(accountId, 'claude-console')
+  }
+
+  async _resolveSessionGroupId(sessionHash, mappedAccount = null) {
+    let groupId = await this._getSessionGroupMapping(sessionHash)
+    if (!groupId && mappedAccount?.stickySessionGroupId) {
+      groupId = mappedAccount.stickySessionGroupId
+    }
+    if (!groupId && mappedAccount?.accountId) {
+      const group = await this._getAccountStickySessionGroup(
+        mappedAccount.accountId,
+        mappedAccount.accountType
+      )
+      groupId = group?.id || null
+    }
+    if (groupId) {
+      await this._setSessionGroupMapping(sessionHash, groupId)
+    }
+    return groupId
+  }
+
+  async _restrictAccountsToSessionGroup(accounts, groupId, sessionHash) {
+    if (!groupId) {
+      return accounts
+    }
+
+    const group = await stickySessionGroupService.getGroup(groupId)
+    if (!group) {
+      await this._deleteSessionGroupMapping(sessionHash)
+      return accounts
+    }
+
+    const filteredAccounts = await stickySessionGroupService.filterAccountsByGroup(
+      accounts,
+      groupId
+    )
+    if (filteredAccounts.length === 0) {
+      logger.warn(
+        `⚠️ Sticky session group ${group.name} has no available accounts; releasing group boundary`
+      )
+      await this._deleteSessionGroupMapping(sessionHash)
+      return accounts
+    }
+    return filteredAccounts
   }
 
   async _resolveStickySessionMode(account, accountType = null) {
@@ -56,6 +145,16 @@ class UnifiedClaudeScheduler {
     let policyAccount = account
     const resolvedAccountType = accountType || account?.accountType
     const accountId = account?.accountId || account?.id
+
+    if (resolvedAccountType === 'claude-console' && accountId) {
+      const stickyGroup = await stickySessionGroupService.getGroupForAccount(
+        accountId,
+        'claude-console'
+      )
+      if (stickyGroup) {
+        return 'fallback'
+      }
+    }
 
     if (
       resolvedAccountType === 'claude-console' &&
@@ -290,7 +389,7 @@ class UnifiedClaudeScheduler {
         // 而旧代码先判断 temp_unavailable 且仅打日志后继续向下执行，导致
         // CLAUDE_DEDICATED_RATE_LIMITED 永远不会抛出，专属 Key 被静默回退到共享池。
         const boundAccount = await redis.getClaudeAccount(apiKeyData.claudeAccountId)
-        const allowDedicatedFallback = config.claude?.dedicatedAccountFallback === true
+        const allowDedicatedFallback = this._isDedicatedAccountFallbackEnabled()
 
         const dedicatedUnavailableError = (reason) => {
           const error = new Error(`Dedicated Claude account is unavailable (${reason})`)
@@ -451,9 +550,17 @@ class UnifiedClaudeScheduler {
       // CCR 账户不支持绑定（仅通过 ccr, 前缀进行 CCR 路由）
 
       // 如果有会话哈希，检查是否有已映射的账户
+      let stickySessionGroupId = null
       if (sessionHash) {
+        const globalConfig = await claudeRelayConfigService.getConfig()
+        if (globalConfig.stickySessionEnabled === false) {
+          await this._deleteSessionGroupMapping(sessionHash)
+        }
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
+          if (globalConfig.stickySessionEnabled !== false) {
+            stickySessionGroupId = await this._resolveSessionGroupId(sessionHash, mappedAccount)
+          }
           const stickySessionMode = await this._resolveStickySessionMode(
             mappedAccount,
             mappedAccount.accountType
@@ -463,6 +570,8 @@ class UnifiedClaudeScheduler {
               `ℹ️ Sticky session disabled for mapped account ${mappedAccount.accountId}; removing mapping for session ${sessionHash}`
             )
             await this._deleteSessionMapping(sessionHash)
+            await this._deleteSessionGroupMapping(sessionHash)
+            stickySessionGroupId = null
           } else if (vendor !== 'ccr' && mappedAccount.accountType === 'ccr') {
             // 当本次请求不是 CCR 前缀时，不允许使用指向 CCR 的粘性会话映射
             logger.info(
@@ -471,11 +580,20 @@ class UnifiedClaudeScheduler {
             await this._deleteSessionMapping(sessionHash)
           } else {
             // 验证映射的账户是否仍然可用
-            const isAvailable = await this._isAccountAvailable(
-              mappedAccount.accountId,
-              mappedAccount.accountType,
-              effectiveModel
-            )
+            const isInStickyGroup = stickySessionGroupId
+              ? await stickySessionGroupService.isAccountInGroup(
+                  mappedAccount.accountId,
+                  stickySessionGroupId
+                )
+              : true
+            const isAvailable =
+              isInStickyGroup &&
+              (await this._isAccountAvailable(
+                mappedAccount.accountId,
+                mappedAccount.accountType,
+                effectiveModel,
+                { ignoreConcurrency: true }
+              ))
             if (isAvailable) {
               // 🚀 智能会话续期：剩余时间少于14天时自动续期到15天（续期正确的 unified 映射键）
               await this._extendSessionMappingTTL(sessionHash)
@@ -490,14 +608,25 @@ class UnifiedClaudeScheduler {
               await this._deleteSessionMapping(sessionHash)
             }
           }
+        } else if (globalConfig.stickySessionEnabled !== false) {
+          stickySessionGroupId = await this._resolveSessionGroupId(sessionHash)
         }
       }
 
       // 获取所有可用账户（传递请求的模型进行过滤）
-      const availableAccounts = await this._getAllAvailableAccounts(
+      const stickyGroupMemberIds = stickySessionGroupId
+        ? new Set(await stickySessionGroupService.getGroupMembers(stickySessionGroupId))
+        : new Set()
+      let availableAccounts = await this._getAllAvailableAccounts(
         apiKeyData,
         effectiveModel,
-        false // 仅前缀才走 CCR：默认池不包含 CCR 账户
+        false, // 仅前缀才走 CCR：默认池不包含 CCR 账户
+        { ignoreConcurrencyAccountIds: stickyGroupMemberIds }
+      )
+      availableAccounts = await this._restrictAccountsToSessionGroup(
+        availableAccounts,
+        stickySessionGroupId,
+        sessionHash
       )
 
       if (availableAccounts.length === 0) {
@@ -515,22 +644,35 @@ class UnifiedClaudeScheduler {
       const sortedAccounts = sortAccountsByPriority(availableAccounts)
 
       // 选择第一个账户
-      const selectedAccount = sortedAccounts[0]
+      const selectedAccount =
+        sortedAccounts.find((account) => account.concurrencyFull !== true) || sortedAccounts[0]
+
+      if (
+        stickySessionGroupId &&
+        !(await stickySessionGroupService.isAccountInGroup(
+          selectedAccount.accountId,
+          stickySessionGroupId
+        ))
+      ) {
+        stickySessionGroupId = null
+      }
 
       // 如果有会话哈希，建立新的映射
-      if (
-        sessionHash &&
-        (await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)) ===
-          'fallback'
-      ) {
+      const selectedStickySessionMode = sessionHash
+        ? await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)
+        : 'off'
+      if (sessionHash && selectedStickySessionMode === 'fallback') {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
-          selectedAccount.accountType
+          selectedAccount.accountType,
+          stickySessionGroupId || undefined
         )
         logger.info(
           `🎯 Created new sticky session mapping: ${selectedAccount.name} (${selectedAccount.accountId}, ${selectedAccount.accountType}) for session ${sessionHash}`
         )
+      } else if (sessionHash) {
+        await this._deleteSessionGroupMapping(sessionHash)
       }
 
       logger.info(
@@ -548,8 +690,14 @@ class UnifiedClaudeScheduler {
   }
 
   // 📋 获取所有可用账户（合并官方和Console）
-  async _getAllAvailableAccounts(apiKeyData, requestedModel = null, includeCcr = false) {
+  async _getAllAvailableAccounts(
+    apiKeyData,
+    requestedModel = null,
+    includeCcr = false,
+    options = {}
+  ) {
     const availableAccounts = []
+    const ignoreConcurrencyAccountIds = options.ignoreConcurrencyAccountIds || new Set()
     // 请求模型所属的限流家族（opus/sonnet/haiku/fable）
     const requestedModelFamily = getRateLimitModelFamily(requestedModel)
 
@@ -921,13 +1069,14 @@ class UnifiedClaudeScheduler {
       for (const { account, currentConcurrency } of concurrencyResults) {
         const isConcurrencyFull = currentConcurrency >= account.maxConcurrentTasks
 
-        if (!isConcurrencyFull) {
+        if (!isConcurrencyFull || ignoreConcurrencyAccountIds.has(account.id)) {
           availableAccounts.push({
             ...account,
             accountId: account.id,
             accountType: 'claude-console',
             priority: parseInt(account.priority) || 50,
-            lastUsedAt: account.lastUsedAt || '0'
+            lastUsedAt: account.lastUsedAt || '0',
+            concurrencyFull: isConcurrencyFull
           })
           logger.info(
             `✅ Added Claude Console account to available pool: ${account.name} (priority: ${account.priority}, concurrency: ${currentConcurrency}/${account.maxConcurrentTasks})`
@@ -1080,7 +1229,7 @@ class UnifiedClaudeScheduler {
   }
 
   // 🔍 检查账户是否可用
-  async _isAccountAvailable(accountId, accountType, requestedModel = null) {
+  async _isAccountAvailable(accountId, accountType, requestedModel = null, options = {}) {
     try {
       if (accountType === 'claude-official') {
         const account = await redis.getClaudeAccount(accountId)
@@ -1203,7 +1352,7 @@ class UnifiedClaudeScheduler {
         }
 
         // 检查并发限制（预检查，真正的原子抢占在 relayService 中进行）
-        if (account.maxConcurrentTasks > 0) {
+        if (!options.ignoreConcurrency && account.maxConcurrentTasks > 0) {
           const currentConcurrency = await redis.getConsoleAccountConcurrency(accountId)
           if (currentConcurrency >= account.maxConcurrentTasks) {
             logger.info(
@@ -1315,13 +1464,19 @@ class UnifiedClaudeScheduler {
   }
 
   // 💾 设置会话映射
-  async _setSessionMapping(sessionHash, accountId, accountType) {
+  async _setSessionMapping(sessionHash, accountId, accountType, stickySessionGroupId = undefined) {
     const client = redis.getClientSafe()
+    let resolvedGroupId = stickySessionGroupId
+    if (resolvedGroupId === undefined) {
+      const group = await this._getAccountStickySessionGroup(accountId, accountType)
+      resolvedGroupId = group?.id || null
+    }
     const mappingData = JSON.stringify({
       accountId,
       accountType,
       mode: 'fallback',
-      policyVersion: 1,
+      policyVersion: resolvedGroupId ? 2 : 1,
+      ...(resolvedGroupId ? { stickySessionGroupId: resolvedGroupId } : {}),
       createdAt: Date.now()
     })
     // 依据配置设置TTL（小时）
@@ -1329,6 +1484,7 @@ class UnifiedClaudeScheduler {
     const ttlHours = appConfig.session?.stickyTtlHours || 1
     const ttlSeconds = Math.max(1, Math.floor(ttlHours * 60 * 60))
     await client.setex(`${this.SESSION_MAPPING_PREFIX}${sessionHash}`, ttlSeconds, mappingData)
+    await this._setSessionGroupMapping(sessionHash, resolvedGroupId)
   }
 
   // 🗑️ 删除会话映射
@@ -1583,18 +1739,36 @@ class UnifiedClaudeScheduler {
 
       logger.info(`👥 Selecting account from group: ${group.name} (${group.platform})`)
 
+      const memberIds = await accountGroupService.getGroupMembers(groupId)
+      if (memberIds.length === 0) {
+        throw new Error(`Group ${group.name} has no members`)
+      }
+
       // 如果有会话哈希，检查是否有已映射的账户
+      let stickySessionGroupId = null
       if (sessionHash) {
+        const globalConfig = await claudeRelayConfigService.getConfig()
+        if (globalConfig.stickySessionEnabled === false) {
+          await this._deleteSessionGroupMapping(sessionHash)
+        }
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
+          if (globalConfig.stickySessionEnabled !== false) {
+            stickySessionGroupId = await this._resolveSessionGroupId(sessionHash, mappedAccount)
+          }
           const stickySessionMode = await this._resolveStickySessionMode(
             mappedAccount,
             mappedAccount.accountType
           )
           if (stickySessionMode !== 'off') {
             // 验证映射的账户是否属于这个分组
-            const memberIds = await accountGroupService.getGroupMembers(groupId)
-            if (memberIds.includes(mappedAccount.accountId)) {
+            const isInStickyGroup = stickySessionGroupId
+              ? await stickySessionGroupService.isAccountInGroup(
+                  mappedAccount.accountId,
+                  stickySessionGroupId
+                )
+              : true
+            if (memberIds.includes(mappedAccount.accountId) && isInStickyGroup) {
               // 非 CCR 请求时不允许 CCR 粘性映射
               if (!allowCcr && mappedAccount.accountType === 'ccr') {
                 await this._deleteSessionMapping(sessionHash)
@@ -1602,7 +1776,8 @@ class UnifiedClaudeScheduler {
                 const isAvailable = await this._isAccountAvailable(
                   mappedAccount.accountId,
                   mappedAccount.accountType,
-                  requestedModel
+                  requestedModel,
+                  { ignoreConcurrency: true }
                 )
                 if (isAvailable) {
                   // 🚀 智能会话续期：续期 unified 映射键
@@ -1614,19 +1789,18 @@ class UnifiedClaudeScheduler {
                 }
               }
             }
+          } else {
+            await this._deleteSessionGroupMapping(sessionHash)
+            stickySessionGroupId = null
           }
           // 如果映射的账户不可用或不在分组中，删除映射
           await this._deleteSessionMapping(sessionHash)
+        } else if (globalConfig.stickySessionEnabled !== false) {
+          stickySessionGroupId = await this._resolveSessionGroupId(sessionHash)
         }
       }
 
-      // 获取分组内的所有账户
-      const memberIds = await accountGroupService.getGroupMembers(groupId)
-      if (memberIds.length === 0) {
-        throw new Error(`Group ${group.name} has no members`)
-      }
-
-      const availableAccounts = []
+      let availableAccounts = []
       // 请求模型所属的限流家族（opus/sonnet/haiku/fable）
       const requestedModelFamily = getRateLimitModelFamily(requestedModel)
 
@@ -1711,13 +1885,20 @@ class UnifiedClaudeScheduler {
           }
 
           // 🔒 检查 Claude Console 账户的并发限制
+          let concurrencyFull = false
           if (accountType === 'claude-console' && account.maxConcurrentTasks > 0) {
             const currentConcurrency = await redis.getConsoleAccountConcurrency(account.id)
             if (currentConcurrency >= account.maxConcurrentTasks) {
+              concurrencyFull = true
               logger.info(
                 `🚫 Skipping group member ${account.name} (${account.id}) due to concurrency limit: ${currentConcurrency}/${account.maxConcurrentTasks}`
               )
-              continue
+              const isStickyGroupMember = stickySessionGroupId
+                ? await stickySessionGroupService.isAccountInGroup(account.id, stickySessionGroupId)
+                : false
+              if (!isStickyGroupMember) {
+                continue
+              }
             }
           }
 
@@ -1726,7 +1907,8 @@ class UnifiedClaudeScheduler {
             accountId: account.id,
             accountType,
             priority: parseInt(account.priority) || 50,
-            lastUsedAt: account.lastUsedAt || '0'
+            lastUsedAt: account.lastUsedAt || '0',
+            concurrencyFull
           })
         }
       }
@@ -1735,26 +1917,45 @@ class UnifiedClaudeScheduler {
         throw new Error(`No available accounts in group ${group.name}`)
       }
 
+      availableAccounts = await this._restrictAccountsToSessionGroup(
+        availableAccounts,
+        stickySessionGroupId,
+        sessionHash
+      )
+
       // 使用现有的优先级排序逻辑
       const sortedAccounts = sortAccountsByPriority(availableAccounts)
 
       // 选择第一个账户
-      const selectedAccount = sortedAccounts[0]
+      const selectedAccount =
+        sortedAccounts.find((account) => account.concurrencyFull !== true) || sortedAccounts[0]
+
+      if (
+        stickySessionGroupId &&
+        !(await stickySessionGroupService.isAccountInGroup(
+          selectedAccount.accountId,
+          stickySessionGroupId
+        ))
+      ) {
+        stickySessionGroupId = null
+      }
 
       // 如果有会话哈希，建立新的映射
-      if (
-        sessionHash &&
-        (await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)) ===
-          'fallback'
-      ) {
+      const selectedStickySessionMode = sessionHash
+        ? await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)
+        : 'off'
+      if (sessionHash && selectedStickySessionMode === 'fallback') {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
-          selectedAccount.accountType
+          selectedAccount.accountType,
+          stickySessionGroupId || undefined
         )
         logger.info(
           `🎯 Created new sticky session mapping in group: ${selectedAccount.name} (${selectedAccount.accountId}, ${selectedAccount.accountType}) for session ${sessionHash}`
         )
+      } else if (sessionHash) {
+        await this._deleteSessionGroupMapping(sessionHash)
       }
 
       logger.info(

@@ -9,6 +9,7 @@ const router = express.Router()
 // 导入所有子路由
 const apiKeysRoutes = require('./apiKeys')
 const accountGroupsRoutes = require('./accountGroups')
+const stickySessionGroupsRoutes = require('./stickySessionGroups')
 const claudeAccountsRoutes = require('./claudeAccounts')
 const claudeConsoleAccountsRoutes = require('./claudeConsoleAccounts')
 const ccrAccountsRoutes = require('./ccrAccounts')
@@ -58,6 +59,7 @@ router.use('/', accountImportExportRoutes)
 
 // 使用相对路径的模块（需要指定基础路径前缀）
 router.use('/account-groups', accountGroupsRoutes)
+router.use('/sticky-session-groups', stickySessionGroupsRoutes)
 router.use('/ccr-accounts', ccrAccountsRoutes)
 router.use('/bedrock-accounts', bedrockAccountsRoutes)
 router.use('/gemini-accounts', geminiAccountsRoutes)

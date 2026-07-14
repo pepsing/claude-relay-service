@@ -9,6 +9,7 @@ const router = express.Router()
 const claudeConsoleAccountService = require('../../services/account/claudeConsoleAccountService')
 const claudeConsoleRelayService = require('../../services/relay/claudeConsoleRelayService')
 const accountGroupService = require('../../services/accountGroupService')
+const stickySessionGroupService = require('../../services/stickySessionGroupService')
 const apiKeyService = require('../../services/apiKeyService')
 const redis = require('../../models/redis')
 const { authenticateAdmin } = require('../../middleware/auth')
@@ -48,6 +49,11 @@ router.get('/claude-console-accounts', authenticateAdmin, async (req, res) => {
       }
     }
 
+    const stickyGroupMap = await stickySessionGroupService.batchGetGroupsForAccounts(
+      accounts.map((account) => account.id),
+      'claude-console'
+    )
+
     // 为每个账户添加使用统计信息
     const accountsWithStats = await Promise.all(
       accounts.map(async (account) => {
@@ -61,6 +67,8 @@ router.get('/claude-console-accounts', authenticateAdmin, async (req, res) => {
             // 转换schedulable为布尔值
             schedulable: account.schedulable === 'true' || account.schedulable === true,
             groupInfos,
+            stickySessionGroup: stickyGroupMap.get(account.id) || null,
+            stickySessionGroupId: stickyGroupMap.get(account.id)?.id || '',
             usage: {
               daily: usageStats.daily,
               total: usageStats.total,
@@ -80,6 +88,8 @@ router.get('/claude-console-accounts', authenticateAdmin, async (req, res) => {
               // 转换schedulable为布尔值
               schedulable: account.schedulable === 'true' || account.schedulable === true,
               groupInfos,
+              stickySessionGroup: stickyGroupMap.get(account.id) || null,
+              stickySessionGroupId: stickyGroupMap.get(account.id)?.id || '',
               usage: {
                 daily: { tokens: 0, requests: 0, allTokens: 0 },
                 total: { tokens: 0, requests: 0, allTokens: 0 },
@@ -95,6 +105,8 @@ router.get('/claude-console-accounts', authenticateAdmin, async (req, res) => {
             return {
               ...formattedAccount,
               groupInfos: [],
+              stickySessionGroup: stickyGroupMap.get(account.id) || null,
+              stickySessionGroupId: stickyGroupMap.get(account.id)?.id || '',
               usage: {
                 daily: { tokens: 0, requests: 0, allTokens: 0 },
                 total: { tokens: 0, requests: 0, allTokens: 0 },
@@ -136,7 +148,8 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
       maxConcurrentTasks,
       disableAutoProtection,
       interceptWarmup,
-      stickySessionMode
+      stickySessionMode,
+      stickySessionGroupId
     } = req.body
 
     if (!name || !apiUrl || !apiKey) {
@@ -179,6 +192,16 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Group ID is required for group type accounts' })
     }
 
+    if (stickySessionGroupId && accountType && accountType !== 'shared') {
+      return res.status(400).json({ error: 'Only shared accounts can join sticky session groups' })
+    }
+    if (stickySessionGroupId) {
+      const stickyGroup = await stickySessionGroupService.getGroup(stickySessionGroupId)
+      if (!stickyGroup || stickyGroup.platform !== 'claude-console') {
+        return res.status(400).json({ error: 'Invalid Claude Console sticky session group' })
+      }
+    }
+
     const newAccount = await claudeConsoleAccountService.createAccount({
       name,
       description,
@@ -206,6 +229,13 @@ router.post('/claude-console-accounts', authenticateAdmin, async (req, res) => {
     // 如果是分组类型，将账户添加到分组（CCR 归属 Claude 平台分组）
     if (accountType === 'group' && groupId) {
       await accountGroupService.addAccountToGroup(newAccount.id, groupId, 'claude')
+    }
+    if (stickySessionGroupId) {
+      await stickySessionGroupService.setAccountGroup(
+        newAccount.id,
+        'claude-console',
+        stickySessionGroupId
+      )
     }
 
     logger.success(`🎮 Admin created Claude Console account: ${name}`)
@@ -277,6 +307,23 @@ router.put('/claude-console-accounts/:accountId', authenticateAdmin, async (req,
       return res.status(404).json({ error: 'Account not found' })
     }
 
+    const hasStickySessionGroupUpdate = Object.prototype.hasOwnProperty.call(
+      mappedUpdates,
+      'stickySessionGroupId'
+    )
+    const stickySessionGroupId = mappedUpdates.stickySessionGroupId || null
+    delete mappedUpdates.stickySessionGroupId
+    const nextAccountType = mappedUpdates.accountType || currentAccount.accountType || 'shared'
+    if (stickySessionGroupId && nextAccountType !== 'shared') {
+      return res.status(400).json({ error: 'Only shared accounts can join sticky session groups' })
+    }
+    if (stickySessionGroupId) {
+      const stickyGroup = await stickySessionGroupService.getGroup(stickySessionGroupId)
+      if (!stickyGroup || stickyGroup.platform !== 'claude-console') {
+        return res.status(400).json({ error: 'Invalid Claude Console sticky session group' })
+      }
+    }
+
     // 规范化上游错误自动防护开关
     if (mappedUpdates.disableAutoProtection !== undefined) {
       mappedUpdates.disableAutoProtection =
@@ -312,6 +359,13 @@ router.put('/claude-console-accounts/:accountId', authenticateAdmin, async (req,
     }
 
     await claudeConsoleAccountService.updateAccount(accountId, mappedUpdates)
+    if (hasStickySessionGroupUpdate || nextAccountType !== 'shared') {
+      await stickySessionGroupService.setAccountGroup(
+        accountId,
+        'claude-console',
+        nextAccountType === 'shared' ? stickySessionGroupId : null
+      )
+    }
 
     logger.success(`📝 Admin updated Claude Console account: ${accountId}`)
     return res.json({ success: true, message: 'Claude Console account updated successfully' })
@@ -340,6 +394,7 @@ router.delete('/claude-console-accounts/:accountId', authenticateAdmin, async (r
       }
     }
 
+    await stickySessionGroupService.removeAccount(accountId, 'claude-console')
     await claudeConsoleAccountService.deleteAccount(accountId)
 
     let message = 'Claude Console账号已成功删除'

@@ -820,7 +820,7 @@
                       调度器会话粘滞
                     </h2>
                     <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
-                      控制同一 session 是否持续使用同一账户；账户不可用或并发满时自动切换
+                      控制同一 session 是否持续使用同一账户；并发满时原账户排队，真正不可用时再切换
                     </p>
                   </div>
                 </div>
@@ -847,11 +847,22 @@
                   @change="saveClaudeConfig"
                 >
                   <option value="off">关闭粘滞，正常负载均衡</option>
-                  <option value="fallback">保持粘滞，不可用或并发满时切换</option>
+                  <option value="fallback">保持粘滞，不可用时故障切换</option>
                 </select>
                 <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
                   账户可选择继承、关闭或覆盖为故障切换粘滞。关闭总开关时，所有账户级设置均不生效。
                 </p>
+              </div>
+              <div class="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-cyan-700"
+                  @click="showStickySessionGroups = true"
+                >
+                  <i class="fas fa-object-group mr-2" />管理粘滞分组
+                </button>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  可预先配置；启用粘滞后同组优先，整组不可用才切到其他分组或未分组账户
+                </span>
               </div>
             </div>
 
@@ -2165,6 +2176,11 @@
       @confirm="handleConfirmModal"
     />
   </div>
+
+  <StickySessionGroupManagementModal
+    v-if="showStickySessionGroups"
+    @close="showStickySessionGroups = false"
+  />
 </template>
 
 <script setup>
@@ -2176,6 +2192,7 @@ import { useSettingsStore } from '@/stores/settings'
 import * as httpApis from '@/utils/http_apis'
 import ConfirmModal from '@/components/common/ConfirmModal.vue'
 import ModelPricingSection from '@/components/settings/ModelPricingSection.vue'
+import StickySessionGroupManagementModal from '@/components/accounts/StickySessionGroupManagementModal.vue'
 
 // 定义组件名称，用于keep-alive排除
 defineOptions({
@@ -2200,6 +2217,7 @@ const abortController = ref(new AbortController())
 
 // ConfirmModal 状态
 const showConfirmModal = ref(false)
+const showStickySessionGroups = ref(false)
 const confirmModalConfig = ref({
   title: '',
   message: '',

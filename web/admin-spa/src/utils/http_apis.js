@@ -293,6 +293,24 @@ export const deleteAccountGroupApi = (id) =>
 export const getAccountGroupMembersApi = (id) =>
   request({ url: `/admin/account-groups/${id}/members`, method: 'GET' })
 
+// 粘滞会话分组
+export const getStickySessionGroupsApi = (params = {}) =>
+  request({ url: '/admin/sticky-session-groups', method: 'GET', params })
+export const createStickySessionGroupApi = (data) =>
+  request({ url: '/admin/sticky-session-groups', method: 'POST', data })
+export const updateStickySessionGroupApi = (id, data) =>
+  request({ url: `/admin/sticky-session-groups/${id}`, method: 'PUT', data })
+export const updateStickySessionGroupMembersApi = (id, memberIds) =>
+  request({ url: `/admin/sticky-session-groups/${id}/members`, method: 'PUT', data: { memberIds } })
+export const deleteStickySessionGroupApi = (id) =>
+  request({ url: `/admin/sticky-session-groups/${id}`, method: 'DELETE' })
+export const getStickySessionGroupAccountsApi = (platform) =>
+  request({
+    url: '/admin/sticky-session-groups/accounts',
+    method: 'GET',
+    params: { platform }
+  })
+
 // 用户管理（管理员）
 export const getUsersApi = () => request({ url: '/admin/users', method: 'GET' })
 

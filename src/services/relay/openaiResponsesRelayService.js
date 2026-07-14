@@ -10,6 +10,7 @@ const config = require('../../../config/config')
 const crypto = require('crypto')
 const LRUCache = require('../../utils/lruCache')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
+const accountConcurrencyQueueService = require('../accountConcurrencyQueueService')
 const {
   createRequestDetailMeta,
   extractOpenAICacheReadTokens
@@ -94,7 +95,7 @@ class OpenAIResponsesRelayService {
     return Number.isInteger(maxConcurrentTasks) && maxConcurrentTasks > 0 ? maxConcurrentTasks : 0
   }
 
-  async _acquireAccountConcurrency(account) {
+  async _acquireAccountConcurrency(account, sessionHash = null, isDisconnected = () => false) {
     const maxConcurrentTasks = this._getMaxConcurrentTasks(account)
     if (maxConcurrentTasks <= 0) {
       return null
@@ -103,17 +104,39 @@ class OpenAIResponsesRelayService {
     const accountId = account.id
     const requestId = crypto.randomUUID()
     const concurrencyKey = this._getAccountConcurrencyKey(accountId)
-    const newConcurrency = Number(
-      await redis.incrConcurrency(concurrencyKey, requestId, ACCOUNT_CONCURRENCY_LEASE_SECONDS)
-    )
+    const mapping =
+      sessionHash && typeof unifiedOpenAIScheduler._getSessionMapping === 'function'
+        ? await unifiedOpenAIScheduler._getSessionMapping(sessionHash)
+        : null
+    const shouldQueue =
+      mapping?.mode === 'fallback' &&
+      mapping.accountId === accountId &&
+      mapping.accountType === 'openai-responses'
+    const tryAcquire = () =>
+      redis.incrConcurrency(concurrencyKey, requestId, ACCOUNT_CONCURRENCY_LEASE_SECONDS)
+    const release = () => redis.decrConcurrency(concurrencyKey, requestId)
 
-    if (newConcurrency > maxConcurrentTasks) {
-      await redis.decrConcurrency(concurrencyKey, requestId)
-      const error = new Error(
-        `OpenAI-Responses account ${account.name || accountId} concurrency limit exceeded`
-      )
-      error.statusCode = 429
-      throw error
+    let newConcurrency
+    if (shouldQueue) {
+      const queuedSlot = await accountConcurrencyQueueService.waitForSlot({
+        accountId,
+        accountName: account.name,
+        maxConcurrentTasks,
+        tryAcquire,
+        release,
+        isDisconnected
+      })
+      newConcurrency = queuedSlot.currentConcurrency
+    } else {
+      newConcurrency = Number(await tryAcquire())
+      if (newConcurrency > maxConcurrentTasks) {
+        await release()
+        const error = new Error(
+          `OpenAI-Responses account ${account.name || accountId} concurrency limit exceeded`
+        )
+        error.statusCode = 429
+        throw error
+      }
     }
 
     const refreshInterval = setInterval(() => {
@@ -191,7 +214,12 @@ class OpenAIResponsesRelayService {
     let clientDisconnected = false
     let removeClientListeners = () => {}
     // 获取会话哈希（如果有的话）
-    const sessionId = req.headers['session_id'] || req.body?.session_id
+    const sessionId =
+      req.headers['session_id'] ||
+      req.headers['x-session-id'] ||
+      req.body?.session_id ||
+      req.body?.conversation_id ||
+      req.body?.prompt_cache_key
     const sessionHash = sessionId
       ? crypto.createHash('sha256').update(sessionId).digest('hex')
       : null
@@ -203,7 +231,11 @@ class OpenAIResponsesRelayService {
         throw new Error('Account not found')
       }
 
-      accountConcurrencyLease = await this._acquireAccountConcurrency(fullAccount)
+      accountConcurrencyLease = await this._acquireAccountConcurrency(
+        fullAccount,
+        sessionHash,
+        () => req.socket?.destroyed || res.destroyed
+      )
 
       // 创建 AbortController 用于取消请求
       abortController = new AbortController()

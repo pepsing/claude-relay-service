@@ -11,12 +11,57 @@ const {
 } = require('../../utils/errorSanitizer')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const userMessageQueueService = require('../userMessageQueueService')
+const accountConcurrencyQueueService = require('../accountConcurrencyQueueService')
+const unifiedClaudeScheduler = require('../scheduler/unifiedClaudeScheduler')
+const sessionHelper = require('../../utils/sessionHelper')
 const { isStreamWritable } = require('../../utils/streamHelper')
 const { filterForClaude } = require('../../utils/headerFilter')
 
 class ClaudeConsoleRelayService {
   constructor() {
     this.defaultUserAgent = 'claude-cli/2.0.52 (external, cli)'
+  }
+
+  async _acquireAccountConcurrency(account, accountId, requestId, requestBody, isDisconnected) {
+    if (!(account.maxConcurrentTasks > 0)) {
+      return false
+    }
+
+    const sessionHash = sessionHelper.generateSessionHash(requestBody)
+    const mapping = sessionHash
+      ? await unifiedClaudeScheduler._getSessionMapping(sessionHash)
+      : null
+    const shouldQueue =
+      mapping?.mode === 'fallback' &&
+      mapping.accountId === accountId &&
+      mapping.accountType === 'claude-console'
+    const tryAcquire = () => redis.incrConsoleAccountConcurrency(accountId, requestId, 600)
+    const release = () => redis.decrConsoleAccountConcurrency(accountId, requestId)
+
+    if (shouldQueue) {
+      await accountConcurrencyQueueService.waitForSlot({
+        accountId,
+        accountName: account.name,
+        maxConcurrentTasks: account.maxConcurrentTasks,
+        tryAcquire,
+        release,
+        isDisconnected
+      })
+      return true
+    }
+
+    const newConcurrency = Number(await tryAcquire())
+    if (newConcurrency > account.maxConcurrentTasks) {
+      await release()
+      logger.warn(
+        `⚠️ Console account ${account.name} (${accountId}) concurrency limit exceeded: ${newConcurrency}/${account.maxConcurrentTasks} (request: ${requestId}, rolled back)`
+      )
+      const error = new Error('Console account concurrency limit reached')
+      error.code = 'CONSOLE_ACCOUNT_CONCURRENCY_FULL'
+      error.accountId = accountId
+      throw error
+    }
+    return true
   }
 
   // 🚀 转发请求到Claude Console API
@@ -109,30 +154,16 @@ class ClaudeConsoleRelayService {
 
       // 🔒 并发控制：原子性抢占槽位
       if (account.maxConcurrentTasks > 0) {
-        // 先抢占，再检查 - 避免竞态条件
-        const newConcurrency = Number(
-          await redis.incrConsoleAccountConcurrency(accountId, requestId, 600)
+        concurrencyAcquired = await this._acquireAccountConcurrency(
+          account,
+          accountId,
+          requestId,
+          requestBody,
+          () => clientRequest?.socket?.destroyed || clientResponse?.destroyed
         )
-        concurrencyAcquired = true
-
-        // 检查是否超过限制
-        if (newConcurrency > account.maxConcurrentTasks) {
-          // 超限，立即回滚
-          await redis.decrConsoleAccountConcurrency(accountId, requestId)
-          concurrencyAcquired = false
-
-          logger.warn(
-            `⚠️ Console account ${account.name} (${accountId}) concurrency limit exceeded: ${newConcurrency}/${account.maxConcurrentTasks} (request: ${requestId}, rolled back)`
-          )
-
-          const error = new Error('Console account concurrency limit reached')
-          error.code = 'CONSOLE_ACCOUNT_CONCURRENCY_FULL'
-          error.accountId = accountId
-          throw error
-        }
 
         logger.debug(
-          `🔓 Acquired concurrency slot for account ${account.name} (${accountId}), current: ${newConcurrency}/${account.maxConcurrentTasks}, request: ${requestId}`
+          `🔓 Acquired concurrency slot for account ${account.name} (${accountId}), request: ${requestId}`
         )
       }
       logger.debug(`🌐 Account API URL: ${account.apiUrl}`)
@@ -614,30 +645,16 @@ class ClaudeConsoleRelayService {
 
       // 🔒 并发控制：原子性抢占槽位
       if (account.maxConcurrentTasks > 0) {
-        // 先抢占，再检查 - 避免竞态条件
-        const newConcurrency = Number(
-          await redis.incrConsoleAccountConcurrency(accountId, requestId, 600)
+        concurrencyAcquired = await this._acquireAccountConcurrency(
+          account,
+          accountId,
+          requestId,
+          requestBody,
+          () => responseStream?.socket?.destroyed || responseStream?.destroyed
         )
-        concurrencyAcquired = true
-
-        // 检查是否超过限制
-        if (newConcurrency > account.maxConcurrentTasks) {
-          // 超限，立即回滚
-          await redis.decrConsoleAccountConcurrency(accountId, requestId)
-          concurrencyAcquired = false
-
-          logger.warn(
-            `⚠️ Console account ${account.name} (${accountId}) concurrency limit exceeded: ${newConcurrency}/${account.maxConcurrentTasks} (stream request: ${requestId}, rolled back)`
-          )
-
-          const error = new Error('Console account concurrency limit reached')
-          error.code = 'CONSOLE_ACCOUNT_CONCURRENCY_FULL'
-          error.accountId = accountId
-          throw error
-        }
 
         logger.debug(
-          `🔓 Acquired concurrency slot for stream account ${account.name} (${accountId}), current: ${newConcurrency}/${account.maxConcurrentTasks}, request: ${requestId}`
+          `🔓 Acquired concurrency slot for stream account ${account.name} (${accountId}), request: ${requestId}`
         )
 
         // 🔄 启动租约刷新定时器（每5分钟刷新一次，防止长连接租约过期）

@@ -1,6 +1,7 @@
 const openaiAccountService = require('../account/openaiAccountService')
 const openaiResponsesAccountService = require('../account/openaiResponsesAccountService')
 const accountGroupService = require('../accountGroupService')
+const stickySessionGroupService = require('../stickySessionGroupService')
 const redis = require('../../models/redis')
 const logger = require('../../utils/logger')
 const { isSchedulable, sortAccountsByPriority } = require('../../utils/commonHelper')
@@ -15,6 +16,90 @@ const {
 class UnifiedOpenAIScheduler {
   constructor() {
     this.SESSION_MAPPING_PREFIX = 'unified_openai_session_mapping:'
+    this.SESSION_GROUP_MAPPING_PREFIX = 'unified_openai_session_group_mapping:'
+  }
+
+  async _getSessionGroupMapping(sessionHash) {
+    if (!sessionHash) {
+      return null
+    }
+    const client = redis.getClientSafe()
+    return client.get(`${this.SESSION_GROUP_MAPPING_PREFIX}${sessionHash}`)
+  }
+
+  async _setSessionGroupMapping(sessionHash, groupId) {
+    if (!sessionHash) {
+      return
+    }
+    const client = redis.getClientSafe()
+    const key = `${this.SESSION_GROUP_MAPPING_PREFIX}${sessionHash}`
+    if (!groupId) {
+      await client.del(key)
+      return
+    }
+
+    const appConfig = require('../../../config/config')
+    const ttlHours = appConfig.session?.stickyTtlHours || 1
+    const ttlSeconds = Math.max(1, Math.floor(ttlHours * 60 * 60))
+    await client.setex(key, ttlSeconds, groupId)
+  }
+
+  async _deleteSessionGroupMapping(sessionHash) {
+    if (!sessionHash) {
+      return
+    }
+    const client = redis.getClientSafe()
+    await client.del(`${this.SESSION_GROUP_MAPPING_PREFIX}${sessionHash}`)
+  }
+
+  async _getAccountStickySessionGroup(accountId, accountType) {
+    if (accountType !== 'openai-responses') {
+      return null
+    }
+    return stickySessionGroupService.getGroupForAccount(accountId, 'openai-responses')
+  }
+
+  async _resolveSessionGroupId(sessionHash, mappedAccount = null) {
+    let groupId = await this._getSessionGroupMapping(sessionHash)
+    if (!groupId && mappedAccount?.stickySessionGroupId) {
+      groupId = mappedAccount.stickySessionGroupId
+    }
+    if (!groupId && mappedAccount?.accountId) {
+      const group = await this._getAccountStickySessionGroup(
+        mappedAccount.accountId,
+        mappedAccount.accountType
+      )
+      groupId = group?.id || null
+    }
+    if (groupId) {
+      await this._setSessionGroupMapping(sessionHash, groupId)
+    }
+    return groupId
+  }
+
+  async _restrictAccountsToSessionGroup(accounts, groupId, sessionHash) {
+    if (!groupId) {
+      return accounts
+    }
+
+    const group = await stickySessionGroupService.getGroup(groupId)
+    if (!group) {
+      await this._deleteSessionGroupMapping(sessionHash)
+      return accounts
+    }
+
+    const filteredAccounts = await stickySessionGroupService.filterAccountsByGroup(
+      accounts,
+      groupId
+    )
+    if (filteredAccounts.length === 0) {
+      logger.warn(
+        `⚠️ Sticky session group ${group.name} has no available accounts; releasing group boundary`
+      )
+      await this._deleteSessionGroupMapping(sessionHash)
+      return accounts
+    }
+    return filteredAccounts
   }
 
   async _resolveStickySessionMode(account, accountType = null) {
@@ -26,6 +111,16 @@ class UnifiedOpenAIScheduler {
     let policyAccount = account
     const resolvedAccountType = accountType || account?.accountType
     const accountId = account?.accountId || account?.id
+
+    if (resolvedAccountType === 'openai-responses' && accountId) {
+      const stickyGroup = await stickySessionGroupService.getGroupForAccount(
+        accountId,
+        'openai-responses'
+      )
+      if (stickyGroup) {
+        return 'fallback'
+      }
+    }
 
     if (
       resolvedAccountType === 'openai-responses' &&
@@ -406,22 +501,40 @@ class UnifiedOpenAIScheduler {
       }
 
       // 如果有会话哈希，检查是否有已映射的账户
+      let stickySessionGroupId = null
       if (sessionHash) {
+        const globalConfig = await claudeRelayConfigService.getConfig()
+        if (globalConfig.stickySessionEnabled === false) {
+          await this._deleteSessionGroupMapping(sessionHash)
+        }
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
+          if (globalConfig.stickySessionEnabled !== false) {
+            stickySessionGroupId = await this._resolveSessionGroupId(sessionHash, mappedAccount)
+          }
           const stickySessionMode = await this._resolveStickySessionMode(
             mappedAccount,
             mappedAccount.accountType
           )
           if (stickySessionMode === 'off') {
             await this._deleteSessionMapping(sessionHash)
+            await this._deleteSessionGroupMapping(sessionHash)
+            stickySessionGroupId = null
           } else {
             // 验证映射的账户是否仍然可用
-            const isAvailable = await this._isAccountAvailable(
-              mappedAccount.accountId,
-              mappedAccount.accountType,
-              { requestedModel, requiredProviderEndpoint: options.requiredProviderEndpoint }
-            )
+            const isInStickyGroup = stickySessionGroupId
+              ? await stickySessionGroupService.isAccountInGroup(
+                  mappedAccount.accountId,
+                  stickySessionGroupId
+                )
+              : true
+            const isAvailable =
+              isInStickyGroup &&
+              (await this._isAccountAvailable(mappedAccount.accountId, mappedAccount.accountType, {
+                requestedModel,
+                requiredProviderEndpoint: options.requiredProviderEndpoint,
+                ignoreConcurrency: true
+              }))
             if (isAvailable) {
               // 🚀 智能会话续期（续期 unified 映射键，按配置）
               await this._extendSessionMappingTTL(sessionHash)
@@ -438,14 +551,23 @@ class UnifiedOpenAIScheduler {
               await this._deleteSessionMapping(sessionHash)
             }
           }
+        } else if (globalConfig.stickySessionEnabled !== false) {
+          stickySessionGroupId = await this._resolveSessionGroupId(sessionHash)
         }
       }
 
       // 获取所有可用账户
-      const availableAccounts = await this._getAllAvailableAccounts(
-        apiKeyData,
-        requestedModel,
-        options
+      const stickyGroupMemberIds = stickySessionGroupId
+        ? new Set(await stickySessionGroupService.getGroupMembers(stickySessionGroupId))
+        : new Set()
+      let availableAccounts = await this._getAllAvailableAccounts(apiKeyData, requestedModel, {
+        ...options,
+        ignoreConcurrencyAccountIds: stickyGroupMemberIds
+      })
+      availableAccounts = await this._restrictAccountsToSessionGroup(
+        availableAccounts,
+        stickySessionGroupId,
+        sessionHash
       )
 
       if (availableAccounts.length === 0) {
@@ -467,22 +589,35 @@ class UnifiedOpenAIScheduler {
       const sortedAccounts = sortAccountsByPriority(availableAccounts)
 
       // 选择第一个账户
-      const selectedAccount = sortedAccounts[0]
+      const selectedAccount =
+        sortedAccounts.find((account) => account.concurrencyFull !== true) || sortedAccounts[0]
+
+      if (
+        stickySessionGroupId &&
+        !(await stickySessionGroupService.isAccountInGroup(
+          selectedAccount.accountId,
+          stickySessionGroupId
+        ))
+      ) {
+        stickySessionGroupId = null
+      }
 
       // 如果有会话哈希，建立新的映射
-      if (
-        sessionHash &&
-        (await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)) ===
-          'fallback'
-      ) {
+      const selectedStickySessionMode = sessionHash
+        ? await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)
+        : 'off'
+      if (sessionHash && selectedStickySessionMode === 'fallback') {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
-          selectedAccount.accountType
+          selectedAccount.accountType,
+          stickySessionGroupId || undefined
         )
         logger.info(
           `🎯 Created new sticky session mapping: ${selectedAccount.name} (${selectedAccount.accountId}, ${selectedAccount.accountType}) for session ${sessionHash}`
         )
+      } else if (sessionHash) {
+        await this._deleteSessionGroupMapping(sessionHash)
       }
 
       logger.info(
@@ -505,6 +640,7 @@ class UnifiedOpenAIScheduler {
   // 📋 获取所有可用账户（仅共享池）
   async _getAllAvailableAccounts(apiKeyData, requestedModel = null, options = {}) {
     const availableAccounts = []
+    const ignoreConcurrencyAccountIds = options.ignoreConcurrencyAccountIds || new Set()
     const normalizedRequiredProviderEndpoint = normalizeOpenAIProviderEndpoint(
       options.requiredProviderEndpoint,
       null
@@ -680,7 +816,8 @@ class UnifiedOpenAIScheduler {
           continue
         }
 
-        if (await this._isAccountConcurrencyFull(account, 'openai-responses')) {
+        const concurrencyFull = await this._isAccountConcurrencyFull(account, 'openai-responses')
+        if (concurrencyFull && !ignoreConcurrencyAccountIds.has(account.id)) {
           continue
         }
 
@@ -689,7 +826,8 @@ class UnifiedOpenAIScheduler {
           accountId: account.id,
           accountType: 'openai-responses',
           priority: parseInt(account.priority) || 50,
-          lastUsedAt: account.lastUsedAt || '0'
+          lastUsedAt: account.lastUsedAt || '0',
+          concurrencyFull
         })
       }
     }
@@ -748,7 +886,10 @@ class UnifiedOpenAIScheduler {
           return false
         }
 
-        if (await this._isAccountConcurrencyFull(account, accountType)) {
+        if (
+          !options.ignoreConcurrency &&
+          (await this._isAccountConcurrencyFull(account, accountType))
+        ) {
           return false
         }
 
@@ -803,7 +944,10 @@ class UnifiedOpenAIScheduler {
           return false
         }
 
-        if (await this._isAccountConcurrencyFull(account, accountType)) {
+        if (
+          !options.ignoreConcurrency &&
+          (await this._isAccountConcurrencyFull(account, accountType))
+        ) {
           return false
         }
 
@@ -834,13 +978,19 @@ class UnifiedOpenAIScheduler {
   }
 
   // 💾 设置会话映射
-  async _setSessionMapping(sessionHash, accountId, accountType) {
+  async _setSessionMapping(sessionHash, accountId, accountType, stickySessionGroupId = undefined) {
     const client = redis.getClientSafe()
+    let resolvedGroupId = stickySessionGroupId
+    if (resolvedGroupId === undefined) {
+      const group = await this._getAccountStickySessionGroup(accountId, accountType)
+      resolvedGroupId = group?.id || null
+    }
     const mappingData = JSON.stringify({
       accountId,
       accountType,
       mode: 'fallback',
-      policyVersion: 1,
+      policyVersion: resolvedGroupId ? 2 : 1,
+      ...(resolvedGroupId ? { stickySessionGroupId: resolvedGroupId } : {}),
       createdAt: Date.now()
     })
     // 依据配置设置TTL（小时）
@@ -848,6 +998,7 @@ class UnifiedOpenAIScheduler {
     const ttlHours = appConfig.session?.stickyTtlHours || 1
     const ttlSeconds = Math.max(1, Math.floor(ttlHours * 60 * 60))
     await client.setex(`${this.SESSION_MAPPING_PREFIX}${sessionHash}`, ttlSeconds, mappingData)
+    await this._setSessionGroupMapping(sessionHash, resolvedGroupId)
   }
 
   // 🗑️ 删除会话映射
@@ -1054,10 +1205,25 @@ class UnifiedOpenAIScheduler {
 
       logger.info(`👥 Selecting account from OpenAI group: ${group.name}`)
 
+      const memberIds = await accountGroupService.getGroupMembers(groupId)
+      if (memberIds.length === 0) {
+        const error = new Error(`Group ${group.name} has no members`)
+        error.statusCode = 402
+        throw error
+      }
+
       // 如果有会话哈希，检查是否有已映射的账户
+      let stickySessionGroupId = null
       if (sessionHash) {
+        const globalConfig = await claudeRelayConfigService.getConfig()
+        if (globalConfig.stickySessionEnabled === false) {
+          await this._deleteSessionGroupMapping(sessionHash)
+        }
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
+          if (globalConfig.stickySessionEnabled !== false) {
+            stickySessionGroupId = await this._resolveSessionGroupId(sessionHash, mappedAccount)
+          }
           const stickySessionMode = await this._resolveStickySessionMode(
             mappedAccount,
             mappedAccount.accountType
@@ -1065,11 +1231,21 @@ class UnifiedOpenAIScheduler {
           if (stickySessionMode !== 'off') {
             // 验证映射的账户是否仍然可用并且在分组中
             const isInGroup = await this._isAccountInGroup(mappedAccount.accountId, groupId)
-            if (isInGroup) {
+            const isInStickyGroup = stickySessionGroupId
+              ? await stickySessionGroupService.isAccountInGroup(
+                  mappedAccount.accountId,
+                  stickySessionGroupId
+                )
+              : true
+            if (isInGroup && isInStickyGroup) {
               const isAvailable = await this._isAccountAvailable(
                 mappedAccount.accountId,
                 mappedAccount.accountType,
-                { requestedModel, requiredProviderEndpoint: options.requiredProviderEndpoint }
+                {
+                  requestedModel,
+                  requiredProviderEndpoint: options.requiredProviderEndpoint,
+                  ignoreConcurrency: true
+                }
               )
               if (isAvailable) {
                 // 🚀 智能会话续期（续期 unified 映射键，按配置）
@@ -1082,22 +1258,19 @@ class UnifiedOpenAIScheduler {
                 return mappedAccount
               }
             }
+          } else {
+            await this._deleteSessionGroupMapping(sessionHash)
+            stickySessionGroupId = null
           }
           // 如果账户不可用或不在分组中，删除映射
           await this._deleteSessionMapping(sessionHash)
+        } else if (globalConfig.stickySessionEnabled !== false) {
+          stickySessionGroupId = await this._resolveSessionGroupId(sessionHash)
         }
       }
 
-      // 获取分组成员
-      const memberIds = await accountGroupService.getGroupMembers(groupId)
-      if (memberIds.length === 0) {
-        const error = new Error(`Group ${group.name} has no members`)
-        error.statusCode = 402 // Payment Required - 资源耗尽
-        throw error
-      }
-
       // 获取可用的分组成员账户（支持 OpenAI 和 OpenAI-Responses 两种类型）
-      const availableAccounts = []
+      let availableAccounts = []
       for (const memberId of memberIds) {
         // 首先尝试从 OpenAI 账户服务获取
         let account = await openaiAccountService.getAccount(memberId)
@@ -1173,13 +1346,24 @@ class UnifiedOpenAIScheduler {
             continue
           }
 
+          const concurrencyFull = await this._isAccountConcurrencyFull(account, accountType)
+          if (concurrencyFull) {
+            const isStickyGroupMember = stickySessionGroupId
+              ? await stickySessionGroupService.isAccountInGroup(account.id, stickySessionGroupId)
+              : false
+            if (!isStickyGroupMember) {
+              continue
+            }
+          }
+
           // 添加到可用账户列表
           availableAccounts.push({
             ...account,
             accountId: account.id,
             accountType,
             priority: parseInt(account.priority) || 50,
-            lastUsedAt: account.lastUsedAt || '0'
+            lastUsedAt: account.lastUsedAt || '0',
+            concurrencyFull
           })
         }
       }
@@ -1190,26 +1374,45 @@ class UnifiedOpenAIScheduler {
         throw error
       }
 
+      availableAccounts = await this._restrictAccountsToSessionGroup(
+        availableAccounts,
+        stickySessionGroupId,
+        sessionHash
+      )
+
       // 按优先级和最后使用时间排序（与 Claude/Gemini 调度保持一致）
       const sortedAccounts = sortAccountsByPriority(availableAccounts)
 
       // 选择第一个账户
-      const selectedAccount = sortedAccounts[0]
+      const selectedAccount =
+        sortedAccounts.find((account) => account.concurrencyFull !== true) || sortedAccounts[0]
+
+      if (
+        stickySessionGroupId &&
+        !(await stickySessionGroupService.isAccountInGroup(
+          selectedAccount.accountId,
+          stickySessionGroupId
+        ))
+      ) {
+        stickySessionGroupId = null
+      }
 
       // 如果有会话哈希，建立新的映射
-      if (
-        sessionHash &&
-        (await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)) ===
-          'fallback'
-      ) {
+      const selectedStickySessionMode = sessionHash
+        ? await this._resolveStickySessionMode(selectedAccount, selectedAccount.accountType)
+        : 'off'
+      if (sessionHash && selectedStickySessionMode === 'fallback') {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
-          selectedAccount.accountType
+          selectedAccount.accountType,
+          stickySessionGroupId || undefined
         )
         logger.info(
           `🎯 Created new sticky session mapping from group: ${selectedAccount.name} (${selectedAccount.accountId})`
         )
+      } else if (sessionHash) {
+        await this._deleteSessionGroupMapping(sessionHash)
       }
 
       logger.info(

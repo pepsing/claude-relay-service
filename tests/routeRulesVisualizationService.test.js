@@ -26,6 +26,9 @@ jest.mock('../src/services/apiKeyService', () => {
 jest.mock('../src/services/claudeRelayConfigService', () => ({
   getConfig: jest.fn()
 }))
+jest.mock('../src/services/stickySessionGroupService', () => ({
+  getGroupForAccount: jest.fn()
+}))
 
 jest.mock('../src/services/requestDetailService', () => ({
   listRequestDetails: jest.fn()
@@ -51,6 +54,7 @@ jest.mock('../src/utils/upstreamErrorHelper', () => ({ isTempUnavailable: jest.f
 
 const apiKeyService = require('../src/services/apiKeyService')
 const claudeRelayConfigService = require('../src/services/claudeRelayConfigService')
+const stickySessionGroupService = require('../src/services/stickySessionGroupService')
 const requestDetailService = require('../src/services/requestDetailService')
 const claudeAccountService = require('../src/services/account/claudeAccountService')
 const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
@@ -94,6 +98,7 @@ describe('routeRulesVisualizationService', () => {
     geminiApiAccountService.getAllAccounts.mockResolvedValue([])
     droidAccountService.getAllAccounts.mockResolvedValue([])
     upstreamErrorHelper.isTempUnavailable.mockResolvedValue(false)
+    stickySessionGroupService.getGroupForAccount.mockResolvedValue(null)
   })
 
   afterEach(() => {
@@ -174,7 +179,7 @@ describe('routeRulesVisualizationService', () => {
         status: 'active',
         schedulable: true,
         accountType: 'shared',
-        stickySessionMode: 'fallback',
+        stickySessionMode: 'off',
         dailyQuota: 600,
         dailyUsage: 215.45,
         maxConcurrentTasks: 0,
@@ -195,6 +200,9 @@ describe('routeRulesVisualizationService', () => {
         dailyUsage: 0
       }
     ])
+    stickySessionGroupService.getGroupForAccount.mockImplementation(async (accountId) =>
+      accountId === 'console-a' ? { id: 'kimi-group', name: 'Kimi' } : null
+    )
     requestDetailService.listRequestDetails.mockResolvedValue({
       captureEnabled: true,
       readMode: 'redis',
@@ -253,11 +261,13 @@ describe('routeRulesVisualizationService', () => {
       }),
       stickySession: {
         supported: true,
-        configuredMode: 'fallback',
+        configuredMode: 'off',
         effectiveMode: 'fallback',
-        source: 'account',
+        source: 'group',
         globalEnabled: true,
-        globalDefaultMode: 'off'
+        globalDefaultMode: 'off',
+        group: { id: 'kimi-group', name: 'Kimi' },
+        failoverScope: 'group-first'
       },
       live: expect.objectContaining({ rpm: 0.4, tpm: 1800, rateLimitedCount: 1 })
     })
@@ -302,7 +312,9 @@ describe('routeRulesVisualizationService', () => {
       effectiveMode: 'off',
       source: 'global-disabled',
       globalEnabled: false,
-      globalDefaultMode: 'fallback'
+      globalDefaultMode: 'fallback',
+      group: null,
+      failoverScope: 'pool'
     })
   })
 

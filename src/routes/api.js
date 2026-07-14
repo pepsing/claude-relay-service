@@ -1717,7 +1717,7 @@ async function handleMessagesRequest(req, res) {
     // 确保在任何情况下都能返回有效的JSON响应
     if (!res.headersSent) {
       // 根据错误类型设置适当的状态码
-      let statusCode = 500
+      let statusCode = handledError.statusCode || 500
       let errorType = 'Relay service error'
 
       if (
