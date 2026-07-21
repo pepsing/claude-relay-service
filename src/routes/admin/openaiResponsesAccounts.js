@@ -683,10 +683,11 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
   const requestedModel = typeof req.body?.model === 'string' ? req.body.model.trim() : ''
   const prompt = sanitizeTestPrompt(req.body?.prompt)
   const startTime = Date.now()
+  let account = null
 
   try {
     // 获取账户信息（apiKey 已自动解密）
-    const account = await openaiResponsesAccountService.getAccount(accountId)
+    account = await openaiResponsesAccountService.getAccount(accountId)
     if (!account) {
       return res.status(404).json({ error: 'Account not found' })
     }
@@ -761,6 +762,21 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
   } catch (error) {
     const latency = Date.now() - startTime
     logger.error(`❌ OpenAI-Responses account test failed: ${accountId}`, error.message)
+
+    const upstreamStatus = Number(error.response?.status)
+    if (account && [400, 403, 429].includes(upstreamStatus)) {
+      await openaiResponsesAccountService
+        .handleProviderQuotaError(accountId, {
+          account,
+          status: upstreamStatus,
+          errorData: error.response?.data
+        })
+        .catch((quotaError) => {
+          logger.warn(
+            `⚠️ Failed to apply provider quota protection after account test for ${accountId}: ${quotaError.message}`
+          )
+        })
+    }
 
     return res.status(500).json({
       success: false,

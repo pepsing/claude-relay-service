@@ -206,6 +206,98 @@ class OpenAIResponsesRelayService {
     })
   }
 
+  async _readErrorResponseData(response) {
+    let rawData = response?.data
+    if (rawData && typeof rawData.pipe === 'function') {
+      const chunks = []
+      await new Promise((resolve) => {
+        let settled = false
+        const finish = () => {
+          if (!settled) {
+            settled = true
+            resolve()
+          }
+        }
+        rawData.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+        rawData.on('end', finish)
+        rawData.on('error', finish)
+        const timer = setTimeout(finish, 5000)
+        if (typeof timer.unref === 'function') {
+          timer.unref()
+        }
+      })
+      rawData = Buffer.concat(chunks).toString()
+    }
+
+    if (Buffer.isBuffer(rawData)) {
+      rawData = rawData.toString()
+    }
+    if (typeof rawData !== 'string') {
+      return rawData || { error: { message: 'Unknown upstream error' } }
+    }
+
+    const text = rawData.trim()
+    if (!text) {
+      return { error: { message: 'Unknown upstream error' } }
+    }
+
+    if (text.includes('data:')) {
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('data:')) {
+          continue
+        }
+        const jsonText = line.slice(5).trim()
+        if (!jsonText || jsonText === '[DONE]') {
+          continue
+        }
+        try {
+          return JSON.parse(jsonText)
+        } catch {
+          // 继续尝试后续 SSE 事件
+        }
+      }
+    }
+
+    try {
+      return JSON.parse(text)
+    } catch {
+      return { error: { message: text } }
+    }
+  }
+
+  async _handleProviderQuotaError(account, status, errorData, sessionHash) {
+    const result = await openaiResponsesAccountService.handleProviderQuotaError(account.id, {
+      account,
+      status,
+      errorData
+    })
+    if (!result.handled) {
+      return result
+    }
+
+    if (sessionHash) {
+      await unifiedOpenAIScheduler._deleteSessionMapping(sessionHash).catch(() => {})
+    }
+    logger.warn('🚫 OpenAI-compatible provider subscription quota exhausted', {
+      accountId: account.id,
+      accountName: account.name,
+      provider: result.provider,
+      quotaType: result.quotaType,
+      resetAt: result.resetAt || null
+    })
+    return result
+  }
+
+  _getSessionHash(req) {
+    const sessionId =
+      req.headers?.['session_id'] ||
+      req.headers?.['x-session-id'] ||
+      req.body?.session_id ||
+      req.body?.conversation_id ||
+      req.body?.prompt_cache_key
+    return sessionId ? crypto.createHash('sha256').update(sessionId).digest('hex') : null
+  }
+
   // 处理请求转发
   async handleRequest(req, res, account, apiKeyData) {
     let abortController = null
@@ -214,15 +306,7 @@ class OpenAIResponsesRelayService {
     let clientDisconnected = false
     let removeClientListeners = () => {}
     // 获取会话哈希（如果有的话）
-    const sessionId =
-      req.headers['session_id'] ||
-      req.headers['x-session-id'] ||
-      req.body?.session_id ||
-      req.body?.conversation_id ||
-      req.body?.prompt_cache_key
-    const sessionHash = sessionId
-      ? crypto.createHash('sha256').update(sessionId).digest('hex')
-      : null
+    const sessionHash = this._getSessionHash(req)
 
     try {
       // 获取完整的账户信息（包含解密的 API Key）
@@ -387,85 +471,54 @@ class OpenAIResponsesRelayService {
       // 发送请求
       const response = await axios(requestOptions)
 
-      // 处理 429 限流错误
-      if (response.status === 429) {
-        const { resetsInSeconds, errorData } = await this._handle429Error(
-          account,
-          response,
-          req.body?.stream,
-          sessionHash
-        )
-
-        const oaiAutoProtectionDisabled =
-          account?.disableAutoProtection === true || account?.disableAutoProtection === 'true'
-        if (!oaiAutoProtectionDisabled) {
-          await upstreamErrorHelper
-            .markTempUnavailable(
-              account.id,
-              'openai-responses',
-              429,
-              resetsInSeconds || upstreamErrorHelper.parseRetryAfter(response.headers)
-            )
-            .catch(() => {})
-        }
-
-        // 返回错误响应（使用处理后的数据，避免循环引用）
-        const errorResponse = errorData || {
-          error: {
-            message: 'Rate limit exceeded',
-            type: 'rate_limit_error',
-            code: 'rate_limit_exceeded',
-            resets_in_seconds: resetsInSeconds
-          }
-        }
-        removeClientListeners()
-        return res.status(429).json(errorResponse)
-      }
-
-      // 处理其他错误状态码
       if (response.status >= 400) {
-        // 处理流式错误响应
-        let errorData = response.data
-        if (response.data && typeof response.data.pipe === 'function') {
-          // 流式响应需要先读取内容
-          const chunks = []
-          await new Promise((resolve) => {
-            response.data.on('data', (chunk) => chunks.push(chunk))
-            response.data.on('end', resolve)
-            response.data.on('error', resolve)
-            setTimeout(resolve, 5000) // 超时保护
-          })
-          const fullResponse = Buffer.concat(chunks).toString()
-
-          // 尝试解析错误响应
-          try {
-            if (fullResponse.includes('data: ')) {
-              // SSE格式
-              const lines = fullResponse.split('\n')
-              for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                  const jsonStr = line.slice(6).trim()
-                  if (jsonStr && jsonStr !== '[DONE]') {
-                    errorData = JSON.parse(jsonStr)
-                    break
-                  }
-                }
-              }
-            } else {
-              // 普通JSON
-              errorData = JSON.parse(fullResponse)
-            }
-          } catch (e) {
-            logger.error('Failed to parse error response:', e)
-            errorData = { error: { message: fullResponse || 'Unknown error' } }
-          }
-        }
+        const errorData = await this._readErrorResponseData(response)
 
         logger.error('OpenAI-Responses API error', {
           status: response.status,
           statusText: response.statusText,
           errorData
         })
+
+        const providerQuotaResult = await this._handleProviderQuotaError(
+          fullAccount,
+          response.status,
+          errorData,
+          sessionHash
+        )
+        if (providerQuotaResult.handled) {
+          removeClientListeners()
+          return res
+            .status(response.status)
+            .json(upstreamErrorHelper.sanitizeErrorForClient(errorData))
+        }
+
+        if (response.status === 429) {
+          const parsedResponse = { ...response, data: errorData }
+          const { resetsInSeconds } = await this._handle429Error(
+            fullAccount,
+            parsedResponse,
+            false,
+            sessionHash
+          )
+
+          const oaiAutoProtectionDisabled =
+            fullAccount.disableAutoProtection === true ||
+            fullAccount.disableAutoProtection === 'true'
+          if (!oaiAutoProtectionDisabled) {
+            await upstreamErrorHelper
+              .markTempUnavailable(
+                account.id,
+                'openai-responses',
+                429,
+                resetsInSeconds || upstreamErrorHelper.parseRetryAfter(response.headers)
+              )
+              .catch(() => {})
+          }
+
+          removeClientListeners()
+          return res.status(429).json(errorData)
+        }
 
         if (response.status === 401) {
           logger.warn(`🚫 OpenAI Responses账号认证失败（401错误）for account ${account?.id}`)
@@ -651,6 +704,19 @@ class OpenAIResponsesRelayService {
           }
         }
 
+        const providerQuotaResult = await this._handleProviderQuotaError(
+          account,
+          status,
+          errorData,
+          sessionHash
+        )
+        if (providerQuotaResult.handled) {
+          if (isResponseWritable(res)) {
+            return res.status(status).json(upstreamErrorHelper.sanitizeErrorForClient(errorData))
+          }
+          return
+        }
+
         if (status === 401) {
           logger.warn(
             `🚫 OpenAI Responses账号认证失败（401错误）for account ${account?.id} (catch handler)`
@@ -746,6 +812,7 @@ class OpenAIResponsesRelayService {
     let buffer = ''
     let rateLimitDetected = false
     let rateLimitResetsInSeconds = null
+    let providerQuotaCheck = null
     let streamEnded = false
     let finalized = false
 
@@ -840,6 +907,20 @@ class OpenAIResponsesRelayService {
                 eventData.error.type === 'rate_limit_exceeded'
               ) {
                 rateLimitDetected = true
+                if (!providerQuotaCheck) {
+                  const inferredStatus = eventData.error.type === 'usage_limit_reached' ? 403 : 429
+                  providerQuotaCheck = this._handleProviderQuotaError(
+                    account,
+                    inferredStatus,
+                    eventData,
+                    this._getSessionHash(req)
+                  ).catch((error) => {
+                    logger.warn(
+                      `⚠️ Failed to apply provider quota protection from stream for ${account.id}: ${error.message}`
+                    )
+                    return { handled: false }
+                  })
+                }
                 if (eventData.error.resets_in_seconds) {
                   rateLimitResetsInSeconds = eventData.error.resets_in_seconds
                   logger.warn(
@@ -969,18 +1050,17 @@ class OpenAIResponsesRelayService {
         }
       }
 
-      // 如果在流式响应中检测到限流
-      if (rateLimitDetected) {
-        // 使用统一调度器处理限流（与非流式响应保持一致）
-        const sessionId = req.headers['session_id'] || req.body?.session_id
-        const sessionHash = sessionId
-          ? crypto.createHash('sha256').update(sessionId).digest('hex')
-          : null
+      const providerQuotaHandled = providerQuotaCheck
+        ? (await providerQuotaCheck).handled === true
+        : false
 
+      // 如果在流式响应中检测到普通限流
+      if (rateLimitDetected && !providerQuotaHandled) {
+        // 使用统一调度器处理限流（与非流式响应保持一致）
         await unifiedOpenAIScheduler.markAccountRateLimited(
           account.id,
           'openai-responses',
-          sessionHash,
+          this._getSessionHash(req),
           rateLimitResetsInSeconds
         )
 

@@ -5,6 +5,7 @@
 
 const logger = require('../utils/logger')
 const openaiAccountService = require('./account/openaiAccountService')
+const openaiResponsesAccountService = require('./account/openaiResponsesAccountService')
 const claudeAccountService = require('./account/claudeAccountService')
 const claudeConsoleAccountService = require('./account/claudeConsoleAccountService')
 const unifiedOpenAIScheduler = require('./scheduler/unifiedOpenAIScheduler')
@@ -71,6 +72,7 @@ class RateLimitCleanupService {
 
       const results = {
         openai: { checked: 0, cleared: 0, errors: [] },
+        openaiResponses: { checked: 0, cleared: 0, errors: [] },
         claude: { checked: 0, cleared: 0, errors: [] },
         claudeConsole: { checked: 0, cleared: 0, errors: [] },
         zhipuCodingQuota: { checked: 0, suspended: 0, recovered: 0, errors: [] },
@@ -80,6 +82,9 @@ class RateLimitCleanupService {
 
       // 清理 OpenAI 账号
       await this.cleanupOpenAIAccounts(results.openai)
+
+      // 清理 OpenAI Responses / Chat Completions 兼容账号
+      await this.cleanupOpenAIResponsesAccounts(results.openaiResponses)
 
       // 清理 Claude 账号
       await this.cleanupClaudeAccounts(results.claude)
@@ -98,12 +103,14 @@ class RateLimitCleanupService {
 
       const totalChecked =
         results.openai.checked +
+        results.openaiResponses.checked +
         results.claude.checked +
         results.claudeConsole.checked +
         results.zhipuCodingQuota.checked +
         results.quotaExceeded.checked
       const totalCleared =
         results.openai.cleared +
+        results.openaiResponses.cleared +
         results.claude.cleared +
         results.claudeConsole.cleared +
         results.zhipuCodingQuota.recovered +
@@ -119,6 +126,9 @@ class RateLimitCleanupService {
           `✅ Rate limit cleanup completed: ${totalCleared}/${totalChecked} accounts cleared, ${results.zhipuCodingQuota.suspended} Zhipu accounts suspended, ${results.tokenRefresh.refreshed} tokens refreshed (${duration}ms)`
         )
         logger.info(`   OpenAI: ${results.openai.cleared}/${results.openai.checked}`)
+        logger.info(
+          `   OpenAI Responses: ${results.openaiResponses.cleared}/${results.openaiResponses.checked}`
+        )
         logger.info(`   Claude: ${results.claude.cleared}/${results.claude.checked}`)
         logger.info(
           `   Claude Console: ${results.claudeConsole.cleared}/${results.claudeConsole.checked}`
@@ -148,6 +158,7 @@ class RateLimitCleanupService {
       // 记录错误
       const allErrors = [
         ...results.openai.errors,
+        ...results.openaiResponses.errors,
         ...results.claude.errors,
         ...results.claudeConsole.errors,
         ...results.zhipuCodingQuota.errors,
@@ -215,6 +226,52 @@ class RateLimitCleanupService {
       }
     } catch (error) {
       logger.error('Failed to cleanup OpenAI accounts:', error)
+      result.errors.push({ error: error.message })
+    }
+  }
+
+  /**
+   * 清理 OpenAI Responses / Chat Completions 兼容账号的过期限流
+   */
+  async cleanupOpenAIResponsesAccounts(result) {
+    try {
+      const accounts = await openaiResponsesAccountService.getAllAccounts(true)
+      for (const account of accounts) {
+        const { rateLimitStatus } = account
+        const isRateLimited =
+          rateLimitStatus === 'limited' ||
+          (rateLimitStatus &&
+            typeof rateLimitStatus === 'object' &&
+            rateLimitStatus.isRateLimited === true)
+        const autoStopped =
+          account.rateLimitAutoStopped === true || account.rateLimitAutoStopped === 'true'
+        if (!isRateLimited && !autoStopped) {
+          continue
+        }
+
+        result.checked += 1
+        try {
+          const cleared = await openaiResponsesAccountService.checkAndClearRateLimit(account.id)
+          if (cleared) {
+            result.cleared += 1
+            this.clearedAccounts.push({
+              platform: 'OpenAI Responses',
+              accountId: account.id,
+              accountName: account.name,
+              previousStatus: 'rate_limited',
+              currentStatus: 'active'
+            })
+          }
+        } catch (error) {
+          result.errors.push({
+            accountId: account.id,
+            accountName: account.name,
+            error: error.message
+          })
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to cleanup OpenAI Responses accounts:', error)
       result.errors.push({ error: error.message })
     }
   }
@@ -393,17 +450,27 @@ class RateLimitCleanupService {
    */
   async cleanupZhipuCodingQuota(result) {
     try {
-      const quotaResult = await claudeConsoleAccountService.checkAllZhipuCodingQuotaAccounts()
+      const providers = [
+        {
+          platform: 'Claude Console',
+          check: () => claudeConsoleAccountService.checkAllZhipuCodingQuotaAccounts()
+        },
+        {
+          platform: 'OpenAI Responses',
+          check: () => openaiResponsesAccountService.checkAllZhipuCodingQuotaAccounts()
+        }
+      ]
 
-      result.checked += quotaResult.checked
-      result.suspended += quotaResult.suspended
-      result.recovered += quotaResult.recovered
-      result.errors.push(...quotaResult.errors)
+      for (const provider of providers) {
+        const quotaResult = await provider.check()
+        result.checked += quotaResult.checked
+        result.suspended += quotaResult.suspended
+        result.recovered += quotaResult.recovered
+        result.errors.push(...quotaResult.errors)
 
-      if (quotaResult.recovered > 0) {
         for (const account of quotaResult.accounts) {
           this.clearedAccounts.push({
-            platform: 'Claude Console',
+            platform: provider.platform,
             accountId: account.id,
             accountName: account.name,
             previousStatus: 'zhipu_coding_quota_exceeded',
@@ -413,9 +480,9 @@ class RateLimitCleanupService {
         }
       }
 
-      if (quotaResult.suspended > 0 || quotaResult.recovered > 0) {
+      if (result.suspended > 0 || result.recovered > 0) {
         logger.info(
-          `🧭 Zhipu Coding Plan quota cleanup: ${quotaResult.suspended} suspended, ${quotaResult.recovered}/${quotaResult.checked} recovered`
+          `🧭 Zhipu Coding Plan quota cleanup: ${result.suspended} suspended, ${result.recovered}/${result.checked} recovered`
         )
       }
     } catch (error) {

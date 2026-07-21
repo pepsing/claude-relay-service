@@ -1,5 +1,7 @@
 const { v4: uuidv4 } = require('uuid')
 const crypto = require('crypto')
+const axios = require('axios')
+const ProxyHelper = require('../../utils/proxyHelper')
 const redis = require('../../models/redis')
 const logger = require('../../utils/logger')
 const config = require('../../../config/config')
@@ -43,6 +45,689 @@ class OpenAIResponsesAccountService {
   _normalizeMaxConcurrentTasks(value) {
     const concurrent = parseInt(value, 10)
     return Number.isInteger(concurrent) && concurrent > 0 ? concurrent : 0
+  }
+
+  _getProviderBaseUrl(accountOrUrl) {
+    return typeof accountOrUrl === 'string'
+      ? accountOrUrl
+      : accountOrUrl?.baseApi || accountOrUrl?.apiUrl || accountOrUrl?.url
+  }
+
+  _parseProviderUrl(accountOrUrl) {
+    const rawUrl = this._getProviderBaseUrl(accountOrUrl)
+    if (!rawUrl || typeof rawUrl !== 'string') {
+      return null
+    }
+
+    try {
+      const parsedUrl = new URL(rawUrl)
+      if (parsedUrl.protocol !== 'https:') {
+        return null
+      }
+      return parsedUrl
+    } catch {
+      return null
+    }
+  }
+
+  isKimiCodingAccount(accountOrUrl) {
+    const parsedUrl = this._parseProviderUrl(accountOrUrl)
+    if (!parsedUrl || parsedUrl.hostname.toLowerCase() !== 'api.kimi.com') {
+      return false
+    }
+
+    const pathname = parsedUrl.pathname.replace(/\/+$/, '').toLowerCase()
+    return pathname === '/coding' || pathname.startsWith('/coding/')
+  }
+
+  isVolcengineArkCodingAccount(accountOrUrl) {
+    const parsedUrl = this._parseProviderUrl(accountOrUrl)
+    if (!parsedUrl || !/^ark\.[a-z0-9-]+\.volces\.com$/i.test(parsedUrl.hostname)) {
+      return false
+    }
+
+    const pathname = parsedUrl.pathname.replace(/\/+$/, '').toLowerCase()
+    return pathname === '/api/coding' || pathname.startsWith('/api/coding/')
+  }
+
+  isZhipuCodingPlanAccount(accountOrUrl) {
+    const parsedUrl = this._parseProviderUrl(accountOrUrl)
+    if (!parsedUrl) {
+      return false
+    }
+
+    const hostname = parsedUrl.hostname.toLowerCase()
+    const pathname = parsedUrl.pathname.replace(/\/+$/, '').toLowerCase()
+    const knownHost =
+      hostname === 'open.bigmodel.cn' || hostname === 'api.z.ai' || hostname === 'bigmodel.cn'
+
+    return knownHost && (pathname === '/api/coding' || pathname.startsWith('/api/coding/'))
+  }
+
+  _stringifyProviderError(errorData) {
+    if (typeof errorData === 'string') {
+      return errorData
+    }
+    if (Buffer.isBuffer(errorData)) {
+      return errorData.toString()
+    }
+
+    try {
+      return JSON.stringify(errorData || '')
+    } catch {
+      return String(errorData || '')
+    }
+  }
+
+  isKimiBillingCycleQuotaError(status, errorData, account) {
+    if (Number(status) !== 403 || !this.isKimiCodingAccount(account)) {
+      return false
+    }
+
+    const errorText = this._stringifyProviderError(errorData).toLowerCase()
+    return (
+      errorText.includes('billing_cycle_quota') ||
+      errorText.includes('usage_limit_reached') ||
+      errorText.includes('quota will be refreshed in the next cycle') ||
+      (errorText.includes('billing cycle') &&
+        (errorText.includes('usage limit') || errorText.includes('quota')))
+    )
+  }
+
+  _parseVolcengineArkResetTime(errorText) {
+    const match = String(errorText || '').match(
+      /\breset\s+at\s+(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\s+([+-]\d{2}:?\d{2})(?:\s+[A-Z]{2,5})?/i
+    )
+    if (!match) {
+      return null
+    }
+
+    const [, datePart, timePart, rawOffset] = match
+    const offset = rawOffset.includes(':')
+      ? rawOffset
+      : `${rawOffset.slice(0, 3)}:${rawOffset.slice(3)}`
+    const resetAt = new Date(`${datePart}T${timePart}${offset}`)
+    if (Number.isNaN(resetAt.getTime())) {
+      return null
+    }
+
+    return {
+      resetAt: resetAt.toISOString(),
+      resetAtText: match[0].replace(/^reset\s+at\s+/i, '')
+    }
+  }
+
+  getVolcengineArkMonthlyQuotaError(status, errorData, account) {
+    if (Number(status) !== 429 || !this.isVolcengineArkCodingAccount(account)) {
+      return null
+    }
+
+    const errorText = this._stringifyProviderError(errorData)
+    const normalizedText = errorText.toLowerCase()
+    if (
+      !normalizedText.includes('monthly usage quota') &&
+      !(normalizedText.includes('monthly') && normalizedText.includes('quota'))
+    ) {
+      return null
+    }
+
+    return this._parseVolcengineArkResetTime(errorText)
+  }
+
+  _toFiniteNumber(value) {
+    const number = Number(value)
+    return Number.isFinite(number) ? number : null
+  }
+
+  _parseOptionalJson(value) {
+    if (!value) {
+      return null
+    }
+    if (typeof value === 'object') {
+      return value
+    }
+    try {
+      return JSON.parse(value)
+    } catch {
+      return null
+    }
+  }
+
+  _timestampToIso(value) {
+    if (value === undefined || value === null || value === '') {
+      return null
+    }
+
+    const numeric = Number(value)
+    const date = Number.isFinite(numeric) ? new Date(numeric) : new Date(value)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  }
+
+  _normalizeZhipuLimit(limit = {}, index = 0) {
+    const type = String(limit.type || '').toUpperCase()
+    const percentage = this._toFiniteNumber(limit.percentage)
+    const usage = this._toFiniteNumber(limit.usage ?? limit.total ?? limit.limit)
+    const currentValue = this._toFiniteNumber(limit.currentValue ?? limit.used)
+    const remainingValue = this._toFiniteNumber(limit.remaining)
+    const unit = this._toFiniteNumber(limit.unit)
+    const number = this._toFiniteNumber(limit.number)
+    const hasAbsoluteQuota = usage !== null || currentValue !== null || remainingValue !== null
+    const total = usage !== null ? usage : 100
+    const used =
+      currentValue !== null
+        ? currentValue
+        : percentage !== null
+          ? hasAbsoluteQuota && usage !== null
+            ? (usage * percentage) / 100
+            : percentage
+          : remainingValue !== null && usage !== null
+            ? Math.max(0, usage - remainingValue)
+            : null
+    const remaining =
+      remainingValue !== null ? remainingValue : used !== null ? Math.max(0, total - used) : null
+
+    let windowType = null
+    let label = limit.name || limit.label || ''
+    if (type === 'TOKENS_LIMIT') {
+      if (unit === 3 && number === 5) {
+        windowType = 'five_hour'
+        label = label || '5小时额度'
+      } else if (unit === 6) {
+        windowType = 'weekly'
+        label = label || '每周额度'
+      } else {
+        windowType = 'tokens'
+      }
+    } else if (type === 'TIME_LIMIT') {
+      windowType = 'mcp_monthly'
+      label = label || 'MCP每月'
+    }
+
+    return {
+      type,
+      windowType,
+      label,
+      percentage: percentage === null ? null : Math.max(0, percentage),
+      total,
+      used,
+      remaining,
+      unit: hasAbsoluteQuota ? limit.displayUnit || 'tokens' : '%',
+      rawUnit: unit,
+      number,
+      resetAt: this._timestampToIso(
+        limit.nextResetTime || limit.resetAt || limit.resetTime || limit.next_reset_time
+      ),
+      index
+    }
+  }
+
+  _isZhipuBucketExhausted(bucket) {
+    return (
+      bucket?.type === 'TOKENS_LIMIT' &&
+      ((bucket.percentage !== null && bucket.percentage >= 100) ||
+        (bucket.remaining !== null && bucket.remaining <= 0))
+    )
+  }
+
+  normalizeZhipuCodingQuotaData(responseData) {
+    const payload = typeof responseData === 'string' ? JSON.parse(responseData) : responseData
+    const data = payload?.data || payload
+    const limits = Array.isArray(data?.limits) ? data.limits : []
+    if (!data || limits.length === 0) {
+      const error = new Error(payload?.msg || payload?.message || '智谱 quota 响应缺少 limits')
+      error.code = 'ZHIPU_QUOTA_INVALID_RESPONSE'
+      throw error
+    }
+
+    const buckets = limits.map((limit, index) => this._normalizeZhipuLimit(limit, index))
+    const tokenBuckets = buckets
+      .filter((bucket) => bucket.type === 'TOKENS_LIMIT')
+      .sort((a, b) => {
+        const rank = { five_hour: 0, tokens: 1, weekly: 2 }
+        return (rank[a.windowType] ?? 9) - (rank[b.windowType] ?? 9) || a.index - b.index
+      })
+
+    tokenBuckets.forEach((bucket, index) => {
+      if (bucket.windowType === 'tokens') {
+        bucket.windowType = index === 0 ? 'five_hour' : index === 1 ? 'weekly' : 'tokens'
+      }
+      bucket.label = bucket.label || (bucket.windowType === 'weekly' ? '每周额度' : '5小时额度')
+    })
+
+    const exhaustedBuckets = tokenBuckets.filter((bucket) => this._isZhipuBucketExhausted(bucket))
+    const resetTimes = exhaustedBuckets
+      .map((bucket) => (bucket.resetAt ? new Date(bucket.resetAt).getTime() : null))
+      .filter((time) => Number.isFinite(time))
+    const primaryBucket = tokenBuckets[0] || buckets[0]
+    const nextResetAt =
+      resetTimes.length > 0
+        ? new Date(Math.max(...resetTimes)).toISOString()
+        : primaryBucket?.resetAt || null
+    const level =
+      data.level || data.planName || data.plan || data.plan_type || data.packageName || 'unknown'
+
+    return {
+      type: 'zhipu-coding-plan',
+      level,
+      exhausted: exhaustedBuckets.length > 0,
+      nextResetAt,
+      quota: {
+        type: 'zhipu-coding-plan',
+        planName: level,
+        used: primaryBucket?.used ?? primaryBucket?.percentage ?? null,
+        remaining: primaryBucket?.remaining ?? null,
+        total: primaryBucket?.total ?? null,
+        percentage: primaryBucket?.percentage ?? null,
+        resetAt: primaryBucket?.resetAt || nextResetAt,
+        buckets
+      },
+      buckets,
+      exhaustedBuckets
+    }
+  }
+
+  _compactZhipuQuotaStatus(quotaStatus) {
+    if (!quotaStatus) {
+      return null
+    }
+    return {
+      type: quotaStatus.type,
+      level: quotaStatus.level,
+      exhausted: quotaStatus.exhausted,
+      nextResetAt: quotaStatus.nextResetAt,
+      quota: quotaStatus.quota,
+      buckets: quotaStatus.buckets
+    }
+  }
+
+  async fetchZhipuCodingQuota(accountOrId) {
+    const account =
+      typeof accountOrId === 'string' ? await this.getAccount(accountOrId) : accountOrId
+    if (!account || !this.isZhipuCodingPlanAccount(account)) {
+      const error = new Error('Not an OpenAI-compatible Zhipu Coding Plan account')
+      error.code = 'NOT_ZHIPU_CODING_PLAN'
+      throw error
+    }
+    if (!account.apiKey) {
+      const error = new Error('Zhipu Coding Plan account apiKey is empty')
+      error.code = 'ZHIPU_QUOTA_MISSING_API_KEY'
+      throw error
+    }
+
+    const parsedUrl = this._parseProviderUrl(account)
+    const quotaUrl = `${parsedUrl.origin}/api/monitor/usage/quota/limit`
+    const proxyAgent = account.proxy ? ProxyHelper.createProxyAgent(account.proxy) : null
+    const token = String(account.apiKey).trim()
+    const requestQuota = async (useRawToken = false) => {
+      const authorization =
+        useRawToken || /^(bearer|basic)\s+/i.test(token) ? token : `Bearer ${token}`
+      const requestConfig = {
+        method: 'GET',
+        url: quotaUrl,
+        headers: {
+          Authorization: authorization,
+          Accept: 'application/json',
+          'Accept-Language': 'en-US,en',
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000,
+        validateStatus: () => true
+      }
+      if (proxyAgent) {
+        requestConfig.httpAgent = proxyAgent
+        requestConfig.httpsAgent = proxyAgent
+        requestConfig.proxy = false
+      }
+      return axios(requestConfig)
+    }
+
+    let response = await requestQuota(false)
+    if (
+      (response.status === 401 || response.status === 403) &&
+      !/^(bearer|basic)\s+/i.test(token)
+    ) {
+      response = await requestQuota(true)
+    }
+    if (response.status < 200 || response.status >= 300) {
+      const error = new Error(
+        response.data?.msg ||
+          response.data?.message ||
+          `智谱 quota API 返回 HTTP ${response.status}`
+      )
+      error.code = 'ZHIPU_QUOTA_HTTP_ERROR'
+      error.status = response.status
+      throw error
+    }
+
+    return this.normalizeZhipuCodingQuotaData(response.data)
+  }
+
+  async _cacheZhipuCodingQuota(accountId, quotaStatus) {
+    if (!quotaStatus?.quota) {
+      return
+    }
+    const ttl = Math.max(60, parseInt(process.env.ZHIPU_CODING_QUOTA_CACHE_TTL_SECONDS) || 300)
+    await redis.setAccountBalance(
+      'openai-responses',
+      accountId,
+      {
+        balance: null,
+        currency: 'USD',
+        quota: quotaStatus.quota,
+        queryMethod: 'api',
+        status: 'success',
+        rawData: this._compactZhipuQuotaStatus(quotaStatus),
+        lastRefreshAt: new Date().toISOString()
+      },
+      ttl
+    )
+  }
+
+  async markKimiBillingCycleQuotaExceeded(accountId, errorDetails = '') {
+    const account = await this.getAccount(accountId)
+    if (!account) {
+      throw new Error('Account not found')
+    }
+
+    const now = new Date().toISOString()
+    await this.updateAccount(accountId, {
+      status: 'quota_exceeded',
+      schedulable: 'false',
+      errorMessage: 'Kimi Code billing cycle quota exhausted (403), scheduling suspended',
+      kimiBillingCycleQuotaStoppedAt: now,
+      updatedAt: now
+    })
+    upstreamErrorHelper
+      .recordErrorHistory(accountId, 'openai-responses', 403, 'quota_exceeded')
+      .catch(() => {})
+
+    try {
+      const webhookNotifier = require('../../utils/webhookNotifier')
+      await webhookNotifier.sendAccountAnomalyNotification({
+        accountId,
+        accountName: account.name || 'OpenAI Responses Account',
+        platform: 'openai-responses',
+        status: 'quota_exceeded',
+        errorCode: 'KIMI_BILLING_CYCLE_QUOTA_EXCEEDED',
+        reason:
+          'Kimi Code billing cycle quota exhausted (403). Account scheduling has been suspended.',
+        details: this._stringifyProviderError(errorDetails).substring(0, 500)
+      })
+    } catch (webhookError) {
+      logger.error('Failed to send Kimi billing cycle quota webhook notification:', webhookError)
+    }
+
+    logger.warn(
+      `🚫 Kimi Code OpenAI-compatible account marked as quota exceeded: ${account.name} (${accountId})`
+    )
+    return { success: true }
+  }
+
+  async markVolcengineArkMonthlyQuotaExceeded(accountId, options = {}) {
+    const account = await this.getAccount(accountId)
+    if (!account) {
+      throw new Error('Account not found')
+    }
+
+    const resetAt = new Date(options.resetAt)
+    if (Number.isNaN(resetAt.getTime())) {
+      throw new Error('Valid resetAt is required')
+    }
+
+    const now = new Date().toISOString()
+    const resetAtIso = resetAt.toISOString()
+    const resetAtText = options.resetAtText || resetAtIso
+    const updates = {
+      status: 'rate_limited',
+      rateLimitedAt: now,
+      rateLimitStatus: 'limited',
+      rateLimitResetAt: resetAtIso,
+      rateLimitAutoStopped: 'true',
+      schedulable: 'false',
+      errorMessage: `Volcengine Ark monthly usage quota exhausted (429). Reset at ${resetAtText}`,
+      updatedAt: now
+    }
+    await this.updateAccount(accountId, updates)
+    upstreamErrorHelper
+      .recordErrorHistory(accountId, 'openai-responses', 429, 'monthly_quota_exceeded')
+      .catch(() => {})
+
+    try {
+      const webhookNotifier = require('../../utils/webhookNotifier')
+      await webhookNotifier.sendAccountAnomalyNotification({
+        accountId,
+        accountName: account.name || 'OpenAI Responses Account',
+        platform: 'openai-responses',
+        status: 'rate_limited',
+        errorCode: 'VOLCENGINE_ARK_MONTHLY_QUOTA_EXCEEDED',
+        reason: updates.errorMessage,
+        details: this._stringifyProviderError(options.errorDetails).substring(0, 500)
+      })
+    } catch (webhookError) {
+      logger.error(
+        'Failed to send Volcengine Ark monthly quota webhook notification:',
+        webhookError
+      )
+    }
+
+    logger.warn(
+      `🚫 Volcengine Ark OpenAI-compatible account monthly quota exhausted: ${account.name} (${accountId}), reset at ${resetAtIso}`
+    )
+    return { success: true, resetAt: resetAtIso }
+  }
+
+  async markZhipuCodingQuotaExceeded(accountId, quotaStatus, errorDetails = '') {
+    const account = await this.getAccount(accountId)
+    if (!account) {
+      throw new Error('Account not found')
+    }
+
+    const now = new Date().toISOString()
+    const alreadyStopped =
+      account.zhipuCodingQuotaAutoStopped === true ||
+      account.zhipuCodingQuotaAutoStopped === 'true' ||
+      !!account.zhipuCodingQuotaStoppedAt
+    const exhaustedLabels = (quotaStatus?.exhaustedBuckets || [])
+      .map((bucket) => bucket.label)
+      .filter(Boolean)
+    const reason =
+      exhaustedLabels.length > 0
+        ? `Zhipu Coding Plan quota exhausted: ${exhaustedLabels.join(', ')}`
+        : 'Zhipu Coding Plan quota exhausted'
+    const updates = {
+      status: 'quota_exceeded',
+      schedulable: 'false',
+      errorMessage: quotaStatus?.nextResetAt
+        ? `${reason}. Reset at ${quotaStatus.nextResetAt}`
+        : `${reason}. Waiting for quota API recovery`,
+      zhipuCodingQuotaStoppedAt: account.zhipuCodingQuotaStoppedAt || now,
+      zhipuCodingQuotaNextResetAt: quotaStatus?.nextResetAt || '',
+      zhipuCodingQuotaAutoStopped: 'true',
+      zhipuCodingQuotaStatus: JSON.stringify(this._compactZhipuQuotaStatus(quotaStatus) || {}),
+      updatedAt: now
+    }
+    await this.updateAccount(accountId, updates)
+    await this._cacheZhipuCodingQuota(accountId, quotaStatus).catch(() => {})
+
+    if (!alreadyStopped) {
+      try {
+        const webhookNotifier = require('../../utils/webhookNotifier')
+        await webhookNotifier.sendAccountAnomalyNotification({
+          accountId,
+          accountName: account.name || 'OpenAI Responses Account',
+          platform: 'openai-responses',
+          status: 'quota_exceeded',
+          errorCode: 'ZHIPU_CODING_PLAN_QUOTA_EXCEEDED',
+          reason: updates.errorMessage,
+          details: this._stringifyProviderError(errorDetails).substring(0, 500)
+        })
+      } catch (webhookError) {
+        logger.error('Failed to send Zhipu quota webhook notification:', webhookError)
+      }
+    }
+
+    return { success: true, skipped: alreadyStopped }
+  }
+
+  async recoverZhipuCodingQuotaExceeded(accountId, quotaStatus = null) {
+    const account = await this.getAccount(accountId)
+    if (!account) {
+      return { success: false, reason: 'Account not found' }
+    }
+
+    const updates = {
+      errorMessage: '',
+      zhipuCodingQuotaStoppedAt: '',
+      zhipuCodingQuotaNextResetAt: '',
+      zhipuCodingQuotaAutoStopped: '',
+      zhipuCodingQuotaStatus: quotaStatus
+        ? JSON.stringify(this._compactZhipuQuotaStatus(quotaStatus) || {})
+        : '',
+      updatedAt: new Date().toISOString()
+    }
+    if (account.status === 'quota_exceeded') {
+      updates.status = 'active'
+    }
+    if (
+      (account.zhipuCodingQuotaAutoStopped === true ||
+        account.zhipuCodingQuotaAutoStopped === 'true') &&
+      (account.schedulable === false || account.schedulable === 'false')
+    ) {
+      updates.schedulable = 'true'
+    }
+    await this.updateAccount(accountId, updates)
+    if (quotaStatus) {
+      await this._cacheZhipuCodingQuota(accountId, quotaStatus).catch(() => {})
+    }
+    return { success: true }
+  }
+
+  async refreshZhipuCodingQuotaProtection(accountId, options = {}) {
+    const account = options.account?.apiKey ? options.account : await this.getAccount(accountId)
+    if (!account || !this.isZhipuCodingPlanAccount(account)) {
+      return { checked: false, skipped: true, reason: 'not_zhipu_coding_plan' }
+    }
+
+    const quotaStatus = await this.fetchZhipuCodingQuota(account)
+    await this._cacheZhipuCodingQuota(accountId, quotaStatus).catch(() => {})
+    const autoStopped =
+      account.zhipuCodingQuotaAutoStopped === true ||
+      account.zhipuCodingQuotaAutoStopped === 'true' ||
+      !!account.zhipuCodingQuotaStoppedAt
+
+    if (quotaStatus.exhausted) {
+      const result = await this.markZhipuCodingQuotaExceeded(
+        accountId,
+        quotaStatus,
+        options.errorDetails || ''
+      )
+      return {
+        checked: true,
+        exhausted: true,
+        suspended: !result.skipped,
+        quotaStatus
+      }
+    }
+    if (autoStopped || account.status === 'quota_exceeded') {
+      await this.recoverZhipuCodingQuotaExceeded(accountId, quotaStatus)
+      return { checked: true, exhausted: false, recovered: true, quotaStatus }
+    }
+    return { checked: true, exhausted: false, quotaStatus }
+  }
+
+  async handleProviderQuotaError(accountId, options = {}) {
+    const account =
+      options.account?.apiKey && options.account.apiKey !== '***'
+        ? options.account
+        : await this.getAccount(accountId)
+    if (!account) {
+      return { handled: false }
+    }
+
+    const status = Number(options.status)
+    const errorData = options.errorData
+    if (this.isKimiBillingCycleQuotaError(status, errorData, account)) {
+      await this.markKimiBillingCycleQuotaExceeded(accountId, errorData)
+      return { handled: true, provider: 'kimi', quotaType: 'billing_cycle' }
+    }
+
+    const volcengineQuota = this.getVolcengineArkMonthlyQuotaError(status, errorData, account)
+    if (volcengineQuota) {
+      await this.markVolcengineArkMonthlyQuotaExceeded(accountId, {
+        ...volcengineQuota,
+        errorDetails: errorData
+      })
+      return {
+        handled: true,
+        provider: 'volcengine',
+        quotaType: 'monthly',
+        resetAt: volcengineQuota.resetAt
+      }
+    }
+
+    if ([400, 403, 429].includes(status) && this.isZhipuCodingPlanAccount(account)) {
+      try {
+        const result = await this.refreshZhipuCodingQuotaProtection(accountId, {
+          account,
+          errorDetails: this._stringifyProviderError(errorData)
+        })
+        if (result.exhausted) {
+          return {
+            handled: true,
+            provider: 'zhipu',
+            quotaType: 'coding_plan',
+            resetAt: result.quotaStatus?.nextResetAt || null
+          }
+        }
+      } catch (error) {
+        logger.warn(`⚠️ Failed to check Zhipu Coding Plan quota for ${accountId}: ${error.message}`)
+      }
+    }
+
+    return { handled: false }
+  }
+
+  async checkAllZhipuCodingQuotaAccounts() {
+    const result = { checked: 0, suspended: 0, recovered: 0, errors: [], accounts: [] }
+    const accounts = await this.getAllAccounts(true)
+    for (const account of accounts) {
+      if (!this.isZhipuCodingPlanAccount(account)) {
+        continue
+      }
+      const autoStopped =
+        account.zhipuCodingQuotaAutoStopped === true ||
+        account.zhipuCodingQuotaAutoStopped === 'true' ||
+        !!account.zhipuCodingQuotaStoppedAt
+      const shouldCheck =
+        account.isActive !== false &&
+        (account.schedulable !== false || autoStopped || account.status === 'quota_exceeded')
+      if (!shouldCheck) {
+        continue
+      }
+
+      result.checked += 1
+      try {
+        const update = await this.refreshZhipuCodingQuotaProtection(account.id)
+        if (update.suspended) {
+          result.suspended += 1
+        }
+        if (update.recovered) {
+          result.recovered += 1
+          result.accounts.push({
+            id: account.id,
+            name: account.name,
+            quotaStatus: update.quotaStatus
+          })
+        }
+      } catch (error) {
+        result.errors.push({
+          accountId: account.id,
+          accountName: account.name,
+          error: error.message
+        })
+      }
+    }
+    return result
   }
 
   // 创建账户
@@ -127,6 +812,11 @@ class OpenAIResponsesAccountService {
       lastResetDate: redis.getDateStringInTimezone(),
       quotaResetTime,
       quotaStoppedAt: '',
+      kimiBillingCycleQuotaStoppedAt: '',
+      zhipuCodingQuotaStoppedAt: '',
+      zhipuCodingQuotaNextResetAt: '',
+      zhipuCodingQuotaAutoStopped: '',
+      zhipuCodingQuotaStatus: '',
       maxConcurrentTasks: this._normalizeMaxConcurrentTasks(maxConcurrentTasks).toString(),
       disableAutoProtection: disableAutoProtection.toString(), // 关闭自动防护
       providerEndpoint: normalizedProviderEndpoint, // Provider 端点类型：responses(默认) | chat-completions | auto
@@ -174,6 +864,9 @@ class OpenAIResponsesAccountService {
       accountData.modelRestrictionMode
     )
     accountData.stickySessionMode = normalizeAccountStickySessionMode(accountData.stickySessionMode)
+    accountData.isZhipuCodingPlan = this.isZhipuCodingPlanAccount(accountData)
+    accountData.zhipuCodingQuotaAutoStopped = accountData.zhipuCodingQuotaAutoStopped === 'true'
+    accountData.zhipuCodingQuotaStatus = this._parseOptionalJson(accountData.zhipuCodingQuotaStatus)
 
     return accountData
   }
@@ -354,6 +1047,11 @@ class OpenAIResponsesAccountService {
       accountData.stickySessionMode = normalizeAccountStickySessionMode(
         accountData.stickySessionMode
       )
+      accountData.isZhipuCodingPlan = this.isZhipuCodingPlanAccount(accountData)
+      accountData.zhipuCodingQuotaAutoStopped = accountData.zhipuCodingQuotaAutoStopped === 'true'
+      accountData.zhipuCodingQuotaStatus = this._parseOptionalJson(
+        accountData.zhipuCodingQuotaStatus
+      )
 
       accounts.push(accountData)
     }
@@ -478,6 +1176,7 @@ class OpenAIResponsesAccountService {
         rateLimitedAt: '',
         rateLimitStatus: '',
         rateLimitResetAt: '',
+        rateLimitAutoStopped: '',
         status: 'active',
         schedulable: 'true', // 恢复调度
         errorMessage: ''
@@ -592,7 +1291,14 @@ class OpenAIResponsesAccountService {
       rateLimitedAt: '',
       rateLimitStatus: '',
       rateLimitResetAt: '',
-      rateLimitDuration: ''
+      rateLimitDuration: '',
+      rateLimitAutoStopped: '',
+      quotaStoppedAt: '',
+      kimiBillingCycleQuotaStoppedAt: '',
+      zhipuCodingQuotaStoppedAt: '',
+      zhipuCodingQuotaNextResetAt: '',
+      zhipuCodingQuotaAutoStopped: '',
+      zhipuCodingQuotaStatus: ''
     }
 
     await this.updateAccount(accountId, updates)
