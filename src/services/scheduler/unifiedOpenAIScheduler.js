@@ -293,6 +293,17 @@ class UnifiedOpenAIScheduler {
     return providerEndpoint === normalizedRequired
   }
 
+  _matchesRequiredCapabilities(account, accountType, options = {}) {
+    if (!options.requireImagesGenerations) {
+      return true
+    }
+
+    return (
+      accountType === 'openai' &&
+      (account?.supportsImagesGenerations === true || account?.supportsImagesGenerations === 'true')
+    )
+  }
+
   _isModelSupportedByAccount(account, accountType, requestedModel = null) {
     if (!requestedModel) {
       return true
@@ -370,6 +381,14 @@ class UnifiedOpenAIScheduler {
           boundAccount.status !== 'unauthorized'
 
         if (isActiveBoundAccount) {
+          if (!this._matchesRequiredCapabilities(boundAccount, accountType, options)) {
+            const error = new Error(
+              `Dedicated account ${boundAccount.name} does not support /v1/images/generations`
+            )
+            error.statusCode = 400
+            throw error
+          }
+
           // 检查是否临时不可用
           const isTempUnavailable = await upstreamErrorHelper.isTempUnavailable(
             boundAccount.id,
@@ -533,6 +552,7 @@ class UnifiedOpenAIScheduler {
               (await this._isAccountAvailable(mappedAccount.accountId, mappedAccount.accountType, {
                 requestedModel,
                 requiredProviderEndpoint: options.requiredProviderEndpoint,
+                requireImagesGenerations: options.requireImagesGenerations,
                 ignoreConcurrency: true
               }))
             if (isAvailable) {
@@ -571,6 +591,12 @@ class UnifiedOpenAIScheduler {
       )
 
       if (availableAccounts.length === 0) {
+        if (options.requireImagesGenerations) {
+          const error = new Error('No available OpenAI accounts support /v1/images/generations')
+          error.statusCode = 400
+          throw error
+        }
+
         // 提供更详细的错误信息
         if (requestedModel) {
           const error = new Error(
@@ -661,6 +687,10 @@ class UnifiedOpenAIScheduler {
           account.status !== 'error' &&
           (account.accountType === 'shared' || !account.accountType) // 兼容旧数据
         ) {
+          if (!this._matchesRequiredCapabilities(account, 'openai', options)) {
+            continue
+          }
+
           const accountId = account.id || account.accountId
 
           const readiness = await this._ensureAccountReadyForScheduling(account, accountId, {
@@ -725,6 +755,10 @@ class UnifiedOpenAIScheduler {
           })
         }
       }
+    }
+
+    if (options.requireImagesGenerations) {
+      return availableAccounts
     }
 
     // 获取所有 OpenAI-Responses 账户（共享池）
@@ -848,6 +882,11 @@ class UnifiedOpenAIScheduler {
         ) {
           return false
         }
+
+        if (!this._matchesRequiredCapabilities(account, accountType, options)) {
+          return false
+        }
+
         const readiness = await this._ensureAccountReadyForScheduling(account, accountId, {
           sanitized: false
         })
@@ -904,6 +943,11 @@ class UnifiedOpenAIScheduler {
         ) {
           return false
         }
+
+        if (!this._matchesRequiredCapabilities(account, accountType, options)) {
+          return false
+        }
+
         // 检查是否可调度
         if (!isSchedulable(account.schedulable)) {
           logger.info(`🚫 OpenAI-Responses account ${accountId} is not schedulable`)
@@ -1244,6 +1288,7 @@ class UnifiedOpenAIScheduler {
                 {
                   requestedModel,
                   requiredProviderEndpoint: options.requiredProviderEndpoint,
+                  requireImagesGenerations: options.requireImagesGenerations,
                   ignoreConcurrency: true
                 }
               )
@@ -1287,6 +1332,13 @@ class UnifiedOpenAIScheduler {
           (account.isActive === true || account.isActive === 'true') &&
           account.status !== 'error'
         ) {
+          if (!this._matchesRequiredCapabilities(account, accountType, options)) {
+            logger.debug(
+              `⏭️ Skipping group member ${accountType} account ${account.name} - does not support /v1/images/generations`
+            )
+            continue
+          }
+
           if (
             !this._matchesRequiredProviderEndpoint(
               account,
@@ -1369,8 +1421,10 @@ class UnifiedOpenAIScheduler {
       }
 
       if (availableAccounts.length === 0) {
-        const error = new Error(`No available accounts in group ${group.name}`)
-        error.statusCode = 402 // Payment Required - 资源耗尽
+        const error = options.requireImagesGenerations
+          ? new Error(`No available accounts in group ${group.name} support /v1/images/generations`)
+          : new Error(`No available accounts in group ${group.name}`)
+        error.statusCode = options.requireImagesGenerations ? 400 : 402
         throw error
       }
 

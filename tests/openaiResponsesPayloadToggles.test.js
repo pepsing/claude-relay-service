@@ -1,4 +1,5 @@
 const crypto = require('crypto')
+const { PassThrough } = require('stream')
 
 const mockRouter = {
   get: jest.fn(),
@@ -697,5 +698,186 @@ describe('openai responses payload toggles', () => {
     expect(req.body.model).toBe('o1-mini')
     expect(req.body.prompt_cache_key).toBe('compact-key')
     expect(req.body.instructions).toBe(openaiRoutes.CODEX_CLI_INSTRUCTIONS)
+  })
+})
+
+describe('openai images generations', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValue({
+      accountId: 'openai-images-1',
+      accountType: 'openai'
+    })
+    unifiedOpenAIScheduler.isAccountRateLimited.mockResolvedValue(false)
+    openaiAccountService.getAccount.mockResolvedValue({
+      id: 'openai-images-1',
+      name: 'Images Account',
+      accessToken: 'encrypted-token',
+      accountId: 'chatgpt-account-1',
+      maxConcurrentTasks: 2,
+      supportsImagesGenerations: true
+    })
+    openaiAccountService.decrypt.mockReturnValue('decrypted-token')
+    redis.incrConcurrency.mockResolvedValue(1)
+    redis.decrConcurrency.mockResolvedValue(0)
+    redis.refreshConcurrencyLease.mockResolvedValue(true)
+    apiKeyService.recordUsage.mockResolvedValue({ totalCost: 0 })
+  })
+
+  function createImagesReq(body = {}) {
+    const req = createReq({
+      path: '/v1/images/generations',
+      body
+    })
+    req.on = jest.fn()
+    req.socket = { destroyed: false }
+    return req
+  }
+
+  test('requires an OpenAI API key permission', async () => {
+    apiKeyService.hasPermission.mockReturnValueOnce(false)
+    const res = createRes()
+
+    await openaiRoutes.handleImages(createImagesReq({ prompt: 'draw a whale' }), res)
+
+    expect(res.status).toHaveBeenCalledWith(403)
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).not.toHaveBeenCalled()
+  })
+
+  test('returns a clear error when no account enables images generations', async () => {
+    const error = new Error('No available OpenAI accounts support /v1/images/generations')
+    error.statusCode = 400
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockRejectedValueOnce(error)
+    const res = createRes()
+
+    await openaiRoutes.handleImages(createImagesReq({ prompt: 'draw a whale' }), res)
+
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.payload).toEqual({
+      error: {
+        message: 'No available OpenAI accounts support /v1/images/generations',
+        type: 'invalid_request_error'
+      }
+    })
+    expect(axios.post).not.toHaveBeenCalled()
+  })
+
+  test('selects an enabled OAuth account and releases concurrency after a generated image', async () => {
+    const upstream = new PassThrough()
+    axios.post.mockResolvedValue({
+      status: 200,
+      data: upstream
+    })
+    const req = createImagesReq({
+      prompt: 'draw a whale',
+      model: 'gpt-image-2',
+      size: '1024x1024',
+      prompt_cache_key: 'images-session'
+    })
+    const res = createRes()
+
+    await openaiRoutes.handleImages(req, res)
+
+    const completed = new Promise((resolve) => upstream.once('end', () => setImmediate(resolve)))
+    upstream.write(
+      `data: ${JSON.stringify({
+        partial_image_index: 0,
+        partial_image_b64: 'image-base64'
+      })}\n`
+    )
+    upstream.write(
+      `data: ${JSON.stringify({
+        type: 'response.completed',
+        response: {
+          tools: [{ size: '1024x1024', quality: 'high', output_format: 'png' }],
+          usage: { input_tokens: 8, output_tokens: 3 }
+        }
+      })}\n`
+    )
+    upstream.end('data: [DONE]\n')
+    await completed
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      createHash('images-session'),
+      'gpt-5.4-mini',
+      {
+        requiredProviderEndpoint: 'responses',
+        requireImagesGenerations: true
+      }
+    )
+    expect(axios.post.mock.calls[0][1]).toMatchObject({
+      model: 'gpt-5.4-mini',
+      tool_choice: { type: 'image_generation' },
+      tools: [
+        expect.objectContaining({
+          type: 'image_generation',
+          model: 'gpt-image-2',
+          size: '1024x1024'
+        })
+      ]
+    })
+    expect(res.payload).toMatchObject({
+      data: [{ b64_json: 'image-base64' }],
+      size: '1024x1024',
+      quality: 'high',
+      output_format: 'png'
+    })
+    expect(apiKeyService.recordUsage).toHaveBeenCalledWith(
+      'key_1',
+      8,
+      3,
+      0,
+      0,
+      'gpt-image-2',
+      'openai-images-1',
+      'openai',
+      null,
+      null
+    )
+    expect(redis.incrConcurrency).toHaveBeenCalledWith(
+      'openai_account:openai-images-1',
+      expect.any(String),
+      600
+    )
+    const requestId = redis.incrConcurrency.mock.calls[0][1]
+    expect(redis.decrConcurrency).toHaveBeenCalledWith('openai_account:openai-images-1', requestId)
+  })
+
+  test('marks an images account rate limited and releases concurrency on 429', async () => {
+    const upstream = new PassThrough()
+    axios.post.mockResolvedValue({
+      status: 429,
+      data: upstream
+    })
+    const req = createImagesReq({
+      prompt: 'draw a whale',
+      prompt_cache_key: 'rate-limit-session'
+    })
+    const res = createRes()
+
+    const requestPromise = openaiRoutes.handleImages(req, res)
+    setImmediate(() => {
+      upstream.end(
+        JSON.stringify({
+          error: {
+            type: 'usage_limit_reached',
+            message: 'limit reached',
+            resets_in_seconds: 120
+          }
+        })
+      )
+    })
+    await requestPromise
+
+    expect(unifiedOpenAIScheduler.markAccountRateLimited).toHaveBeenCalledWith(
+      'openai-images-1',
+      'openai',
+      createHash('rate-limit-session'),
+      120
+    )
+    expect(res.status).toHaveBeenCalledWith(429)
+    const requestId = redis.incrConcurrency.mock.calls[0][1]
+    expect(redis.decrConcurrency).toHaveBeenCalledWith('openai_account:openai-images-1', requestId)
   })
 })

@@ -2067,6 +2067,19 @@
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 限制该账户的并发请求数量，0 表示不限制
               </p>
+              <label class="mt-4 inline-flex cursor-pointer items-center">
+                <input
+                  v-model="form.supportsImagesGenerations"
+                  class="mr-2 rounded border-gray-300 text-blue-600 focus:border-blue-500 focus:ring focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-700"
+                  type="checkbox"
+                />
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  支持 /v1/images/generations
+                </span>
+              </label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                开启后，该账户才会参与 OpenAI 兼容图片生成接口的负载调度
+              </p>
             </div>
 
             <!-- 手动输入 Token 字段 -->
@@ -3152,6 +3165,19 @@
             />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               限制该账户的并发请求数量，0 表示不限制
+            </p>
+            <label class="mt-4 inline-flex cursor-pointer items-center">
+              <input
+                v-model="form.supportsImagesGenerations"
+                class="mr-2 rounded border-gray-300 text-blue-600 focus:border-blue-500 focus:ring focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-700"
+                type="checkbox"
+              />
+              <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                支持 /v1/images/generations
+              </span>
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              开启后，该账户才会参与 OpenAI 兼容图片生成接口的负载调度
             </p>
           </div>
 
@@ -4556,6 +4582,7 @@ const form = ref({
   quotaResetTime: props.account?.quotaResetTime || '00:00',
   // 并发控制字段
   maxConcurrentTasks: props.account?.maxConcurrentTasks || 0,
+  supportsImagesGenerations: toFormBoolean(props.account?.supportsImagesGenerations),
   // Bedrock 特定字段
   credentialType: props.account?.credentialType || 'access_key', // 'access_key' 或 'bearer_token'
   accessKeyId: props.account?.accessKeyId || '',
@@ -5403,6 +5430,7 @@ const handleOAuthSuccess = async (tokenInfoOrList) => {
       data.accountInfo = tokenInfo.accountInfo
       data.priority = form.value.priority || 50
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
     } else if (currentPlatform === 'droid') {
       const rawTokens = tokenInfo.tokens || tokenInfo || {}
 
@@ -5778,6 +5806,7 @@ const createAccount = async () => {
       data.requireRefreshSuccess = true // 必须刷新成功才能创建账户
       data.priority = form.value.priority || 50
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
     } else if (form.value.platform === 'droid') {
       data.priority = form.value.priority || 50
       data.endpointType = form.value.endpointType || 'anthropic'
@@ -6155,6 +6184,7 @@ const updateAccount = async () => {
     if (props.account.platform === 'openai') {
       data.priority = form.value.priority || 50
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
     }
 
     // Gemini 账号优先级更新
@@ -6841,6 +6871,7 @@ watch(
         quotaResetTime: newAccount.quotaResetTime || '00:00',
         // 并发控制字段
         maxConcurrentTasks: newAccount.maxConcurrentTasks || 0,
+        supportsImagesGenerations: toFormBoolean(newAccount.supportsImagesGenerations),
         stickySessionMode: newAccount.stickySessionMode || 'inherit',
         stickySessionGroupId:
           newAccount.stickySessionGroupId || newAccount.stickySessionGroup?.id || '',

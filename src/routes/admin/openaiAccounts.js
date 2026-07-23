@@ -178,6 +178,7 @@ function buildOpenAIImportAccountData(record, index) {
     accountType: 'shared',
     priority: 50,
     maxConcurrentTasks: 0,
+    supportsImagesGenerations: false,
     rateLimitDuration: 60,
     openaiOauth,
     accountInfo,
@@ -544,6 +545,7 @@ router.post('/', authenticateAdmin, async (req, res) => {
       rateLimitDuration,
       priority,
       maxConcurrentTasks,
+      supportsImagesGenerations,
       needsImmediateRefresh, // 是否需要立即刷新
       requireRefreshSuccess // 是否必须刷新成功才能创建
     } = req.body
@@ -575,6 +577,8 @@ router.post('/', authenticateAdmin, async (req, res) => {
         maxConcurrentTasks !== undefined && maxConcurrentTasks !== null
           ? Number(maxConcurrentTasks)
           : 0,
+      supportsImagesGenerations:
+        supportsImagesGenerations === true || supportsImagesGenerations === 'true',
       rateLimitDuration:
         rateLimitDuration !== undefined && rateLimitDuration !== null ? rateLimitDuration : 60,
       openaiOauth: openaiOauth || {},

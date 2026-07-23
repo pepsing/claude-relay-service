@@ -519,6 +519,11 @@ async function createAccount(accountData) {
     isActive: accountData.isActive !== false ? 'true' : 'false',
     status: 'active',
     schedulable: accountData.schedulable !== false ? 'true' : 'false',
+    supportsImagesGenerations:
+      accountData.supportsImagesGenerations === true ||
+      accountData.supportsImagesGenerations === 'true'
+        ? 'true'
+        : 'false',
     // 自动防护开关
     disableAutoProtection:
       accountData.disableAutoProtection === true || accountData.disableAutoProtection === 'true'
@@ -639,6 +644,13 @@ async function updateAccount(accountId, updates) {
   if (updates.disableAutoProtection !== undefined) {
     updates.disableAutoProtection =
       updates.disableAutoProtection === true || updates.disableAutoProtection === 'true'
+        ? 'true'
+        : 'false'
+  }
+
+  if (updates.supportsImagesGenerations !== undefined) {
+    updates.supportsImagesGenerations =
+      updates.supportsImagesGenerations === true || updates.supportsImagesGenerations === 'true'
         ? 'true'
         : 'false'
   }
@@ -774,6 +786,7 @@ async function getAllAccounts() {
         ...accountData,
         isActive: accountData.isActive === 'true',
         schedulable: accountData.schedulable !== 'false',
+        supportsImagesGenerations: accountData.supportsImagesGenerations === 'true',
         openaiOauth: maskedOauth,
         accessToken: maskedAccessToken,
         refreshToken: maskedRefreshToken,
