@@ -54,6 +54,10 @@ jest.mock('../src/services/relay/openaiResponsesRelayService', () => ({
   handleRequest: jest.fn()
 }))
 
+jest.mock('../src/services/claudeRelayConfigService', () => ({
+  getConfig: jest.fn()
+}))
+
 jest.mock('../src/services/apiKeyService', () => ({
   hasPermission: jest.fn(() => true),
   recordUsage: jest.fn()
@@ -107,6 +111,7 @@ const redis = require('../src/models/redis')
 const openaiAccountService = require('../src/services/account/openaiAccountService')
 const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
 const openaiResponsesRelayService = require('../src/services/relay/openaiResponsesRelayService')
+const claudeRelayConfigService = require('../src/services/claudeRelayConfigService')
 const errorSanitizer = require('../src/utils/errorSanitizer')
 const openaiRoutes = require('../src/routes/openaiRoutes')
 
@@ -183,6 +188,9 @@ describe('openai responses payload toggles', () => {
     })
 
     openaiResponsesRelayService.handleRequest.mockResolvedValue({ ok: true })
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      openaiImagesStickySessionEnabled: false
+    })
     openaiAccountService.decrypt.mockReturnValue('decrypted-token')
     redis.incrConcurrency.mockResolvedValue(1)
     redis.decrConcurrency.mockResolvedValue(0)
@@ -799,12 +807,9 @@ describe('openai images generations', () => {
 
     expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
       req.apiKey,
-      createHash('images-session'),
-      'gpt-5.4-mini',
-      {
-        requiredProviderEndpoint: 'responses',
-        requireImagesGenerations: true
-      }
+      null,
+      'gpt-image-2',
+      { requireImagesGenerations: true }
     )
     expect(axios.post.mock.calls[0][1]).toMatchObject({
       model: 'gpt-5.4-mini',
@@ -844,6 +849,78 @@ describe('openai images generations', () => {
     expect(redis.decrConcurrency).toHaveBeenCalledWith('openai_account:openai-images-1', requestId)
   })
 
+  test('uses an independent sticky namespace when images sticky sessions are enabled', async () => {
+    claudeRelayConfigService.getConfig.mockResolvedValueOnce({
+      openaiImagesStickySessionEnabled: true
+    })
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValueOnce({
+      accountId: 'responses-images-1',
+      accountType: 'openai-responses'
+    })
+    openaiResponsesAccountService.getAccount.mockResolvedValueOnce({
+      id: 'responses-images-1',
+      name: 'Responses Images Account',
+      apiKey: 'provider-key',
+      supportsImagesGenerations: true
+    })
+    const req = createImagesReq({
+      prompt: 'draw a whale',
+      model: 'gpt-image-2',
+      prompt_cache_key: 'shared-session'
+    })
+
+    await openaiRoutes.handleImages(req, createRes())
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      createHash('openai-images:shared-session'),
+      'gpt-image-2',
+      { requireImagesGenerations: true }
+    )
+  })
+
+  test('relays images generations through an enabled OpenAI-Responses account', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValueOnce({
+      accountId: 'responses-images-1',
+      accountType: 'openai-responses'
+    })
+    openaiResponsesAccountService.getAccount.mockResolvedValueOnce({
+      id: 'responses-images-1',
+      name: 'Responses Images Account',
+      apiKey: 'provider-key',
+      supportsImagesGenerations: true
+    })
+    const req = createImagesReq({
+      prompt: 'draw a whale',
+      model: 'provider-image-model',
+      response_format: 'b64_json'
+    })
+    const res = createRes()
+
+    await openaiRoutes.handleImages(req, res)
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+      req.apiKey,
+      null,
+      'provider-image-model',
+      { requireImagesGenerations: true }
+    )
+    expect(openaiResponsesRelayService.handleRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/v1/images/generations',
+        body: expect.objectContaining({
+          prompt: 'draw a whale',
+          model: 'provider-image-model',
+          response_format: 'b64_json'
+        })
+      }),
+      res,
+      expect.objectContaining({ id: 'responses-images-1' }),
+      req.apiKey
+    )
+    expect(axios.post).not.toHaveBeenCalled()
+  })
+
   test('marks an images account rate limited and releases concurrency on 429', async () => {
     const upstream = new PassThrough()
     axios.post.mockResolvedValue({
@@ -873,7 +950,7 @@ describe('openai images generations', () => {
     expect(unifiedOpenAIScheduler.markAccountRateLimited).toHaveBeenCalledWith(
       'openai-images-1',
       'openai',
-      createHash('rate-limit-session'),
+      null,
       120
     )
     expect(res.status).toHaveBeenCalledWith(429)

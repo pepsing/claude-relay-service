@@ -31,6 +31,30 @@ describe('openaiProviderEndpoint', () => {
     })
   })
 
+  test('preserves images generations paths for regular Responses providers', () => {
+    expect(
+      resolveOpenAIProviderTargetPath({
+        providerEndpoint: 'responses',
+        requestPath: '/v1/images/generations',
+        baseApi: 'https://api.example.com/v1'
+      })
+    ).toEqual({
+      providerEndpoint: 'responses',
+      targetPath: '/images/generations'
+    })
+
+    expect(
+      resolveOpenAIProviderTargetPath({
+        providerEndpoint: 'chat-completions',
+        requestPath: '/v1/images/generations',
+        baseApi: 'https://api.example.com'
+      })
+    ).toEqual({
+      providerEndpoint: 'chat-completions',
+      targetPath: '/v1/images/generations'
+    })
+  })
+
   test('resolves chat completions target without duplicating versioned baseApi', () => {
     expect(
       resolveOpenAIProviderTargetPath({

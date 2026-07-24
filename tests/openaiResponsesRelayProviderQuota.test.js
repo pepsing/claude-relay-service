@@ -86,6 +86,57 @@ describe('OpenAI Responses relay provider subscription quota handling', () => {
     jest.clearAllMocks()
   })
 
+  it('preserves images generations for accounts configured as Chat Completions providers', async () => {
+    const account = {
+      id: 'images-chat-provider',
+      name: 'images-chat-provider',
+      baseApi: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      providerEndpoint: 'chat-completions',
+      supportedModels: { 'gpt-image-2': 'provider-image-model' },
+      maxConcurrentTasks: 0
+    }
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    openaiResponsesAccountService.getMappedModel.mockReturnValue('provider-image-model')
+    axios.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: { created: 123, data: [{ b64_json: 'image-data' }] }
+    })
+
+    const req = new EventEmitter()
+    req.method = 'POST'
+    req.path = '/v1/images/generations'
+    req.headers = {}
+    req.body = {
+      model: 'gpt-image-2',
+      prompt: 'draw a whale',
+      response_format: 'b64_json'
+    }
+    req.socket = { destroyed: false }
+    const res = new FakeResponse()
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+
+    expect(axios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'https://api.example.com/v1/images/generations',
+        data: {
+          model: 'provider-image-model',
+          prompt: 'draw a whale',
+          response_format: 'b64_json'
+        }
+      })
+    )
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toEqual({ created: 123, data: [{ b64_json: 'image-data' }] })
+  })
+
   it('handles a streaming Chat Completions request that receives an HTTP-level Kimi 403', async () => {
     const account = {
       id: 'kimi-chat-1',

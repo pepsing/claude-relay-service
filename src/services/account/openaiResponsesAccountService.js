@@ -748,6 +748,7 @@ class OpenAIResponsesAccountService {
       dailyQuota = 0, // 每日额度限制（美元），0表示不限制
       quotaResetTime = '00:00', // 额度重置时间（HH:mm格式）
       maxConcurrentTasks = 0, // 最大并发任务数，0表示无限制
+      supportsImagesGenerations = false, // 是否支持 /v1/images/generations
       rateLimitDuration = 60, // 限流时间（分钟）
       disableAutoProtection = false, // 是否关闭自动防护（429/401/400/529 不自动禁用）
       providerEndpoint = 'responses', // Provider 端点类型：responses | chat-completions | auto
@@ -818,6 +819,10 @@ class OpenAIResponsesAccountService {
       zhipuCodingQuotaAutoStopped: '',
       zhipuCodingQuotaStatus: '',
       maxConcurrentTasks: this._normalizeMaxConcurrentTasks(maxConcurrentTasks).toString(),
+      supportsImagesGenerations:
+        supportsImagesGenerations === true || supportsImagesGenerations === 'true'
+          ? 'true'
+          : 'false',
       disableAutoProtection: disableAutoProtection.toString(), // 关闭自动防护
       providerEndpoint: normalizedProviderEndpoint, // Provider 端点类型：responses(默认) | chat-completions | auto
       stickySessionMode: normalizeAccountStickySessionMode(stickySessionMode)
@@ -859,6 +864,7 @@ class OpenAIResponsesAccountService {
     accountData.maxConcurrentTasks = this._normalizeMaxConcurrentTasks(
       accountData.maxConcurrentTasks
     )
+    accountData.supportsImagesGenerations = accountData.supportsImagesGenerations === 'true'
     accountData.supportedModels = this._parseSupportedModels(accountData.supportedModels)
     accountData.modelRestrictionMode = this._normalizeModelRestrictionMode(
       accountData.modelRestrictionMode
@@ -939,6 +945,13 @@ class OpenAIResponsesAccountService {
       ).toString()
     }
 
+    if (updates.supportsImagesGenerations !== undefined) {
+      updates.supportsImagesGenerations =
+        updates.supportsImagesGenerations === true || updates.supportsImagesGenerations === 'true'
+          ? 'true'
+          : 'false'
+    }
+
     if (updates.stickySessionMode !== undefined) {
       updates.stickySessionMode = normalizeAccountStickySessionMode(updates.stickySessionMode)
     }
@@ -1008,6 +1021,7 @@ class OpenAIResponsesAccountService {
       accountData.maxConcurrentTasks = this._normalizeMaxConcurrentTasks(
         accountData.maxConcurrentTasks
       )
+      accountData.supportsImagesGenerations = accountData.supportsImagesGenerations === 'true'
       accountData.supportedModels = this._parseSupportedModels(accountData.supportedModels)
       accountData.modelRestrictionMode = this._normalizeModelRestrictionMode(
         accountData.modelRestrictionMode

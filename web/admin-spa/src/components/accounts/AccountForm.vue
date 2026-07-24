@@ -2067,6 +2067,9 @@
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 限制该账户的并发请求数量，0 表示不限制
               </p>
+            </div>
+
+            <div v-if="form.platform === 'openai' || form.platform === 'openai-responses'">
               <label class="mt-4 inline-flex cursor-pointer items-center">
                 <input
                   v-model="form.supportsImagesGenerations"
@@ -3166,6 +3169,9 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               限制该账户的并发请求数量，0 表示不限制
             </p>
+          </div>
+
+          <div v-if="form.platform === 'openai' || form.platform === 'openai-responses'">
             <label class="mt-4 inline-flex cursor-pointer items-center">
               <input
                 v-model="form.supportsImagesGenerations"
@@ -5863,6 +5869,7 @@ const createAccount = async () => {
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
       data.stickySessionMode = form.value.stickySessionMode || 'inherit'
       data.stickySessionGroupId = form.value.stickySessionGroupId || ''
     } else if (form.value.platform === 'gemini-antigravity') {
@@ -6230,6 +6237,7 @@ const updateAccount = async () => {
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
+      data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
       data.stickySessionMode = form.value.stickySessionMode || 'inherit'
       data.stickySessionGroupId = form.value.stickySessionGroupId || ''
     }

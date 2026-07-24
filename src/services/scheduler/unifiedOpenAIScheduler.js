@@ -299,17 +299,27 @@ class UnifiedOpenAIScheduler {
     }
 
     return (
-      accountType === 'openai' &&
+      (accountType === 'openai' || accountType === 'openai-responses') &&
       (account?.supportsImagesGenerations === true || account?.supportsImagesGenerations === 'true')
     )
   }
 
-  _isModelSupportedByAccount(account, accountType, requestedModel = null) {
+  _isModelSupportedByAccount(account, accountType, requestedModel = null, options = {}) {
     if (!requestedModel) {
       return true
     }
 
+    if (options.requireImagesGenerations && accountType === 'openai') {
+      return /^gpt-image-/i.test(String(requestedModel))
+    }
+
     if (accountType === 'openai-responses') {
+      if (
+        options.requireImagesGenerations &&
+        String(requestedModel).toLowerCase() === 'gpt-image-2'
+      ) {
+        return this._matchesRequiredCapabilities(account, accountType, options)
+      }
       return openaiResponsesAccountService.isModelSupported(account.supportedModels, requestedModel)
     }
 
@@ -473,7 +483,9 @@ class UnifiedOpenAIScheduler {
             }
 
             // 专属账户：可选的模型检查（只有明确配置了supportedModels且不为空才检查）
-            if (!this._isModelSupportedByAccount(boundAccount, accountType, requestedModel)) {
+            if (
+              !this._isModelSupportedByAccount(boundAccount, accountType, requestedModel, options)
+            ) {
               const errorMsg = `Dedicated account ${boundAccount.name} does not support model ${requestedModel}`
               logger.warn(`⚠️ ${errorMsg}`)
               const error = new Error(errorMsg)
@@ -735,7 +747,7 @@ class UnifiedOpenAIScheduler {
             }
           }
 
-          if (!this._isModelSupportedByAccount(account, 'openai', requestedModel)) {
+          if (!this._isModelSupportedByAccount(account, 'openai', requestedModel, options)) {
             logger.debug(
               `⏭️ Skipping OpenAI account ${account.name} - doesn't support model ${requestedModel}`
             )
@@ -757,10 +769,6 @@ class UnifiedOpenAIScheduler {
       }
     }
 
-    if (options.requireImagesGenerations) {
-      return availableAccounts
-    }
-
     // 获取所有 OpenAI-Responses 账户（共享池）
     const openaiResponsesAccounts = await openaiResponsesAccountService.getAllAccounts()
     for (const account of openaiResponsesAccounts) {
@@ -769,6 +777,10 @@ class UnifiedOpenAIScheduler {
         account.status !== 'error' &&
         (account.accountType === 'shared' || !account.accountType)
       ) {
+        if (!this._matchesRequiredCapabilities(account, 'openai-responses', options)) {
+          continue
+        }
+
         // 检查 rateLimitStatus 或 status === 'rateLimited'
         const hasRateLimitFlag =
           this._hasRateLimitFlag(account.rateLimitStatus) || account.status === 'rateLimited'
@@ -843,7 +855,9 @@ class UnifiedOpenAIScheduler {
           continue
         }
 
-        if (!this._isModelSupportedByAccount(account, 'openai-responses', requestedModel)) {
+        if (
+          !this._isModelSupportedByAccount(account, 'openai-responses', requestedModel, options)
+        ) {
           logger.debug(
             `⏭️ Skipping OpenAI-Responses account ${account.name} - doesn't support model ${requestedModel}`
           )
@@ -921,7 +935,9 @@ class UnifiedOpenAIScheduler {
           return false
         }
 
-        if (!this._isModelSupportedByAccount(account, accountType, options.requestedModel)) {
+        if (
+          !this._isModelSupportedByAccount(account, accountType, options.requestedModel, options)
+        ) {
           return false
         }
 
@@ -984,7 +1000,9 @@ class UnifiedOpenAIScheduler {
           return false
         }
 
-        if (!this._isModelSupportedByAccount(account, accountType, options.requestedModel)) {
+        if (
+          !this._isModelSupportedByAccount(account, accountType, options.requestedModel, options)
+        ) {
           return false
         }
 
@@ -1391,7 +1409,7 @@ class UnifiedOpenAIScheduler {
             }
           }
 
-          if (!this._isModelSupportedByAccount(account, accountType, requestedModel)) {
+          if (!this._isModelSupportedByAccount(account, accountType, requestedModel, options)) {
             logger.debug(
               `⏭️ Skipping group member ${accountType} account ${account.name} - doesn't support model ${requestedModel}`
             )

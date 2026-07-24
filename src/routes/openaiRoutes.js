@@ -11,6 +11,7 @@ const openaiAccountService = require('../services/account/openaiAccountService')
 const openaiResponsesAccountService = require('../services/account/openaiResponsesAccountService')
 const openaiResponsesRelayService = require('../services/relay/openaiResponsesRelayService')
 const accountGroupService = require('../services/accountGroupService')
+const claudeRelayConfigService = require('../services/claudeRelayConfigService')
 const apiKeyService = require('../services/apiKeyService')
 const usageStatsService = require('../services/usageStatsService')
 const crypto = require('crypto')
@@ -95,6 +96,8 @@ function getConfiguredOpenAIModelIds() {
   return modelsConfig.OPENAI_MODELS.map((model) => model.value).filter(Boolean)
 }
 
+const DEFAULT_OPENAI_IMAGE_MODEL = 'gpt-image-2'
+
 function addModelId(modelIds, modelId) {
   const value = typeof modelId === 'string' ? modelId.trim() : ''
   if (value) {
@@ -127,7 +130,16 @@ function addAccountModelIds(modelIds, account = {}) {
   const supportedModelIds = getSupportedModelIds(account)
   const sourceModelIds =
     supportedModelIds.length > 0 ? supportedModelIds : getConfiguredOpenAIModelIds()
-  sourceModelIds.forEach((modelId) => addModelId(modelIds, modelId))
+  const supportsImagesGenerations = isTruthyFlag(account.supportsImagesGenerations)
+  sourceModelIds.forEach((modelId) => {
+    if (/^gpt-image-/i.test(modelId) && !supportsImagesGenerations) {
+      return
+    }
+    addModelId(modelIds, modelId)
+  })
+  if (supportsImagesGenerations) {
+    addModelId(modelIds, DEFAULT_OPENAI_IMAGE_MODEL)
+  }
 }
 
 function isModelRestrictedByApiKey(apiKeyData = {}, modelId) {
@@ -1413,15 +1425,6 @@ async function handleImages(req, res) {
     }
 
     const imageModel = String(body.model || 'gpt-image-2').trim()
-    if (!/^gpt-image-/i.test(imageModel)) {
-      return res.status(400).json({
-        error: {
-          message: `images endpoint requires a gpt-image-* model, got "${imageModel}"`,
-          type: 'invalid_request_error'
-        }
-      })
-    }
-
     if (body.n !== undefined && (!Number.isInteger(body.n) || body.n < 1 || body.n > 10)) {
       return res.status(400).json({
         error: { message: 'n must be an integer between 1 and 10', type: 'invalid_request_error' }
@@ -1436,19 +1439,40 @@ async function handleImages(req, res) {
       req.body?.conversation_id ||
       req.body?.prompt_cache_key ||
       null
-    sessionHash = sessionId ? crypto.createHash('sha256').update(sessionId).digest('hex') : null
+    const globalConfig = await claudeRelayConfigService.getConfig()
+    const imagesSchedulerSessionId =
+      globalConfig.openaiImagesStickySessionEnabled === true && sessionId
+        ? `openai-images:${sessionId}`
+        : null
+    sessionHash = imagesSchedulerSessionId
+      ? crypto.createHash('sha256').update(imagesSchedulerSessionId).digest('hex')
+      : null
 
-    const authResult = await getOpenAIAuthToken(apiKeyData, sessionId, 'gpt-5.4-mini', {
-      requiredProviderEndpoint: PROVIDER_ENDPOINT_RESPONSES,
+    const authResult = await getOpenAIAuthToken(apiKeyData, imagesSchedulerSessionId, imageModel, {
       requireImagesGenerations: true
     })
     const { accessToken, proxy, account } = authResult
     ;({ accountId, accountType } = authResult)
 
+    if (accountType === 'openai-responses') {
+      req.body = { ...body, model: imageModel }
+      logger.info(`🔀 Using OpenAI-Responses relay service for images account: ${account.name}`)
+      return await openaiResponsesRelayService.handleRequest(req, res, account, apiKeyData)
+    }
+
     if (accountType !== 'openai' || !accessToken) {
       return res.status(400).json({
         error: {
-          message: 'images endpoint requires an enabled OpenAI OAuth (Codex) account',
+          message: 'images endpoint requires an enabled OpenAI account',
+          type: 'invalid_request_error'
+        }
+      })
+    }
+
+    if (!/^gpt-image-/i.test(imageModel)) {
+      return res.status(400).json({
+        error: {
+          message: `OpenAI OAuth images endpoint requires a gpt-image-* model, got "${imageModel}"`,
           type: 'invalid_request_error'
         }
       })

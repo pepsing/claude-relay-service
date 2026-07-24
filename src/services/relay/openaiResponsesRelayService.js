@@ -19,6 +19,7 @@ const {
   PROVIDER_ENDPOINT_CHAT_COMPLETIONS,
   buildChatCompletionsPayloadFromResponsesPayload,
   isChatCompletionsPath,
+  isImagesGenerationsPath,
   resolveOpenAIProviderTargetPath
 } = require('../../utils/openaiProviderEndpoint')
 
@@ -374,7 +375,9 @@ class OpenAIResponsesRelayService {
       })
 
       const shouldSendChatCompletions =
-        providerEndpoint === PROVIDER_ENDPOINT_CHAT_COMPLETIONS || isChatCompletionsPath(targetPath)
+        !isImagesGenerationsPath(targetPath) &&
+        (providerEndpoint === PROVIDER_ENDPOINT_CHAT_COMPLETIONS ||
+          isChatCompletionsPath(targetPath))
 
       if (shouldSendChatCompletions) {
         req.body = buildChatCompletionsPayloadFromResponsesPayload(

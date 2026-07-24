@@ -4,6 +4,7 @@ export const useTestState = () => {
   // ========== 状态 ==========
   const testStatus = ref('idle') // idle, testing, success, error
   const responseText = ref('')
+  const responseImageUrl = ref('')
   const errorMessage = ref('')
   const testDuration = ref(0)
   const testStartTime = ref(null)
@@ -127,6 +128,7 @@ export const useTestState = () => {
     // 重置状态
     testStatus.value = 'testing'
     responseText.value = ''
+    responseImageUrl.value = ''
     errorMessage.value = ''
     testDuration.value = 0
     testStartTime.value = Date.now()
@@ -159,6 +161,10 @@ export const useTestState = () => {
         if (data.success) {
           testStatus.value = 'success'
           responseText.value = data.data?.responseText || ''
+          const image = data.data?.image || {}
+          responseImageUrl.value =
+            image.url ||
+            (image.b64Json ? `data:${image.mediaType || 'image/png'};base64,${image.b64Json}` : '')
         } else {
           testStatus.value = 'error'
           errorMessage.value = data.message || 'Test failed'
@@ -176,6 +182,7 @@ export const useTestState = () => {
   const resetState = () => {
     testStatus.value = 'idle'
     responseText.value = ''
+    responseImageUrl.value = ''
     errorMessage.value = ''
     testDuration.value = 0
     testStartTime.value = null
@@ -193,6 +200,7 @@ export const useTestState = () => {
   return {
     testStatus,
     responseText,
+    responseImageUrl,
     errorMessage,
     testDuration,
     statusTitle,

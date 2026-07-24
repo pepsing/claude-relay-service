@@ -852,6 +852,29 @@
                 <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
                   账户可选择继承、关闭或覆盖为故障切换粘滞。关闭总开关时，所有账户级设置均不生效。
                 </p>
+                <div
+                  class="mt-5 flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900/40"
+                >
+                  <div class="pr-4">
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                      图片生成启用粘性会话
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      默认关闭；启用后图片请求使用独立会话映射，不影响普通 Responses 请求
+                    </p>
+                  </div>
+                  <label class="relative inline-flex cursor-pointer items-center">
+                    <input
+                      v-model="claudeConfig.openaiImagesStickySessionEnabled"
+                      class="peer sr-only"
+                      type="checkbox"
+                      @change="saveClaudeConfig"
+                    />
+                    <div
+                      class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-cyan-500 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cyan-300 dark:border-gray-600 dark:bg-gray-700 dark:peer-focus:ring-cyan-800"
+                    ></div>
+                  </label>
+                </div>
               </div>
               <div class="mt-4 flex flex-wrap items-center gap-3">
                 <button
@@ -2297,6 +2320,7 @@ const claudeConfig = ref({
   claudeCodeOnlyEnabled: false,
   stickySessionEnabled: true,
   stickySessionDefaultMode: 'fallback',
+  openaiImagesStickySessionEnabled: false,
   globalSessionBindingEnabled: false,
   sessionBindingErrorMessage: '你的本地session已污染，请清理后使用。',
   sessionBindingTtlDays: 1,
@@ -2947,6 +2971,8 @@ const loadClaudeConfig = async () => {
         claudeCodeOnlyEnabled: response.config?.claudeCodeOnlyEnabled ?? false,
         stickySessionEnabled: response.config?.stickySessionEnabled ?? true,
         stickySessionDefaultMode: response.config?.stickySessionDefaultMode || 'fallback',
+        openaiImagesStickySessionEnabled:
+          response.config?.openaiImagesStickySessionEnabled ?? false,
         globalSessionBindingEnabled: response.config?.globalSessionBindingEnabled ?? false,
         sessionBindingErrorMessage:
           response.config?.sessionBindingErrorMessage || '你的本地session已污染，请清理后使用。',
@@ -3010,6 +3036,7 @@ const saveClaudeConfig = async (options = {}) => {
       claudeCodeOnlyEnabled: claudeConfig.value.claudeCodeOnlyEnabled,
       stickySessionEnabled: claudeConfig.value.stickySessionEnabled,
       stickySessionDefaultMode: claudeConfig.value.stickySessionDefaultMode,
+      openaiImagesStickySessionEnabled: claudeConfig.value.openaiImagesStickySessionEnabled,
       globalSessionBindingEnabled: claudeConfig.value.globalSessionBindingEnabled,
       sessionBindingErrorMessage: claudeConfig.value.sessionBindingErrorMessage,
       sessionBindingTtlDays: claudeConfig.value.sessionBindingTtlDays,

@@ -49,6 +49,10 @@ function isChatCompletionsPath(path = '') {
   return stripQuery(path).endsWith('/chat/completions')
 }
 
+function isImagesGenerationsPath(path = '') {
+  return /(^|\/)(v1\/)?images\/generations$/.test(stripQuery(path))
+}
+
 function chatCompletionsTargetPath(sourcePath = '') {
   return pathUsesV1(sourcePath) ? '/v1/chat/completions' : '/chat/completions'
 }
@@ -85,7 +89,9 @@ function resolveOpenAIProviderTargetPath({ providerEndpoint, requestPath, origin
   const sourcePath = stripQuery(originalPath || requestPath || '/v1/responses')
   let targetPath = stripQuery(requestPath || sourcePath)
 
-  if (normalizedProviderEndpoint === PROVIDER_ENDPOINT_RESPONSES) {
+  if (isImagesGenerationsPath(sourcePath) || isImagesGenerationsPath(targetPath)) {
+    targetPath = sourcePath
+  } else if (normalizedProviderEndpoint === PROVIDER_ENDPOINT_RESPONSES) {
     if (isChatCompletionsPath(sourcePath) || isChatCompletionsPath(targetPath)) {
       targetPath = responsesTargetPath(sourcePath)
     }
@@ -223,5 +229,6 @@ module.exports = {
   normalizeOpenAIProviderEndpoint,
   resolveOpenAIProviderTargetPath,
   isChatCompletionsPath,
+  isImagesGenerationsPath,
   buildChatCompletionsPayloadFromResponsesPayload
 }

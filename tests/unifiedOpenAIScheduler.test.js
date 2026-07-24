@@ -420,7 +420,7 @@ describe('UnifiedOpenAIScheduler', () => {
       expect(openaiResponsesAccountService.recordUsage).toHaveBeenCalledWith('chat-1', 0)
     })
 
-    it('selects only OAuth accounts enabled for images generations', async () => {
+    it('selects an enabled OAuth account when Responses accounts disable images generations', async () => {
       openaiAccountService.getAllAccounts.mockResolvedValue([
         {
           id: 'oauth-disabled',
@@ -451,26 +451,80 @@ describe('UnifiedOpenAIScheduler', () => {
           status: 'active',
           accountType: 'shared',
           schedulable: true,
+          supportsImagesGenerations: false,
           providerEndpoint: 'responses',
-          supportedModels: { 'gpt-5.4-mini': 'gpt-5.4-mini' }
+          supportedModels: { 'gpt-image-2': 'gpt-image-2' }
         }
       ])
 
       const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
         { name: 'test-key' },
         null,
-        'gpt-5.4-mini',
-        {
-          requiredProviderEndpoint: 'responses',
-          requireImagesGenerations: true
-        }
+        'gpt-image-2',
+        { requireImagesGenerations: true }
       )
 
       expect(result).toEqual({ accountId: 'oauth-enabled', accountType: 'openai' })
-      expect(openaiResponsesAccountService.getAllAccounts).not.toHaveBeenCalled()
+      expect(openaiResponsesAccountService.getAllAccounts).toHaveBeenCalled()
     })
 
-    it('rejects images generations when no OAuth account enables the capability', async () => {
+    it('selects a regular OpenAI-Responses account that enables images generations', async () => {
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'responses-images',
+          name: 'Responses images provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          supportsImagesGenerations: true,
+          providerEndpoint: 'auto',
+          supportedModels: { 'gpt-image-2': 'provider-image-model' }
+        }
+      ])
+
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        null,
+        'gpt-image-2',
+        { requireImagesGenerations: true }
+      )
+
+      expect(result).toEqual({
+        accountId: 'responses-images',
+        accountType: 'openai-responses'
+      })
+    })
+
+    it('treats gpt-image-2 as part of the enabled images capability', async () => {
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'responses-images',
+          name: 'Responses images provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          supportsImagesGenerations: true,
+          providerEndpoint: 'responses',
+          supportedModels: { 'gpt-5': 'gpt-5' }
+        }
+      ])
+
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        null,
+        'gpt-image-2',
+        { requireImagesGenerations: true }
+      )
+
+      expect(result).toEqual({
+        accountId: 'responses-images',
+        accountType: 'openai-responses'
+      })
+    })
+
+    it('rejects images generations when no account enables the capability', async () => {
       openaiAccountService.getAllAccounts.mockResolvedValue([
         {
           id: 'oauth-disabled',
@@ -485,8 +539,7 @@ describe('UnifiedOpenAIScheduler', () => {
       ])
 
       await expect(
-        unifiedOpenAIScheduler.selectAccountForApiKey({ name: 'test-key' }, null, 'gpt-5.4-mini', {
-          requiredProviderEndpoint: 'responses',
+        unifiedOpenAIScheduler.selectAccountForApiKey({ name: 'test-key' }, null, 'gpt-image-2', {
           requireImagesGenerations: true
         })
       ).rejects.toMatchObject({
@@ -510,15 +563,36 @@ describe('UnifiedOpenAIScheduler', () => {
         unifiedOpenAIScheduler.selectAccountForApiKey(
           { name: 'test-key', openaiAccountId: 'oauth-disabled' },
           null,
-          'gpt-5.4-mini',
-          {
-            requiredProviderEndpoint: 'responses',
-            requireImagesGenerations: true
-          }
+          'gpt-image-2',
+          { requireImagesGenerations: true }
         )
       ).rejects.toMatchObject({
         statusCode: 400,
         message: 'Dedicated account OAuth disabled does not support /v1/images/generations'
+      })
+    })
+
+    it('accepts a dedicated OpenAI-Responses account when images generations is enabled', async () => {
+      openaiResponsesAccountService.getAccount.mockResolvedValue({
+        id: 'responses-images',
+        name: 'Responses images provider',
+        isActive: true,
+        status: 'active',
+        schedulable: true,
+        supportsImagesGenerations: true,
+        supportedModels: { 'gpt-image-2': 'provider-image-model' }
+      })
+
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key', openaiAccountId: 'responses:responses-images' },
+        null,
+        'gpt-image-2',
+        { requireImagesGenerations: true }
+      )
+
+      expect(result).toEqual({
+        accountId: 'responses-images',
+        accountType: 'openai-responses'
       })
     })
   })

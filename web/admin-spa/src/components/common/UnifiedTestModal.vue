@@ -6,7 +6,10 @@
     >
       <div class="absolute inset-0" @click="handleClose" />
       <div
-        class="relative z-10 mx-3 flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 shadow-2xl ring-1 ring-black/5 transition-all dark:border-gray-700/60 dark:bg-gray-900/95 dark:ring-white/10 sm:mx-4"
+        :class="[
+          'relative z-10 mx-3 flex w-full flex-col overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 shadow-2xl ring-1 ring-black/5 transition-all dark:border-gray-700/60 dark:bg-gray-900/95 dark:ring-white/10 sm:mx-4',
+          isImageTest ? 'max-w-2xl' : 'max-w-lg'
+        ]"
       >
         <!-- 顶部栏 -->
         <div
@@ -115,7 +118,14 @@
             <div class="text-sm">
               <div class="mb-1 flex items-center justify-between">
                 <span class="text-gray-500 dark:text-gray-400">测试模型</span>
+                <span
+                  v-if="isImageTest"
+                  class="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                >
+                  gpt-image-2
+                </span>
                 <ModelSelector
+                  v-else
                   v-model="selectedModel"
                   :disabled="state.testStatus.value === 'testing'"
                   :models="availableModels"
@@ -123,6 +133,31 @@
               </div>
               <div class="text-right text-xs text-gray-400 dark:text-gray-500">
                 {{ selectedModel }}
+              </div>
+            </div>
+            <div v-if="canTestImages" class="text-sm">
+              <div class="mb-2 flex items-center justify-between">
+                <span class="text-gray-500 dark:text-gray-400">测试类型</span>
+                <div
+                  class="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-1 dark:border-gray-700 dark:bg-gray-800"
+                >
+                  <button
+                    v-for="option in accountTestTypeOptions"
+                    :key="option.value"
+                    :class="[
+                      'rounded-md px-3 py-1 text-xs font-medium transition',
+                      testType === option.value
+                        ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-white'
+                        : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                    ]"
+                    :disabled="state.testStatus.value === 'testing'"
+                    type="button"
+                    @click="testType = option.value"
+                  >
+                    <i :class="['fas mr-1.5', option.icon]" />
+                    {{ option.label }}
+                  </button>
+                </div>
               </div>
             </div>
             <!-- [apikey] 最大输出 Token -->
@@ -190,14 +225,14 @@
           <!-- 提示词输入 -->
           <div class="mb-4">
             <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              提示词
+              {{ isImageTest ? '图片描述 Prompt' : '提示词' }}
             </label>
             <textarea
               v-model="testPrompt"
               class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
               maxlength="2000"
-              placeholder="输入测试提示词..."
-              rows="2"
+              :placeholder="isImageTest ? '描述需要生成的图片...' : '输入测试提示词...'"
+              :rows="isImageTest ? 3 : 2"
             />
           </div>
 
@@ -242,7 +277,20 @@
                 {{ state.responseText.value.length }} 字符
               </span>
             </div>
-            <div class="max-h-40 overflow-y-auto p-3">
+            <div v-if="state.responseImageUrl.value" class="p-3">
+              <img
+                alt="账户图片生成测试结果"
+                class="mx-auto max-h-[420px] w-auto max-w-full rounded-lg bg-white object-contain shadow-sm dark:bg-gray-900"
+                :src="state.responseImageUrl.value"
+              />
+              <p
+                v-if="state.responseText.value"
+                class="mt-3 whitespace-pre-wrap text-xs text-gray-500 dark:text-gray-400"
+              >
+                {{ state.responseText.value }}
+              </p>
+            </div>
+            <div v-else class="max-h-40 overflow-y-auto p-3">
               <p
                 v-if="state.responseText.value"
                 class="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300"
@@ -349,6 +397,7 @@ const { currentBaseUrl } = useTutorialUrls()
 
 // ========== 模型相关 ==========
 const selectedModel = ref('')
+const testType = ref('text')
 const modelsFromApi = ref({ claude: [], gemini: [], openai: [], platforms: {} })
 
 const loadModels = async () => {
@@ -553,6 +602,18 @@ const defaultModel = computed(() => {
 
 // ========== apikey 模式专用 ==========
 const testPrompt = ref('hi')
+const accountTestTypeOptions = [
+  { value: 'text', label: '文本', icon: 'fa-message' },
+  { value: 'image', label: '图片', icon: 'fa-image' }
+]
+const canTestImages = computed(
+  () =>
+    props.mode === 'account' &&
+    props.account?.platform === 'openai-responses' &&
+    (props.account?.supportsImagesGenerations === true ||
+      props.account?.supportsImagesGenerations === 'true')
+)
+const isImageTest = computed(() => canTestImages.value && testType.value === 'image')
 const maxTokens = ref(1000)
 const maxTokensOptions = [
   { value: 100, label: '100' },
@@ -606,7 +667,11 @@ const maskedApiKey = computed(() => {
   return key.substring(0, 6) + '****' + key.substring(key.length - 4)
 })
 
-const disableTest = computed(() => props.mode === 'apikey' && !props.apiKeyValue)
+const disableTest = computed(
+  () =>
+    (props.mode === 'apikey' && !props.apiKeyValue) ||
+    (isImageTest.value && !testPrompt.value.trim())
+)
 
 const canImportCcSwitch = computed(
   () => props.mode === 'apikey' && props.serviceType === 'claude' && Boolean(props.apiKeyValue)
@@ -781,7 +846,11 @@ const statusDescription = computed(() => {
       : '点击下方按钮开始测试 API Key 连通性'
   if (s === 'testing') return '正在发送测试请求并等待响应'
   if (s === 'success')
-    return props.mode === 'account' ? `账户可以正常访问 ${apiName}` : 'API Key 可以正常访问服务'
+    return props.mode === 'account'
+      ? isImageTest.value
+        ? '账户已成功生成图片'
+        : `账户可以正常访问 ${apiName}`
+      : 'API Key 可以正常访问服务'
   if (s === 'error') return state.errorMessage.value || `无法连接到 ${apiName}`
   return ''
 })
@@ -816,7 +885,8 @@ const startTest = () => {
       endpoint,
       {
         model: selectedModel.value,
-        prompt: testPrompt.value
+        prompt: testPrompt.value,
+        testType: isImageTest.value ? 'image' : 'text'
       },
       {
         useSSE,
@@ -851,6 +921,7 @@ watch(
   (newVal) => {
     if (newVal) {
       state.resetState()
+      testType.value = 'text'
       selectedModel.value = defaultModel.value
       testPrompt.value = 'hi'
       if (props.mode === 'apikey') maxTokens.value = 1000
@@ -865,4 +936,20 @@ watch(
   },
   { deep: true }
 )
+
+watch(testType, (newType) => {
+  state.resetState()
+  if (newType === 'image' && canTestImages.value) {
+    selectedModel.value = 'gpt-image-2'
+    if (testPrompt.value === 'hi') {
+      testPrompt.value = 'A small solid blue circle centered on a plain white background.'
+    }
+    return
+  }
+
+  selectedModel.value = defaultModel.value
+  if (testPrompt.value === 'A small solid blue circle centered on a plain white background.') {
+    testPrompt.value = 'hi'
+  }
+})
 </script>

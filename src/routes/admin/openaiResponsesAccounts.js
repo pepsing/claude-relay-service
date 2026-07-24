@@ -102,6 +102,82 @@ function assertOpenAITestResponseHasText(responseText, responseData) {
   throw new Error(`Test response has no content${detail}`)
 }
 
+const OPENAI_IMAGE_TEST_MODEL = 'gpt-image-2'
+const OPENAI_IMAGE_TEST_TIMEOUT_MS = 180000
+const OPENAI_IMAGE_TEST_MAX_RESPONSE_BYTES = 25 * 1024 * 1024
+
+function isTruthyFlag(value) {
+  return value === true || value === 'true'
+}
+
+function getImageMediaType(responseData, imageData) {
+  const format = String(
+    imageData?.output_format || imageData?.format || responseData?.output_format || ''
+  )
+    .trim()
+    .toLowerCase()
+
+  if (format === 'jpg' || format === 'jpeg') {
+    return 'image/jpeg'
+  }
+  if (format === 'webp') {
+    return 'image/webp'
+  }
+  return 'image/png'
+}
+
+function extractOpenAIImage(responseData) {
+  const imageData = responseData?.data?.[0] || responseData?.images?.[0] || null
+  if (!imageData || typeof imageData !== 'object') {
+    throw new Error('Image test response has no image')
+  }
+
+  const b64Json = [
+    imageData.b64_json,
+    imageData.b64,
+    imageData.base64,
+    imageData.image_base64
+  ].find((value) => typeof value === 'string' && value.trim())
+  const url =
+    typeof imageData.url === 'string' && /^https?:\/\//i.test(imageData.url.trim())
+      ? imageData.url.trim()
+      : ''
+
+  if (!b64Json && !url) {
+    throw new Error('Image test response has no supported image payload')
+  }
+
+  return {
+    b64Json: b64Json || '',
+    url,
+    mediaType: getImageMediaType(responseData, imageData),
+    revisedPrompt:
+      typeof imageData.revised_prompt === 'string' ? imageData.revised_prompt.slice(0, 2000) : ''
+  }
+}
+
+function createOpenAIResponsesTestRequestConfig(account, timeout = 30000) {
+  const requestConfig = {
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${account.apiKey}`,
+      'User-Agent': 'codex_cli_rs/0.0.0'
+    },
+    timeout
+  }
+
+  if (account.proxy) {
+    const agent = getProxyAgent(account.proxy)
+    if (agent) {
+      requestConfig.httpsAgent = agent
+      requestConfig.httpAgent = agent
+      requestConfig.proxy = false
+    }
+  }
+
+  return requestConfig
+}
+
 function normalizeAccountName(name) {
   return String(name || '')
     .trim()
@@ -681,7 +757,9 @@ router.post('/openai-responses-accounts/:id/reset-usage', authenticateAdmin, asy
 router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
   const requestedModel = typeof req.body?.model === 'string' ? req.body.model.trim() : ''
-  const prompt = sanitizeTestPrompt(req.body?.prompt)
+  const testType = req.body?.testType === 'image' ? 'image' : 'text'
+  const rawPrompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : ''
+  const prompt = sanitizeTestPrompt(rawPrompt)
   const startTime = Date.now()
   let account = null
 
@@ -694,6 +772,71 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
 
     if (!account.apiKey) {
       return res.status(401).json({ error: 'API Key not found or decryption failed' })
+    }
+
+    if (testType === 'image') {
+      if (!isTruthyFlag(account.supportsImagesGenerations)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Images generations is not enabled for this account'
+        })
+      }
+      if (!rawPrompt) {
+        return res.status(400).json({
+          success: false,
+          error: 'prompt is required for image generation'
+        })
+      }
+
+      const baseUrl = account.baseApi || 'https://api.openai.com'
+      const { targetPath } = resolveOpenAIProviderTargetPath({
+        providerEndpoint: account.providerEndpoint || 'responses',
+        requestPath: '/v1/images/generations',
+        baseApi: baseUrl
+      })
+      const apiUrl = `${baseUrl}${targetPath}`
+      const model = requestedModel || OPENAI_IMAGE_TEST_MODEL
+      const upstreamModel = openaiResponsesAccountService.getMappedModel(
+        account.supportedModels,
+        model
+      )
+      const requestConfig = {
+        ...createOpenAIResponsesTestRequestConfig(account, OPENAI_IMAGE_TEST_TIMEOUT_MS),
+        maxContentLength: OPENAI_IMAGE_TEST_MAX_RESPONSE_BYTES,
+        maxBodyLength: OPENAI_IMAGE_TEST_MAX_RESPONSE_BYTES
+      }
+      const response = await axios.post(
+        apiUrl,
+        {
+          model: upstreamModel,
+          prompt,
+          n: 1
+        },
+        requestConfig
+      )
+      const latency = Date.now() - startTime
+      const image = extractOpenAIImage(response.data)
+
+      logger.success(
+        `✅ OpenAI-Responses image test passed: ${account.name} (${accountId}), latency: ${latency}ms`
+      )
+
+      return res.json({
+        success: true,
+        data: {
+          accountId,
+          accountName: account.name,
+          model,
+          upstreamModel,
+          latency,
+          responseText: image.revisedPrompt,
+          image: {
+            b64Json: image.b64Json,
+            url: image.url,
+            mediaType: image.mediaType
+          }
+        }
+      })
     }
 
     // 构造测试请求（根据 providerEndpoint 和 baseApi 决定端点路径）
@@ -719,24 +862,7 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
             includeMaxOutputTokens: false
           })
 
-    const requestConfig = {
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${account.apiKey}`,
-        'User-Agent': 'codex_cli_rs/0.0.0'
-      },
-      timeout: 30000
-    }
-
-    // 配置代理
-    if (account.proxy) {
-      const agent = getProxyAgent(account.proxy)
-      if (agent) {
-        requestConfig.httpsAgent = agent
-        requestConfig.httpAgent = agent
-        requestConfig.proxy = false
-      }
-    }
+    const requestConfig = createOpenAIResponsesTestRequestConfig(account)
 
     const response = await axios.post(apiUrl, payload, requestConfig)
     const latency = Date.now() - startTime

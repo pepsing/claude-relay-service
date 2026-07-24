@@ -42,6 +42,7 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       claudeCodeOnlyEnabled,
       stickySessionEnabled,
       stickySessionDefaultMode,
+      openaiImagesStickySessionEnabled,
       globalSessionBindingEnabled,
       sessionBindingErrorMessage,
       sessionBindingTtlDays,
@@ -66,6 +67,13 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
 
     if (stickySessionEnabled !== undefined && typeof stickySessionEnabled !== 'boolean') {
       return res.status(400).json({ error: 'stickySessionEnabled must be a boolean' })
+    }
+
+    if (
+      openaiImagesStickySessionEnabled !== undefined &&
+      typeof openaiImagesStickySessionEnabled !== 'boolean'
+    ) {
+      return res.status(400).json({ error: 'openaiImagesStickySessionEnabled must be a boolean' })
     }
 
     if (
@@ -238,6 +246,9 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
     }
     if (stickySessionDefaultMode !== undefined) {
       updateData.stickySessionDefaultMode = stickySessionDefaultMode
+    }
+    if (openaiImagesStickySessionEnabled !== undefined) {
+      updateData.openaiImagesStickySessionEnabled = openaiImagesStickySessionEnabled
     }
     if (globalSessionBindingEnabled !== undefined) {
       updateData.globalSessionBindingEnabled = globalSessionBindingEnabled

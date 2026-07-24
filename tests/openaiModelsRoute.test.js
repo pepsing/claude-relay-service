@@ -218,6 +218,86 @@ describe('OpenAI models route', () => {
     expect(openaiResponsesAccountService.getAllAccounts).not.toHaveBeenCalled()
   })
 
+  test('publishes gpt-image-2 only when an available account enables images generations', async () => {
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'responses-images-disabled',
+        name: 'Images disabled',
+        isActive: 'true',
+        status: 'active',
+        accountType: 'shared',
+        schedulable: 'true',
+        supportedModels: {
+          'gpt-5': 'gpt-5'
+        },
+        supportsImagesGenerations: false
+      },
+      {
+        id: 'responses-images-enabled',
+        name: 'Images enabled',
+        isActive: 'true',
+        status: 'active',
+        accountType: 'shared',
+        schedulable: 'true',
+        supportedModels: {
+          'gpt-5': 'gpt-5'
+        },
+        supportsImagesGenerations: true
+      }
+    ])
+
+    const models = await openaiRoutes.buildOpenAIModelsList({ permissions: ['openai'] })
+
+    expect(modelIds(models)).toEqual(['gpt-5', 'gpt-image-2'])
+  })
+
+  test('hides a stale image model mapping when the account capability is disabled', async () => {
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'responses-images-disabled',
+        name: 'Images disabled',
+        isActive: 'true',
+        status: 'active',
+        accountType: 'shared',
+        schedulable: 'true',
+        supportedModels: {
+          'gpt-5': 'gpt-5',
+          'gpt-image-2': 'gpt-image-2'
+        },
+        supportsImagesGenerations: false
+      }
+    ])
+
+    const models = await openaiRoutes.buildOpenAIModelsList({ permissions: ['openai'] })
+
+    expect(modelIds(models)).toEqual(['gpt-5'])
+  })
+
+  test('applies the API key model blacklist to the advertised image model', async () => {
+    openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+      {
+        id: 'responses-images-enabled',
+        name: 'Images enabled',
+        isActive: 'true',
+        status: 'active',
+        accountType: 'shared',
+        schedulable: 'true',
+        supportedModels: {
+          'gpt-5': 'gpt-5'
+        },
+        supportsImagesGenerations: true
+      }
+    ])
+
+    const models = await openaiRoutes.buildOpenAIModelsList({
+      permissions: ['openai'],
+      enableModelRestriction: true,
+      restrictedModels: ['gpt-image-2']
+    })
+
+    expect(modelIds(models)).toEqual(['gpt-5'])
+  })
+
   test('aggregates model ids from an OpenAI account group', async () => {
     accountGroupService.getGroup.mockResolvedValue({
       id: 'openai-group',
