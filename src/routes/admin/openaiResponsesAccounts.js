@@ -45,7 +45,9 @@ function extractSupportedModelNames(supportedModels) {
   if (Array.isArray(parsed)) {
     return parsed
       .map((model) => {
-        if (typeof model === 'string') return model.trim()
+        if (typeof model === 'string') {
+          return model.trim()
+        }
         if (model && typeof model === 'object') {
           return String(model.value || model.id || model.model || '').trim()
         }
@@ -856,7 +858,7 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
       providerEndpoint === PROVIDER_ENDPOINT_CHAT_COMPLETIONS
         ? createChatCompletionsTestPayload(model, { prompt, maxTokens: 512 })
         : createOpenAITestPayload(model, {
-            stream: false,
+            stream: true,
             prompt,
             instructions: OPENAI_CODEX_TEST_INSTRUCTIONS,
             includeMaxOutputTokens: false
@@ -867,7 +869,7 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
     const response = await axios.post(apiUrl, payload, requestConfig)
     const latency = Date.now() - startTime
 
-    // 提取响应文本，兼容标准 JSON 和部分上游即使 stream=false 仍返回 SSE 文本的情况
+    // 提取响应文本，兼容 Responses SSE 和部分上游返回的标准 JSON
     const responseText = extractOpenAIResponsesText(response.data)
     assertOpenAITestResponseHasText(responseText, response.data)
 
