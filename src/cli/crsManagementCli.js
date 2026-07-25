@@ -1,12 +1,13 @@
+const crypto = require('crypto')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { Command } = require('commander')
 const inquirer = require('inquirer')
-const { ACCOUNT_ROUTES, CrsClient } = require('../mcp/crsClient')
+const { ACCOUNT_ROUTES, CrsClient, deriveDeviceId } = require('../mcp/crsClient')
 
 const DEFAULT_TIMEOUT_MS = 30000
-const CLI_VERSION = '1.1.0'
+const CLI_VERSION = '1.2.0'
 const MANAGEMENT_KEY_PATTERN = /^crsm_[a-f0-9]{64}$/
 
 function defaultConfigPath() {
@@ -90,17 +91,48 @@ function validateConnectionConfig(config) {
     throw new Error('A valid crsm_ management key is required')
   }
 
+  const baseUrl = String(config.baseUrl).replace(/\/+$/, '')
+  const deviceName = String(config.deviceName || os.hostname())
+    .trim()
+    .slice(0, 160)
+  const deviceId = String(config.deviceId || deriveDeviceId(baseUrl, deviceName))
+    .trim()
+    .slice(0, 160)
+  if (!deviceName) {
+    throw new Error('CRS device name is required')
+  }
+  if (!/^[a-zA-Z0-9._:-]{8,160}$/.test(deviceId)) {
+    throw new Error('CRS device ID must be 8-160 safe identifier characters')
+  }
+
   return {
-    baseUrl: String(config.baseUrl).replace(/\/+$/, ''),
+    baseUrl,
     managementKey: config.managementKey,
-    timeoutMs: parsePositiveInteger(config.timeoutMs || DEFAULT_TIMEOUT_MS, 'timeout')
+    timeoutMs: parsePositiveInteger(config.timeoutMs || DEFAULT_TIMEOUT_MS, 'timeout'),
+    deviceId,
+    deviceName
   }
 }
 
 function resolveConnectionConfig(options = {}) {
   const env = options.env || process.env
   const configPath = resolveConfigPath({ configPath: options.configPath, env })
-  const stored = readStoredConfig(configPath)
+  let stored = readStoredConfig(configPath)
+
+  if (
+    fs.existsSync(configPath) &&
+    stored.baseUrl &&
+    MANAGEMENT_KEY_PATTERN.test(stored.managementKey || '') &&
+    (!stored.deviceId || !stored.deviceName)
+  ) {
+    const migrated = {
+      ...stored,
+      deviceId: stored.deviceId || crypto.randomUUID(),
+      deviceName: stored.deviceName || os.hostname()
+    }
+    saveConnectionConfig(migrated, configPath)
+    stored = migrated
+  }
 
   return validateConnectionConfig({
     baseUrl: options.baseUrl || env.CRS_BASE_URL || stored.baseUrl,
@@ -110,12 +142,18 @@ function resolveConnectionConfig(options = {}) {
       env.CRS_TIMEOUT_MS ||
       env.CRS_MCP_TIMEOUT_MS ||
       stored.timeoutMs ||
-      DEFAULT_TIMEOUT_MS
+      DEFAULT_TIMEOUT_MS,
+    deviceId: options.deviceId || env.CRS_DEVICE_ID || stored.deviceId,
+    deviceName: options.deviceName || env.CRS_DEVICE_NAME || stored.deviceName || os.hostname()
   })
 }
 
 function saveConnectionConfig(config, configPath = defaultConfigPath()) {
-  const validated = validateConnectionConfig(config)
+  const validated = validateConnectionConfig({
+    ...config,
+    deviceId: config.deviceId || crypto.randomUUID(),
+    deviceName: config.deviceName || os.hostname()
+  })
   const resolvedPath = path.resolve(configPath)
   const directory = path.dirname(resolvedPath)
 
@@ -126,7 +164,9 @@ function saveConnectionConfig(config, configPath = defaultConfigPath()) {
       {
         baseUrl: validated.baseUrl,
         managementKey: validated.managementKey,
-        timeoutMs: validated.timeoutMs
+        timeoutMs: validated.timeoutMs,
+        deviceId: validated.deviceId,
+        deviceName: validated.deviceName
       },
       null,
       2
@@ -139,7 +179,9 @@ function saveConnectionConfig(config, configPath = defaultConfigPath()) {
     configPath: resolvedPath,
     baseUrl: validated.baseUrl,
     managementKey: maskManagementKey(validated.managementKey),
-    timeoutMs: validated.timeoutMs
+    timeoutMs: validated.timeoutMs,
+    deviceId: validated.deviceId,
+    deviceName: validated.deviceName
   }
 }
 
@@ -259,7 +301,11 @@ function createProgram(dependencies = {}) {
       timeoutMs: options.timeout,
       env
     })
-    const client = clientFactory(connection)
+    const client = clientFactory({
+      ...connection,
+      clientName: 'crsctl',
+      clientVersion: CLI_VERSION
+    })
     output(command, await handler(client))
   }
 
@@ -267,6 +313,7 @@ function createProgram(dependencies = {}) {
     .command('configure')
     .description('save the CRS URL and management key in a mode-0600 local config file')
     .requiredOption('--base-url <url>', 'CRS root URL without /admin')
+    .option('--device-name <name>', 'device label recorded in management audit logs')
     .option('--timeout <ms>', 'request timeout in milliseconds', (value) =>
       parsePositiveInteger(value, 'timeout')
     )
@@ -282,7 +329,8 @@ function createProgram(dependencies = {}) {
           {
             baseUrl: options.baseUrl,
             managementKey,
-            timeoutMs: options.timeout || DEFAULT_TIMEOUT_MS
+            timeoutMs: options.timeout || DEFAULT_TIMEOUT_MS,
+            deviceName: options.deviceName || os.hostname()
           },
           configPath
         )
@@ -319,7 +367,9 @@ function createProgram(dependencies = {}) {
         baseUrl: connection.baseUrl,
         managementKey: maskManagementKey(connection.managementKey),
         managementKeySource: env.CRS_MANAGEMENT_KEY ? 'environment' : 'config',
-        timeoutMs: connection.timeoutMs
+        timeoutMs: connection.timeoutMs,
+        deviceId: connection.deviceId,
+        deviceName: connection.deviceName
       })
     })
 
@@ -556,6 +606,62 @@ function createProgram(dependencies = {}) {
         command,
         async (client) => await client.getAccountStats(type, accountId, options.days)
       )
+    })
+
+  const audit = program.command('audit').description('query management operation audit logs')
+
+  audit
+    .command('list')
+    .description('list management audit records')
+    .option('--page <number>', 'page number', (value) => parsePositiveInteger(value, 'page'), 1)
+    .option('--page-size <number>', 'records per page', parsePageSize, 20)
+    .option('--days <number>', 'only include recent days', (value) =>
+      parsePositiveInteger(value, 'days')
+    )
+    .option('--from <timestamp>', 'inclusive ISO 8601 start timestamp')
+    .option('--to <timestamp>', 'inclusive ISO 8601 end timestamp')
+    .option('--action <action>', 'exact action filter')
+    .option('--resource-type <type>', 'exact resource type filter')
+    .option('--resource-id <id>', 'exact resource ID filter')
+    .option('--actor-id <id>', 'exact actor ID filter')
+    .option('--device-id <id>', 'exact device ID filter')
+    .option('--device-name <name>', 'exact device name filter')
+    .option('--result <result>', 'success or failure', (value) => {
+      if (!['success', 'failure'].includes(value)) {
+        throw new Error('result must be success or failure')
+      }
+      return value
+    })
+    .action(async (options, command) => {
+      const from =
+        options.from ||
+        (options.days
+          ? new Date(Date.now() - options.days * 24 * 60 * 60 * 1000).toISOString()
+          : undefined)
+      await execute(
+        command,
+        async (client) =>
+          await client.listAuditLogs({
+            page: options.page,
+            pageSize: options.pageSize,
+            from,
+            to: options.to,
+            action: options.action,
+            resourceType: options.resourceType,
+            resourceId: options.resourceId,
+            actorId: options.actorId,
+            deviceId: options.deviceId,
+            deviceName: options.deviceName,
+            result: options.result
+          })
+      )
+    })
+
+  audit
+    .command('show <audit-id>')
+    .description('show one management audit record')
+    .action(async (auditId, _options, command) => {
+      await execute(command, async (client) => await client.getAuditLog(auditId))
     })
 
   return program

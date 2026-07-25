@@ -1,5 +1,6 @@
 const express = require('express')
 const { authenticateAdmin } = require('../../middleware/auth')
+const adminAuditService = require('../../services/adminAuditService')
 const managementApiService = require('../../services/managementApiService')
 
 const SENSITIVE_RESPONSE_FIELDS = new Set([
@@ -282,6 +283,7 @@ function delegateToLegacyRouter(legacyRouter, targetBuilder, options = {}) {
 function createManagementV1Router(options = {}) {
   const router = express.Router()
   const service = options.service || managementApiService
+  const auditService = options.auditService || adminAuditService
   const authenticate = options.authenticate || authenticateAdmin
   const legacyRouters = options.legacyRouters || loadDefaultLegacyRouters()
 
@@ -456,6 +458,45 @@ function createManagementV1Router(options = {}) {
           })}`,
         { sanitize: true }
       )(req, res, next)
+    } catch (error) {
+      return next(error)
+    }
+  })
+
+  router.get('/audit-logs', authenticate, async (req, res, next) => {
+    try {
+      const pagination = service.parsePagination(req.query, {
+        defaultPageSize: 20,
+        maxPageSize: 100
+      })
+      const data = await auditService.list({
+        ...pagination,
+        action: req.query.action,
+        resourceType: req.query.resourceType,
+        resourceId: req.query.resourceId,
+        actorId: req.query.actorId,
+        deviceId: req.query.deviceId,
+        deviceName: req.query.deviceName,
+        result: req.query.result,
+        from: req.query.from,
+        to: req.query.to
+      })
+      return res.json(normalizeSuccessPayload({ success: true, data }))
+    } catch (error) {
+      return next(error)
+    }
+  })
+
+  router.get('/audit-logs/:auditId', authenticate, async (req, res, next) => {
+    try {
+      const auditLog = await auditService.getById(req.params.auditId)
+      if (!auditLog) {
+        throw Object.assign(new Error('Audit log not found'), {
+          code: 'AUDIT_LOG_NOT_FOUND',
+          status: 404
+        })
+      }
+      return res.json(normalizeSuccessPayload({ success: true, data: auditLog }))
     } catch (error) {
       return next(error)
     }

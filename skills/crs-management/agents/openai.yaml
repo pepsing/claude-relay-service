@@ -1,4 +1,4 @@
 interface:
   display_name: 'CRS Management'
-  short_description: 'Manage Rocky CRS through the local crsctl CLI'
+  short_description: 'Manage and audit Rocky CRS through the local crsctl CLI'
   default_prompt: 'Use $crs-management to inspect or manage the Rocky CRS service with crsctl.'

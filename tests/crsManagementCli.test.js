@@ -63,7 +63,12 @@ function createClient() {
     refreshAccount: jest.fn().mockResolvedValue({ success: true }),
     deleteAccount: jest.fn().mockResolvedValue({ success: true }),
     getApiKeyStats: jest.fn().mockResolvedValue({ success: true }),
-    getAccountStats: jest.fn().mockResolvedValue({ success: true })
+    getAccountStats: jest.fn().mockResolvedValue({ success: true }),
+    listAuditLogs: jest.fn().mockResolvedValue({
+      success: true,
+      data: { items: [], pagination: { page: 1, pageSize: 20, total: 0, totalPages: 1 } }
+    }),
+    getAuditLog: jest.fn().mockResolvedValue({ success: true, data: { id: '1' } })
   }
 }
 
@@ -116,11 +121,15 @@ describe('CRS management CLI', () => {
       success: true,
       data: { requests: 3 }
     })
-    expect(clientOptions).toEqual({
-      baseUrl: 'https://crs.example.com',
-      managementKey,
-      timeoutMs: 30000
-    })
+    expect(clientOptions).toEqual(
+      expect.objectContaining({
+        baseUrl: 'https://crs.example.com',
+        managementKey,
+        timeoutMs: 30000,
+        clientName: 'crsctl',
+        clientVersion: '1.2.0'
+      })
+    )
   })
 
   test('limits API key list output to ten items by default', async () => {
@@ -197,6 +206,35 @@ describe('CRS management CLI', () => {
     })
   })
 
+  test('passes bounded filters to the audit log API', async () => {
+    const execution = await runCommand([
+      'audit',
+      'list',
+      '--page-size',
+      '5',
+      '--action',
+      'account.update',
+      '--device-name',
+      'Office Mac',
+      '--result',
+      'success'
+    ])
+
+    expect(execution.client.listAuditLogs).toHaveBeenCalledWith({
+      page: 1,
+      pageSize: 5,
+      from: undefined,
+      to: undefined,
+      action: 'account.update',
+      resourceType: undefined,
+      resourceId: undefined,
+      actorId: undefined,
+      deviceId: undefined,
+      deviceName: 'Office Mac',
+      result: 'success'
+    })
+  })
+
   test('rejects page sizes above the management API maximum', () => {
     expect(() => parsePageSize('101')).toThrow('page-size must be between 1 and 100')
   })
@@ -252,11 +290,15 @@ describe('CRS management CLI', () => {
 
       expect(saved.managementKey).toBe(maskManagementKey(managementKey))
       expect(fs.statSync(configPath).mode & 0o777).toBe(0o600)
-      expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual({
-        baseUrl: 'https://crs.example.com',
-        managementKey,
-        timeoutMs: 45000
-      })
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8'))).toEqual(
+        expect.objectContaining({
+          baseUrl: 'https://crs.example.com',
+          managementKey,
+          timeoutMs: 45000,
+          deviceId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+          deviceName: expect.any(String)
+        })
+      )
     } finally {
       fs.rmSync(tempDirectory, { recursive: true, force: true })
     }
@@ -286,11 +328,15 @@ describe('CRS management CLI', () => {
             CRS_TIMEOUT_MS: '12000'
           }
         })
-      ).toEqual({
-        baseUrl: 'https://env.example.com',
-        managementKey: otherKey,
-        timeoutMs: 12000
-      })
+      ).toEqual(
+        expect.objectContaining({
+          baseUrl: 'https://env.example.com',
+          managementKey: otherKey,
+          timeoutMs: 12000,
+          deviceId: expect.any(String),
+          deviceName: expect.any(String)
+        })
+      )
     } finally {
       fs.rmSync(tempDirectory, { recursive: true, force: true })
     }

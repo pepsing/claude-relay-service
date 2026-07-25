@@ -74,6 +74,7 @@ describe('ManagementApiKeyService', () => {
     ['POST', '/admin/management/v1/accounts/claude/account-1/test', 'accounts:test'],
     ['POST', '/admin/management/v1/accounts/claude/account-1/refresh', 'accounts:refresh'],
     ['GET', '/admin/management/v1/stats/summary', 'stats:read'],
+    ['GET', '/admin/management/v1/audit-logs', 'audit:read'],
     ['GET', '/admin/management-api-keys', null],
     ['GET', '/admin/users', null]
   ])('maps %s %s to scope %s', (method, path, expectedScope) => {
@@ -122,7 +123,7 @@ describe('ManagementApiKeyService', () => {
     const requiredScopes = service.resolveRequiredScope('GET', '/admin/management/v1/capabilities')
     const result = await service.validateKey(managementKey, requiredScopes)
 
-    expect(requiredScopes).toEqual(['api-keys:read', 'accounts:read', 'stats:read'])
+    expect(requiredScopes).toEqual(['api-keys:read', 'accounts:read', 'stats:read', 'audit:read'])
     expect(result.valid).toBe(true)
   })
 

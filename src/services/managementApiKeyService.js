@@ -13,7 +13,8 @@ const MANAGEMENT_SCOPES = [
   'accounts:write',
   'accounts:test',
   'accounts:refresh',
-  'stats:read'
+  'stats:read',
+  'audit:read'
 ]
 
 const ACCOUNT_ROUTE_PREFIXES = [
@@ -93,7 +94,16 @@ class ManagementApiKeyService {
     }
 
     if (path === '/admin/management/v1/capabilities') {
-      return normalizedMethod === 'GET' ? ['api-keys:read', 'accounts:read', 'stats:read'] : null
+      return normalizedMethod === 'GET'
+        ? ['api-keys:read', 'accounts:read', 'stats:read', 'audit:read']
+        : null
+    }
+
+    if (
+      path === '/admin/management/v1/audit-logs' ||
+      path.startsWith('/admin/management/v1/audit-logs/')
+    ) {
+      return normalizedMethod === 'GET' ? 'audit:read' : null
     }
 
     if (

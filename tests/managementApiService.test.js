@@ -1,5 +1,5 @@
 jest.mock('../src/services/managementApiKeyService', () => ({
-  getSupportedScopes: jest.fn(() => ['api-keys:read', 'accounts:read', 'stats:read'])
+  getSupportedScopes: jest.fn(() => ['api-keys:read', 'accounts:read', 'stats:read', 'audit:read'])
 }))
 
 const { ManagementApiError, ManagementApiService } = require('../src/services/managementApiService')
@@ -114,7 +114,7 @@ describe('ManagementApiService', () => {
       expect.objectContaining({
         version: 'v1',
         scopes: {
-          supported: ['api-keys:read', 'accounts:read', 'stats:read'],
+          supported: ['api-keys:read', 'accounts:read', 'stats:read', 'audit:read'],
           current: ['accounts:read']
         },
         accounts: [

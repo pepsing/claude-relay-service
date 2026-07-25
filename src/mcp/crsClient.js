@@ -1,4 +1,6 @@
 const axios = require('axios')
+const crypto = require('crypto')
+const os = require('os')
 
 const MANAGEMENT_API_BASE = '/admin/management/v1'
 
@@ -58,6 +60,14 @@ const ACCOUNT_STATS_TYPES = new Set([
   'bedrock'
 ])
 
+function deriveDeviceId(baseUrl, deviceName) {
+  return `device_${crypto
+    .createHash('sha256')
+    .update(`${String(deviceName || '')}\n${String(baseUrl || '')}`)
+    .digest('hex')
+    .slice(0, 32)}`
+}
+
 class CrsClient {
   constructor(options = {}) {
     const {
@@ -65,7 +75,11 @@ class CrsClient {
       managementKey,
       timeoutMs = 30000,
       httpClient = null,
-      managementApiMode = 'auto'
+      managementApiMode = 'auto',
+      deviceId = '',
+      deviceName = os.hostname(),
+      clientName = 'crs-client',
+      clientVersion = ''
     } = options
     if (!baseUrl) {
       throw new Error('CRS base URL is required')
@@ -81,6 +95,10 @@ class CrsClient {
 
     this.baseUrl = baseUrl.replace(/\/+$/, '')
     this.managementKey = managementKey
+    this.deviceName = String(deviceName || os.hostname()).slice(0, 160)
+    this.deviceId = String(deviceId || deriveDeviceId(this.baseUrl, this.deviceName)).slice(0, 160)
+    this.clientName = String(clientName || 'crs-client').slice(0, 100)
+    this.clientVersion = String(clientVersion || '').slice(0, 60)
     this.managementApiMode = ['auto', 'v1', 'legacy'].includes(managementApiMode)
       ? managementApiMode
       : 'auto'
@@ -94,7 +112,12 @@ class CrsClient {
         headers: {
           Authorization: `Bearer ${managementKey}`,
           'Content-Type': 'application/json',
-          Accept: 'application/json'
+          Accept: 'application/json',
+          'X-CRS-Device-ID': this.deviceId,
+          'X-CRS-Device-Name': encodeURIComponent(this.deviceName),
+          'X-CRS-Client': this.clientVersion
+            ? `${this.clientName}/${this.clientVersion}`
+            : this.clientName
         }
       })
   }
@@ -286,6 +309,14 @@ class CrsClient {
     )
   }
 
+  async listAuditLogs(params = {}) {
+    return await this.requestManagement('GET', '/audit-logs', null, { params })
+  }
+
+  async getAuditLog(auditId) {
+    return await this.requestManagement('GET', `/audit-logs/${encodeURIComponent(auditId)}`, null)
+  }
+
   getLegacyCapabilities() {
     return {
       success: true,
@@ -436,5 +467,6 @@ module.exports = {
   CrsClient,
   ACCOUNT_ROUTES,
   ACCOUNT_STATS_TYPES,
-  MANAGEMENT_API_BASE
+  MANAGEMENT_API_BASE,
+  deriveDeviceId
 }

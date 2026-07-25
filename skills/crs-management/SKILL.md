@@ -1,6 +1,6 @@
 ---
 name: crs-management
-description: Manage a local or Rocky-hosted Codex Relay Service through the installed crsctl CLI, including relay API keys, upstream accounts, connectivity tests, credential refreshes, and usage statistics. Use when Codex is asked to inspect or change CRS operational data with lower context overhead than the CRS MCP server.
+description: Manage a local or Rocky-hosted Codex Relay Service through the installed crsctl CLI, including relay API keys, upstream accounts, connectivity tests, credential refreshes, usage statistics, and management audit logs. Use when Codex is asked to inspect or change CRS operational data with lower context overhead than the CRS MCP server.
 ---
 
 # CRS Management
@@ -28,7 +28,7 @@ the CRS MCP tool schemas unless the user explicitly requests MCP.
 3. If configuration is missing, ask only for the Rocky base URL. Then run:
 
    ```bash
-   crsctl configure --base-url https://rocky.example.com
+   crsctl configure --base-url https://rocky.example.com --device-name 'Office Mac'
    ```
 
    Let the user enter the `crsm_` management key in the hidden prompt. Never ask
@@ -36,7 +36,9 @@ the CRS MCP tool schemas unless the user explicitly requests MCP.
 
 The configuration defaults to `~/.config/crsctl/config.json`, is written with mode
 `0600`, and may be overridden by `CRS_BASE_URL`, `CRS_MANAGEMENT_KEY`, or
-`CRSCTL_CONFIG`.
+`CRSCTL_CONFIG`. The CLI stores a random device ID and a user-facing device name
+with the connection. Override them with `CRS_DEVICE_ID` and `CRS_DEVICE_NAME` for
+environment-only or containerized clients.
 
 ## Keep output bounded
 
@@ -45,6 +47,8 @@ The configuration defaults to `~/.config/crsctl/config.json`, is written with mo
 - `api-keys list` defaults to 10 records. Keep `--page-size` between 1 and 100.
 - `accounts list` is server-paginated and defaults to 20 records. Increase
   `--page-size` only when needed.
+- `audit list` is server-paginated and defaults to 20 records. Prefer `--days`,
+  `--action`, or device filters before increasing the page size.
 - Summarize results for the user instead of pasting large JSON responses.
 - The client prefers `/admin/management/v1` and automatically falls back to legacy
   admin routes while an older Rocky deployment is being upgraded.
@@ -63,10 +67,17 @@ crsctl --compact accounts test claude ACCOUNT_ID
 crsctl --compact stats summary
 crsctl --compact stats api-key KEY_ID --days 7
 crsctl --compact stats account claude ACCOUNT_ID --days 7
+crsctl --compact audit list --days 7
+crsctl --compact audit list --action account.update --device-name 'Office Mac'
+crsctl --compact audit show AUDIT_ID
 ```
 
 Use `api-keys reveal` only when the user explicitly needs the plaintext relay key.
 Do not repeat a returned `cr_` key in commentary or logs.
+
+Audit queries require the `audit:read` management scope. Treat device names and IP
+addresses as operational metadata. A device ID is client-reported; use a separate
+management key per device or agent when reliable attribution is required.
 
 ## Change CRS
 
@@ -94,6 +105,7 @@ crsctl accounts delete claude ACCOUNT_ID --yes
 
 - `401`: the configured management key is invalid, revoked, or missing.
 - `403`: the management API is disabled or blocked by the server/network policy.
+  For audit commands, also verify that the key has `audit:read`.
 - Network errors: verify the base URL and reachability before changing credentials.
 - Never print raw request headers, the stored configuration file, or complete
   `crsm_`/`cr_` values while troubleshooting.

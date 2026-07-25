@@ -1,4 +1,5 @@
 const { CrsClient } = require('../src/mcp/crsClient')
+const axios = require('axios')
 
 describe('CrsClient', () => {
   let httpClient
@@ -90,6 +91,51 @@ describe('CrsClient', () => {
       params: { platform: 'claude', days: 14 },
       data: undefined
     })
+  })
+
+  test('routes audit log queries to management v1', async () => {
+    await client.listAuditLogs({ page: 1, pageSize: 20, action: 'account.update' })
+    await client.getAuditLog('audit/1')
+
+    expect(httpClient.request).toHaveBeenNthCalledWith(1, {
+      method: 'GET',
+      url: '/admin/management/v1/audit-logs',
+      params: { page: 1, pageSize: 20, action: 'account.update' },
+      data: undefined
+    })
+    expect(httpClient.request).toHaveBeenNthCalledWith(2, {
+      method: 'GET',
+      url: '/admin/management/v1/audit-logs/audit%2F1',
+      params: undefined,
+      data: undefined
+    })
+  })
+
+  test('adds stable device and client headers to the HTTP client', () => {
+    const create = jest.spyOn(axios, 'create').mockReturnValue({ request: jest.fn() })
+
+    try {
+      new CrsClient({
+        baseUrl: 'https://crs.example.com',
+        managementKey: `crsm_${'b'.repeat(64)}`,
+        deviceId: 'device-office-1',
+        deviceName: 'Office Mac',
+        clientName: 'crsctl',
+        clientVersion: '1.2.0'
+      })
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'X-CRS-Device-ID': 'device-office-1',
+            'X-CRS-Device-Name': 'Office%20Mac',
+            'X-CRS-Client': 'crsctl/1.2.0'
+          })
+        })
+      )
+    } finally {
+      create.mockRestore()
+    }
   })
 
   test('falls back to legacy routes when management v1 is not deployed yet', async () => {

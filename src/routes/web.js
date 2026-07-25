@@ -96,6 +96,12 @@ router.post('/auth/login', async (req, res) => {
     // 不再更新 Redis 中的最后登录时间，因为 Redis 只是缓存
     // init.json 是唯一真实数据源
 
+    req.auditActor = {
+      actorType: 'admin-session',
+      actorId: adminData.username,
+      actorName: adminData.username,
+      authMethod: 'admin-session'
+    }
     logger.success(`Admin login successful: ${username}`)
 
     return res.json({
@@ -119,6 +125,15 @@ router.post('/auth/logout', async (req, res) => {
     const token = req.headers['authorization']?.replace('Bearer ', '') || req.cookies?.adminToken
 
     if (token) {
+      const sessionData = await redis.getSession(token)
+      if (sessionData?.username) {
+        req.auditActor = {
+          actorType: 'admin-session',
+          actorId: sessionData.username,
+          actorName: sessionData.username,
+          authMethod: 'admin-session'
+        }
+      }
       await redis.deleteSession(token)
       logger.success('🚪 Admin logout successful')
     }
@@ -183,6 +198,13 @@ router.post('/auth/change-password', async (req, res) => {
         error: 'Invalid session',
         message: 'Session data corrupted or incomplete'
       })
+    }
+
+    req.auditActor = {
+      actorType: 'admin-session',
+      actorId: sessionData.username,
+      actorName: sessionData.username,
+      authMethod: 'admin-session'
     }
 
     // 获取当前管理员信息

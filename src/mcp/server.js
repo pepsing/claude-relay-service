@@ -48,7 +48,11 @@ async function createServer(options = {}) {
     new CrsClient({
       baseUrl: options.baseUrl || process.env.CRS_BASE_URL,
       managementKey: options.managementKey || process.env.CRS_MANAGEMENT_KEY,
-      timeoutMs: Number(options.timeoutMs || process.env.CRS_MCP_TIMEOUT_MS || 30000)
+      timeoutMs: Number(options.timeoutMs || process.env.CRS_MCP_TIMEOUT_MS || 30000),
+      deviceId: options.deviceId || process.env.CRS_DEVICE_ID,
+      deviceName: options.deviceName || process.env.CRS_DEVICE_NAME,
+      clientName: 'crs-mcp',
+      clientVersion: '1.2.0'
     })
   const accountTypes = client.getAccountTypes()
   const accountTypeSchema = z.enum(accountTypes)
@@ -70,7 +74,7 @@ async function createServer(options = {}) {
 
   const server = new McpServer({
     name: 'crs-management',
-    version: '1.1.0'
+    version: '1.2.0'
   })
 
   registerTool(

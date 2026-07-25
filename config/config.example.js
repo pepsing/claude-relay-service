@@ -43,6 +43,12 @@ const config = {
     max: parseInt(process.env.POSTGRES_POOL_MAX) || 10
   },
 
+  // 🛡️ 管理操作审计（仅记录脱敏后的操作元数据）
+  adminAudit: {
+    enabled: process.env.ADMIN_AUDIT_ENABLED !== 'false',
+    retentionDays: Math.max(1, parseInt(process.env.ADMIN_AUDIT_RETENTION_DAYS) || 180)
+  },
+
   // 🧾 请求明细存储模式（部署级环境变量，不走后台配置）
   requestDetailStorage: {
     writeMode: ['redis', 'dual', 'postgres'].includes(process.env.REQUEST_DETAIL_WRITE_MODE)

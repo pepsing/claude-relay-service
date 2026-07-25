@@ -39,6 +39,7 @@ const {
   requestSizeLimit
 } = require('./middleware/auth')
 const { browserFallbackMiddleware } = require('./middleware/browserFallback')
+const { adminAuditMiddleware } = require('./middleware/adminAudit')
 
 class Application {
   constructor() {
@@ -243,6 +244,7 @@ class Application {
       )
       this.app.use(express.urlencoded({ extended: true, limit: '100mb' }))
       this.app.use(securityMiddleware)
+      this.app.use(adminAuditMiddleware)
 
       // 🎯 信任代理
       if (config.server.trustProxy) {

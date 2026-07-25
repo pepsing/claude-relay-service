@@ -339,7 +339,8 @@ const scopeLabels = {
   'accounts:write': '维护账户',
   'accounts:test': '测试账户',
   'accounts:refresh': '刷新账户',
-  'stats:read': '查看统计'
+  'stats:read': '查看统计',
+  'audit:read': '查看审计日志'
 }
 
 const loading = ref(false)

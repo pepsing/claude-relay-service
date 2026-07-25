@@ -84,6 +84,7 @@ function createLegacyRouters() {
 
 describe('management v1 routes', () => {
   let app
+  let auditService
 
   beforeEach(() => {
     const service = new ManagementApiService({
@@ -110,12 +111,23 @@ describe('management v1 routes', () => {
       }
     })
 
+    auditService = {
+      list: jest.fn().mockResolvedValue({
+        items: [{ id: '1', action: 'account.update', result: 'success' }],
+        pagination: { page: 1, pageSize: 20, total: 1, totalPages: 1 }
+      }),
+      getById: jest
+        .fn()
+        .mockResolvedValueOnce({ id: '1', action: 'account.update', result: 'success' })
+    }
+
     app = express()
     app.use(express.json())
     app.use(
       '/admin/management/v1',
       createManagementV1Router({
         service,
+        auditService,
         legacyRouters: createLegacyRouters()
       })
     )
@@ -200,5 +212,34 @@ describe('management v1 routes', () => {
       code: 'INVALID_KEY',
       message: 'Rejected crsm_[REDACTED]'
     })
+  })
+
+  test('lists and retrieves management audit logs', async () => {
+    const listResponse = await request(app).get(
+      '/admin/management/v1/audit-logs?page=1&pageSize=20&action=account.update'
+    )
+    const getResponse = await request(app).get('/admin/management/v1/audit-logs/1')
+
+    expect(listResponse.status).toBe(200)
+    expect(listResponse.body.apiVersion).toBe('v1')
+    expect(listResponse.body.data.items[0].action).toBe('account.update')
+    expect(auditService.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        page: 1,
+        pageSize: 20,
+        action: 'account.update'
+      })
+    )
+    expect(getResponse.status).toBe(200)
+    expect(getResponse.body.data.id).toBe('1')
+  })
+
+  test('returns a stable not-found error for an unknown audit record', async () => {
+    auditService.getById.mockReset().mockResolvedValue(null)
+
+    const response = await request(app).get('/admin/management/v1/audit-logs/404')
+
+    expect(response.status).toBe(404)
+    expect(response.body.error.code).toBe('AUDIT_LOG_NOT_FOUND')
   })
 })

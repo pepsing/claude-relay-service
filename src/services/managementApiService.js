@@ -1,3 +1,4 @@
+const config = require('../../config/config')
 const managementApiKeyService = require('./managementApiKeyService')
 
 const MANAGEMENT_API_VERSION = 'v1'
@@ -249,6 +250,10 @@ class ManagementApiService {
       }),
       stats: {
         operations: ['summary', 'api-key', 'account']
+      },
+      auditLogs: {
+        operations: ['list', 'get'],
+        retentionDays: Number(config.adminAudit?.retentionDays) || 180
       }
     }
   }

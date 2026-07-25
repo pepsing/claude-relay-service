@@ -2273,6 +2273,9 @@ const corsMiddleware = (req, res, next) => {
       'api-key',
       'x-admin-token',
       'x-management-api-key',
+      'x-crs-device-id',
+      'x-crs-device-name',
+      'x-crs-client',
       'anthropic-version',
       'anthropic-dangerous-direct-browser-access'
     ].join(', ')
