@@ -9,8 +9,8 @@
           供本地 MCP 等受信任 Agent 调用管理 API，和 cr_ 中转密钥完全隔离。
         </p>
       </div>
-      <button class="btn btn-primary shrink-0" type="button" @click="openCreate">
-        <i class="fas fa-plus mr-2" />
+      <button class="btn btn-primary management-button shrink-0" type="button" @click="openCreate">
+        <i class="fas fa-plus" />
         新建管理密钥
       </button>
     </div>
@@ -105,39 +105,39 @@
 
           <div class="flex shrink-0 flex-wrap gap-2">
             <button
-              class="btn btn-secondary !px-3 !py-2 text-xs"
+              class="btn btn-secondary management-button management-button--compact"
               type="button"
               @click="openEdit(key)"
             >
-              <i class="fas fa-pen mr-1.5" />
+              <i class="fas fa-pen" />
               编辑
             </button>
             <button
-              class="btn btn-secondary !px-3 !py-2 text-xs"
+              class="btn btn-secondary management-button management-button--compact"
               type="button"
               @click="rotateKey(key)"
             >
-              <i class="fas fa-rotate mr-1.5" />
+              <i class="fas fa-rotate" />
               轮换
             </button>
             <button
               :class="
                 key.isActive
-                  ? 'rounded-lg bg-amber-500 px-3 py-2 text-xs font-medium text-white transition hover:bg-amber-600'
-                  : 'btn btn-success !px-3 !py-2 text-xs'
+                  ? 'management-button management-button--compact rounded-lg bg-amber-500 font-medium text-white transition hover:bg-amber-600'
+                  : 'btn btn-success management-button management-button--compact'
               "
               type="button"
               @click="toggleKey(key)"
             >
-              <i :class="key.isActive ? 'fas fa-pause mr-1.5' : 'fas fa-play mr-1.5'" />
+              <i :class="key.isActive ? 'fas fa-pause' : 'fas fa-play'" />
               {{ key.isActive ? '停用' : '启用' }}
             </button>
             <button
-              class="btn btn-danger !px-3 !py-2 text-xs"
+              class="btn btn-danger management-button management-button--compact"
               type="button"
               @click="deleteKey(key)"
             >
-              <i class="fas fa-trash mr-1.5" />
+              <i class="fas fa-trash" />
               删除
             </button>
           </div>
@@ -145,151 +145,176 @@
       </article>
     </div>
 
-    <div
-      v-if="showForm"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-      @click.self="closeForm"
-    >
+    <Teleport to="body">
       <div
-        class="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-gray-800"
+        v-if="showForm"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+        @click.self="closeForm"
       >
         <div
-          class="flex items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-700"
+          class="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-gray-800"
         >
-          <div>
-            <h4 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              {{ editingKey ? '编辑管理密钥' : '新建管理密钥' }}
-            </h4>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              按最小权限原则选择 Agent 可以执行的操作。
-            </p>
-          </div>
-          <button
-            class="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
-            type="button"
-            @click="closeForm"
+          <div
+            class="flex shrink-0 items-center justify-between border-b border-gray-200 px-6 py-4 dark:border-gray-700"
           >
-            <i class="fas fa-times" />
-          </button>
-        </div>
-
-        <form class="space-y-5 p-6" @submit.prevent="saveKey">
-          <label class="block">
-            <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
-              名称
-            </span>
-            <input
-              v-model.trim="form.name"
-              class="form-input w-full dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-              maxlength="100"
-              placeholder="例如：MacBook Codex MCP"
-              required
-            />
-          </label>
-
-          <label class="block">
-            <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
-              说明
-            </span>
-            <textarea
-              v-model.trim="form.description"
-              class="form-input min-h-20 w-full dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-              maxlength="500"
-              placeholder="记录使用设备、Agent 或用途"
-            />
-          </label>
-
-          <label class="block">
-            <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
-              过期时间
-            </span>
-            <input
-              v-model="form.expiresAt"
-              class="form-input w-full dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-              type="datetime-local"
-            />
-            <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
-              留空表示永久有效，可随时停用或轮换。
-            </span>
-          </label>
-
-          <fieldset>
-            <legend class="mb-2 text-sm font-medium text-gray-700 dark:text-gray-200">
-              权限范围
-            </legend>
-            <div class="grid gap-2 sm:grid-cols-2">
-              <label
-                v-for="scope in supportedScopes"
-                :key="scope"
-                class="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3 hover:border-blue-300 dark:border-gray-700 dark:hover:border-blue-700"
-              >
-                <input
-                  v-model="form.scopes"
-                  class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  type="checkbox"
-                  :value="scope"
-                />
-                <span>
-                  <span class="block text-sm font-medium text-gray-800 dark:text-gray-200">
-                    {{ scopeLabels[scope] || scope }}
-                  </span>
-                  <code class="text-xs text-gray-500 dark:text-gray-400">{{ scope }}</code>
-                </span>
-              </label>
+            <div>
+              <h4 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                {{ editingKey ? '编辑管理密钥' : '新建管理密钥' }}
+              </h4>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                按最小权限原则选择 Agent 可以执行的操作。
+              </p>
             </div>
-          </fieldset>
-
-          <div class="flex justify-end gap-3 border-t border-gray-200 pt-5 dark:border-gray-700">
-            <button class="btn btn-secondary" type="button" @click="closeForm">取消</button>
-            <button class="btn btn-primary" :disabled="saving" type="submit">
-              <i v-if="saving" class="fas fa-spinner fa-spin mr-2" />
-              {{ saving ? '保存中...' : '保存' }}
+            <button
+              aria-label="关闭"
+              class="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              type="button"
+              @click="closeForm"
+            >
+              <i class="fas fa-times" />
             </button>
           </div>
-        </form>
-      </div>
-    </div>
 
-    <div
-      v-if="revealedSecret"
-      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-    >
-      <div class="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-gray-800">
-        <div class="flex items-start gap-3">
+          <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="saveKey">
+            <div class="space-y-5 overflow-y-auto p-6">
+              <label class="block">
+                <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                  名称
+                </span>
+                <input
+                  v-model.trim="form.name"
+                  class="form-input w-full dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+                  maxlength="100"
+                  placeholder="例如：MacBook Codex MCP"
+                  required
+                />
+              </label>
+
+              <label class="block">
+                <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                  说明
+                </span>
+                <textarea
+                  v-model.trim="form.description"
+                  class="form-input min-h-20 w-full dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+                  maxlength="500"
+                  placeholder="记录使用设备、Agent 或用途"
+                />
+              </label>
+
+              <label class="block">
+                <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">
+                  过期时间
+                </span>
+                <input
+                  v-model="form.expiresAt"
+                  class="form-input w-full dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
+                  type="datetime-local"
+                />
+                <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+                  留空表示永久有效，可随时停用或轮换。
+                </span>
+              </label>
+
+              <fieldset>
+                <legend class="mb-2 text-sm font-medium text-gray-700 dark:text-gray-200">
+                  权限范围
+                </legend>
+                <div class="grid gap-2 sm:grid-cols-2">
+                  <label
+                    v-for="scope in supportedScopes"
+                    :key="scope"
+                    class="flex cursor-pointer items-start gap-3 rounded-lg border border-gray-200 p-3 hover:border-blue-300 dark:border-gray-700 dark:hover:border-blue-700"
+                  >
+                    <input
+                      v-model="form.scopes"
+                      class="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      type="checkbox"
+                      :value="scope"
+                    />
+                    <span>
+                      <span class="block text-sm font-medium text-gray-800 dark:text-gray-200">
+                        {{ scopeLabels[scope] || scope }}
+                      </span>
+                      <code class="text-xs text-gray-500 dark:text-gray-400">{{ scope }}</code>
+                    </span>
+                  </label>
+                </div>
+              </fieldset>
+            </div>
+
+            <div
+              class="flex shrink-0 flex-col-reverse gap-3 border-t border-gray-200 bg-gray-50 px-6 py-4 dark:border-gray-700 dark:bg-gray-800 sm:flex-row sm:justify-end"
+            >
+              <button
+                class="btn btn-secondary management-button w-full sm:w-auto sm:min-w-24"
+                type="button"
+                @click="closeForm"
+              >
+                取消
+              </button>
+              <button
+                class="btn btn-primary management-button w-full sm:w-auto sm:min-w-24"
+                :disabled="saving"
+                type="submit"
+              >
+                <i v-if="saving" class="fas fa-spinner fa-spin" />
+                {{ saving ? '保存中...' : '保存' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div
+        v-if="revealedSecret"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      >
+        <div class="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-gray-800">
+          <div class="flex items-start gap-3">
+            <div
+              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300"
+            >
+              <i class="fas fa-shield-halved" />
+            </div>
+            <div>
+              <h4 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                请立即保存管理密钥
+              </h4>
+              <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                这是唯一一次显示完整密钥。关闭后只能轮换，无法再次查看。
+              </p>
+            </div>
+          </div>
+
           <div
-            class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-300"
+            class="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30"
           >
-            <i class="fas fa-shield-halved" />
+            <code class="break-all text-sm font-semibold text-amber-900 dark:text-amber-200">
+              {{ revealedSecret }}
+            </code>
           </div>
-          <div>
-            <h4 class="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              请立即保存管理密钥
-            </h4>
-            <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
-              这是唯一一次显示完整密钥。关闭后只能轮换，无法再次查看。
-            </p>
+
+          <div class="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button
+              class="btn btn-secondary management-button w-full sm:w-auto"
+              type="button"
+              @click="copySecret"
+            >
+              <i class="fas fa-copy" />
+              复制密钥
+            </button>
+            <button
+              class="btn btn-primary management-button w-full sm:w-auto"
+              type="button"
+              @click="revealedSecret = ''"
+            >
+              我已保存
+            </button>
           </div>
-        </div>
-
-        <div
-          class="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30"
-        >
-          <code class="break-all text-sm font-semibold text-amber-900 dark:text-amber-200">
-            {{ revealedSecret }}
-          </code>
-        </div>
-
-        <div class="mt-5 flex justify-end gap-3">
-          <button class="btn btn-secondary" type="button" @click="copySecret">
-            <i class="fas fa-copy mr-2" />
-            复制密钥
-          </button>
-          <button class="btn btn-primary" type="button" @click="revealedSecret = ''">
-            我已保存
-          </button>
         </div>
       </div>
-    </div>
+    </Teleport>
   </section>
 </template>
 
@@ -497,3 +522,13 @@ const toDateTimeInput = (value) => {
 
 onMounted(loadKeys)
 </script>
+
+<style scoped>
+.management-button {
+  @apply inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-semibold;
+}
+
+.management-button--compact {
+  @apply min-h-9 px-3 py-2 text-xs;
+}
+</style>
