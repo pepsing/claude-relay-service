@@ -11,6 +11,7 @@ jest.mock(
 jest.mock('../src/models/redis', () => ({
   setApiKey: jest.fn(),
   getApiKey: jest.fn(),
+  findApiKeyByHash: jest.fn(),
   incrementTokenUsage: jest.fn(),
   incrementDailyCost: jest.fn(),
   incrementAccountUsage: jest.fn(),
@@ -25,12 +26,16 @@ jest.mock('../src/services/apiKeyIndexService', () => ({
   addToIndex: jest.fn(),
   updateIndex: jest.fn()
 }))
+jest.mock('../src/services/userService', () => ({
+  getUserById: jest.fn()
+}))
 
 jest.mock('../src/utils/logger', () => ({
   success: jest.fn(),
   warn: jest.fn(),
   error: jest.fn(),
   database: jest.fn(),
+  api: jest.fn(),
   debug: jest.fn()
 }))
 
@@ -59,6 +64,7 @@ const serviceRatesService = require('../src/services/serviceRatesService')
 const requestDetailService = require('../src/services/requestDetailService')
 const billingEventPublisher = require('../src/services/billingEventPublisher')
 const CostCalculator = require('../src/utils/costCalculator')
+const userService = require('../src/services/userService')
 const apiKeyService = require('../src/services/apiKeyService')
 
 describe('apiKeyService openai responses config', () => {
@@ -70,6 +76,7 @@ describe('apiKeyService openai responses config', () => {
       serviceRates: '{}'
     })
     redis.setApiKey.mockResolvedValue()
+    redis.findApiKeyByHash.mockReset()
     redis.incrementTokenUsage.mockResolvedValue()
     redis.incrementDailyCost.mockResolvedValue()
     redis.incrementAccountUsage.mockResolvedValue()
@@ -78,6 +85,52 @@ describe('apiKeyService openai responses config', () => {
     serviceRatesService.getServiceRate.mockResolvedValue(1)
     requestDetailService.captureRequestDetail.mockResolvedValue({ captured: true })
     billingEventPublisher.publishBillingEvent.mockResolvedValue()
+    userService.getUserById.mockReset()
+    userService.getUserById.mockResolvedValue({ id: 'user-1', isActive: true })
+  })
+
+  test('validateApiKey returns a safe owner identity for a disabled known key', async () => {
+    redis.findApiKeyByHash.mockResolvedValue({
+      id: 'key-disabled',
+      name: 'Disabled key',
+      userId: 'user-1',
+      isActive: 'false'
+    })
+
+    await expect(apiKeyService.validateApiKey('cr_disabled_key_value')).resolves.toEqual({
+      valid: false,
+      error: 'API key is disabled',
+      keyData: {
+        id: 'key-disabled',
+        name: 'Disabled key',
+        userId: 'user-1'
+      }
+    })
+  })
+
+  test('validateApiKey includes userId in a successful identity', async () => {
+    redis.findApiKeyByHash.mockResolvedValue({
+      id: 'key-active',
+      name: 'Active key',
+      userId: 'user-1',
+      isActive: 'true',
+      permissions: '[]',
+      restrictedModels: '[]',
+      allowedClients: '[]',
+      tags: '[]',
+      serviceRates: '{}'
+    })
+
+    const result = await apiKeyService.validateApiKey('cr_active_key_value')
+
+    expect(result.valid).toBe(true)
+    expect(result.keyData).toEqual(
+      expect.objectContaining({
+        id: 'key-active',
+        name: 'Active key',
+        userId: 'user-1'
+      })
+    )
   })
 
   test('generateApiKey stores default toggle values', async () => {

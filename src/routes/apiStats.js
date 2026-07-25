@@ -3,6 +3,7 @@ const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const apiKeyService = require('../services/apiKeyService')
 const requestDetailService = require('../services/requestDetailService')
+const requestFailureDetailService = require('../services/requestFailureDetailService')
 const usageStatsService = require('../services/usageStatsService')
 const routeRulesVisualizationService = require('../services/routeRulesVisualizationService')
 const CostCalculator = require('../utils/costCalculator')
@@ -378,6 +379,52 @@ function sanitizeCurrentKeyRequestDetailList(data = {}) {
         latest
       }
     }
+  }
+}
+
+function sanitizeRequestFailureRecordForUser(record = {}, includePayload = false) {
+  const sanitized = {
+    requestId: record.requestId,
+    timestamp: record.timestamp,
+    requestStartedAt: record.requestStartedAt,
+    responseCompletedAt: record.responseCompletedAt,
+    endpoint: record.endpoint,
+    method: record.method,
+    model: record.model,
+    stream: record.stream === true,
+    httpStatus: record.httpStatus,
+    failureOrigin: record.failureOrigin,
+    failurePhase: record.failurePhase,
+    failureType: record.failureType,
+    errorCode: record.errorCode,
+    errorSummary: record.errorSummary,
+    retryable: record.retryable === true,
+    retryAfterSeconds: record.retryAfterSeconds,
+    durationMs: record.durationMs,
+    timeToFirstByteMs: record.timeToFirstByteMs,
+    clientAborted: record.clientAborted === true,
+    sessionHash: record.sessionHash,
+    hasRequestPayload: record.hasRequestPayload === true,
+    hasResponsePayload: record.hasResponsePayload === true
+  }
+
+  if (includePayload) {
+    sanitized.requestBodySnapshot = record.requestBodySnapshot
+    sanitized.clientResponseHeaders = record.clientResponseHeaders
+    sanitized.clientErrorBody = record.clientErrorBody
+    sanitized.requestBodyTruncated = record.requestBodyTruncated === true
+    sanitized.responseBodyTruncated = record.responseBodyTruncated === true
+  }
+
+  return sanitized
+}
+
+function sanitizeCurrentKeyRequestFailures(data = {}) {
+  return {
+    ...data,
+    records: Array.isArray(data.records)
+      ? data.records.map((record) => sanitizeRequestFailureRecordForUser(record))
+      : []
   }
 }
 
@@ -1372,6 +1419,49 @@ router.post('/api/request-details/:requestId', async (req, res) => {
     })
   } catch (error) {
     return sendStatsRequestDetailError(res, error, '❌ Failed to get API key request detail')
+  }
+})
+
+// ⚠️ API Key 最终失败明细 - 与成功请求统计完全隔离
+router.post('/api/request-failures', async (req, res) => {
+  try {
+    const { keyId, keyData } = await resolveStatsRequestApiKey(req)
+    const filters = buildCurrentKeyRequestDetailFilters(req.body || {}, keyId)
+    const data = await requestFailureDetailService.listRequestFailures(filters)
+
+    logger.api(
+      `⚠️ API Stats request failure query from key: ${keyData.name || keyId} (${keyId}) from ${req.ip || 'unknown'}`
+    )
+    return res.json({
+      success: true,
+      data: sanitizeCurrentKeyRequestFailures(data)
+    })
+  } catch (error) {
+    return sendStatsRequestDetailError(res, error, '❌ Failed to list API key request failures')
+  }
+})
+
+router.post('/api/request-failures/:requestId', async (req, res) => {
+  try {
+    const { keyId } = await resolveStatsRequestApiKey(req)
+    const data = await requestFailureDetailService.getRequestFailure(req.params.requestId, {
+      apiKeyId: keyId
+    })
+    if (!data.record) {
+      return res.status(404).json({
+        success: false,
+        error: 'Request failure not found'
+      })
+    }
+    return res.json({
+      success: true,
+      data: {
+        ...data,
+        record: sanitizeRequestFailureRecordForUser(data.record, true)
+      }
+    })
+  } catch (error) {
+    return sendStatsRequestDetailError(res, error, '❌ Failed to get API key request failure')
   }
 })
 

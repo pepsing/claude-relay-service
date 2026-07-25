@@ -36,6 +36,10 @@ const DEFAULT_CONFIG = {
   requestDetailCaptureEnabled: false, // 是否启用请求明细采集
   requestDetailRetentionHours: 6, // 请求明细保留时间（小时）
   requestDetailBodyPreviewEnabled: false, // 是否保存请求体预览快照
+  requestFailureCaptureEnabled: false, // 是否独立采集最终失败请求
+  requestFailureRetentionHours: 48, // 失败明细保留时间（小时）
+  requestFailureBodyPreviewEnabled: false, // 是否保存失败请求体预览
+  requestFailureIncludeClientAbort: true, // 是否记录客户端中断
   // 排队健康检查配置
   concurrentRequestQueueHealthCheckEnabled: true, // 是否启用排队健康检查（默认开启）
   concurrentRequestQueueHealthThreshold: 0.8, // 健康检查阈值（P90 >= 超时 × 阈值时拒绝新请求）

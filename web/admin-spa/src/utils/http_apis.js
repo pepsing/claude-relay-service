@@ -37,6 +37,14 @@ export const getApiStatsRequestDetailApi = (requestId, data) =>
     method: 'POST',
     data
   })
+export const getApiStatsRequestFailuresApi = (data) =>
+  request({ url: '/apiStats/api/request-failures', method: 'POST', data })
+export const getApiStatsRequestFailureApi = (requestId, data) =>
+  request({
+    url: `/apiStats/api/request-failures/${encodeURIComponent(requestId)}`,
+    method: 'POST',
+    data
+  })
 
 // 认证
 export const loginApi = (data) => request({ url: '/web/auth/login', method: 'POST', data })
@@ -77,6 +85,10 @@ export const purgeRequestDetailBodyPreviewApi = (config) =>
   request({ url: '/admin/request-details/body-preview-purge', method: 'POST', ...config })
 export const getRequestDetailApi = (requestId) =>
   request({ url: `/admin/request-details/${requestId}`, method: 'GET' })
+export const getRequestFailuresApi = (params) =>
+  request({ url: '/admin/request-failures', method: 'GET', params })
+export const getRequestFailureApi = (requestId) =>
+  request({ url: `/admin/request-failures/${encodeURIComponent(requestId)}`, method: 'GET' })
 export const getRouteRuleEndpointsApi = (params) =>
   request({ url: '/admin/route-rules/endpoints', method: 'GET', params })
 export const getRouteRuleExplainApi = (params) =>

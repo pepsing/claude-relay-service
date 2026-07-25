@@ -18,6 +18,7 @@ const SettingsView = () => import('@/views/SettingsView.vue')
 const ApiStatsView = () => import('@/views/ApiStatsView.vue')
 const QuotaCardsView = () => import('@/views/QuotaCardsView.vue')
 const RequestDetailsView = () => import('@/views/RequestDetailsView.vue')
+const RequestFailuresView = () => import('@/views/RequestFailuresView.vue')
 const RouteRulesView = () => import('@/views/RouteRulesView.vue')
 
 const routes = [
@@ -170,6 +171,18 @@ const routes = [
         path: '',
         name: 'RequestDetails',
         component: RequestDetailsView
+      }
+    ]
+  },
+  {
+    path: '/request-failures',
+    component: MainLayout,
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        name: 'RequestFailures',
+        component: RequestFailuresView
       }
     ]
   },

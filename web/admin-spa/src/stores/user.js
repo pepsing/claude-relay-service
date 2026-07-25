@@ -171,6 +171,28 @@ export const useUserStore = defineStore('user', {
       }
     },
 
+    async getUserRequestFailures(params = {}) {
+      try {
+        const response = await axios.get(`${API_BASE}/request-failures`, { params })
+        return response.data
+      } catch (error) {
+        console.error('Failed to fetch request failures:', error)
+        throw error
+      }
+    },
+
+    async getUserRequestFailure(requestId) {
+      try {
+        const response = await axios.get(
+          `${API_BASE}/request-failures/${encodeURIComponent(requestId)}`
+        )
+        return response.data
+      } catch (error) {
+        console.error('Failed to fetch request failure detail:', error)
+        throw error
+      }
+    },
+
     // 🧹 清除认证信息
     clearAuth() {
       this.user = null

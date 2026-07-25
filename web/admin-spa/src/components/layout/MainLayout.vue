@@ -41,6 +41,7 @@ const tabRouteMap = computed(() => {
     accounts: '/accounts',
     routeRules: '/route-rules',
     requestDetails: '/request-details',
+    requestFailures: '/request-failures',
     quotaCards: '/quota-cards',
     settings: '/settings'
   }
@@ -71,6 +72,7 @@ const initActiveTab = () => {
       Accounts: 'accounts',
       RouteRules: 'routeRules',
       RequestDetails: 'requestDetails',
+      RequestFailures: 'requestFailures',
       QuotaCards: 'quotaCards',
       Settings: 'settings'
     }
@@ -102,6 +104,7 @@ watch(
         Accounts: 'accounts',
         RouteRules: 'routeRules',
         RequestDetails: 'requestDetails',
+        RequestFailures: 'requestFailures',
         QuotaCards: 'quotaCards',
         Tutorial: 'tutorial',
         Settings: 'settings'

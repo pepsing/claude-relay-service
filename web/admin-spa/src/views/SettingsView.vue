@@ -1352,6 +1352,103 @@
               </div>
             </div>
 
+            <!-- 独立失败明细采集 -->
+            <div
+              class="mb-6 rounded-lg bg-white/80 p-6 shadow-lg backdrop-blur-sm dark:bg-gray-800/80"
+            >
+              <div class="flex items-center justify-between gap-4">
+                <div class="flex items-center">
+                  <div
+                    class="flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-r from-red-500 to-orange-500 text-white shadow-lg"
+                  >
+                    <i class="fas fa-exclamation-circle text-xl"></i>
+                  </div>
+                  <div class="ml-4">
+                    <h4 class="text-lg font-semibold text-gray-900 dark:text-white">
+                      失败明细采集
+                    </h4>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      独立保存最终失败请求，不写入成功次数、Token、费用或现有请求明细
+                    </p>
+                  </div>
+                </div>
+                <label class="relative inline-flex cursor-pointer items-center">
+                  <input
+                    v-model="claudeConfig.requestFailureCaptureEnabled"
+                    class="peer sr-only"
+                    type="checkbox"
+                    @change="saveClaudeConfig"
+                  />
+                  <div
+                    class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-red-500 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-red-300 dark:bg-gray-700 dark:peer-focus:ring-red-800"
+                  ></div>
+                </label>
+              </div>
+
+              <div
+                v-if="claudeConfig.requestFailureCaptureEnabled"
+                class="mt-6 grid gap-4 md:grid-cols-3"
+              >
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    保留时间（小时）
+                  </label>
+                  <input
+                    v-model.number="claudeConfig.requestFailureRetentionHours"
+                    class="mt-1 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 shadow-sm focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 dark:border-gray-500 dark:bg-gray-700 dark:text-white sm:text-sm"
+                    max="720"
+                    min="1"
+                    type="number"
+                    @change="saveClaudeConfig"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">范围 1-720 小时</p>
+                </div>
+                <label
+                  class="flex cursor-pointer items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-gray-700"
+                >
+                  <span>
+                    <span class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                      >请求体预览</span
+                    >
+                    <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400"
+                      >保存脱敏后的失败请求体</span
+                    >
+                  </span>
+                  <input
+                    v-model="claudeConfig.requestFailureBodyPreviewEnabled"
+                    class="h-4 w-4 rounded border-gray-300 text-red-500"
+                    type="checkbox"
+                    @change="saveClaudeConfig"
+                  />
+                </label>
+                <label
+                  class="flex cursor-pointer items-center justify-between rounded-lg border border-gray-200 p-4 dark:border-gray-700"
+                >
+                  <span>
+                    <span class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                      >客户端中断</span
+                    >
+                    <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400"
+                      >以 499 类型独立记录</span
+                    >
+                  </span>
+                  <input
+                    v-model="claudeConfig.requestFailureIncludeClientAbort"
+                    class="h-4 w-4 rounded border-gray-300 text-red-500"
+                    type="checkbox"
+                    @change="saveClaudeConfig"
+                  />
+                </label>
+              </div>
+
+              <div class="mt-4 rounded-lg bg-red-50 p-4 dark:bg-red-900/20">
+                <p class="text-sm text-red-700 dark:text-red-300">
+                  <i class="fas fa-shield-alt mr-2"></i>
+                  失败采集采用独立 PostgreSQL 表和异步写队列；关闭后不会删除保留期内的历史失败。
+                </p>
+              </div>
+            </div>
+
             <!-- 配置更新信息 -->
             <div
               v-if="claudeConfig.updatedAt"
@@ -2334,6 +2431,10 @@ const claudeConfig = ref({
   requestDetailCaptureEnabled: false,
   requestDetailRetentionHours: 6,
   requestDetailBodyPreviewEnabled: false,
+  requestFailureCaptureEnabled: false,
+  requestFailureRetentionHours: 48,
+  requestFailureBodyPreviewEnabled: false,
+  requestFailureIncludeClientAbort: true,
   modelEndpointConfigs: {},
   updatedAt: null,
   updatedBy: null
@@ -2989,6 +3090,11 @@ const loadClaudeConfig = async () => {
         requestDetailRetentionHours:
           response.config?.requestDetailRetentionHours ?? REQUEST_DETAIL_RETENTION_DEFAULT_HOURS,
         requestDetailBodyPreviewEnabled: response.config?.requestDetailBodyPreviewEnabled ?? false,
+        requestFailureCaptureEnabled: response.config?.requestFailureCaptureEnabled ?? false,
+        requestFailureRetentionHours: response.config?.requestFailureRetentionHours ?? 48,
+        requestFailureBodyPreviewEnabled:
+          response.config?.requestFailureBodyPreviewEnabled ?? false,
+        requestFailureIncludeClientAbort: response.config?.requestFailureIncludeClientAbort ?? true,
         modelEndpointConfigs: cloneModelEndpointConfigs(
           response.config?.modelEndpointConfigs || response.defaultModelEndpointConfigs || {}
         ),
@@ -3051,6 +3157,10 @@ const saveClaudeConfig = async (options = {}) => {
       requestDetailCaptureEnabled: claudeConfig.value.requestDetailCaptureEnabled,
       requestDetailRetentionHours: claudeConfig.value.requestDetailRetentionHours,
       requestDetailBodyPreviewEnabled,
+      requestFailureCaptureEnabled: claudeConfig.value.requestFailureCaptureEnabled,
+      requestFailureRetentionHours: claudeConfig.value.requestFailureRetentionHours,
+      requestFailureBodyPreviewEnabled: claudeConfig.value.requestFailureBodyPreviewEnabled,
+      requestFailureIncludeClientAbort: claudeConfig.value.requestFailureIncludeClientAbort,
       modelEndpointConfigs
     }
 
@@ -3070,6 +3180,18 @@ const saveClaudeConfig = async (options = {}) => {
         requestDetailBodyPreviewEnabled:
           response.config?.requestDetailBodyPreviewEnabled ??
           claudeConfig.value.requestDetailBodyPreviewEnabled,
+        requestFailureCaptureEnabled:
+          response.config?.requestFailureCaptureEnabled ??
+          claudeConfig.value.requestFailureCaptureEnabled,
+        requestFailureRetentionHours:
+          response.config?.requestFailureRetentionHours ??
+          claudeConfig.value.requestFailureRetentionHours,
+        requestFailureBodyPreviewEnabled:
+          response.config?.requestFailureBodyPreviewEnabled ??
+          claudeConfig.value.requestFailureBodyPreviewEnabled,
+        requestFailureIncludeClientAbort:
+          response.config?.requestFailureIncludeClientAbort ??
+          claudeConfig.value.requestFailureIncludeClientAbort,
         modelEndpointConfigs: cloneModelEndpointConfigs(
           response.config?.modelEndpointConfigs || claudeConfig.value.modelEndpointConfigs
         ),

@@ -3,6 +3,7 @@ const router = express.Router()
 const ldapService = require('../services/ldapService')
 const userService = require('../services/userService')
 const apiKeyService = require('../services/apiKeyService')
+const requestFailureDetailService = require('../services/requestFailureDetailService')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
 const inputValidator = require('../utils/inputValidator')
@@ -444,6 +445,135 @@ router.get('/usage-stats', authenticateUser, async (req, res) => {
     res.status(500).json({
       error: 'Usage stats error',
       message: 'Failed to retrieve usage statistics'
+    })
+  }
+})
+
+function sanitizeUserRequestFailure(record = {}, includePayload = false) {
+  const safeRecord = {
+    requestId: record.requestId,
+    timestamp: record.timestamp,
+    requestStartedAt: record.requestStartedAt,
+    responseCompletedAt: record.responseCompletedAt,
+    apiKeyId: record.apiKeyId,
+    apiKeyName: record.apiKeyName,
+    endpoint: record.endpoint,
+    method: record.method,
+    model: record.model,
+    stream: record.stream === true,
+    httpStatus: record.httpStatus,
+    failureOrigin: record.failureOrigin,
+    failurePhase: record.failurePhase,
+    failureType: record.failureType,
+    errorCode: record.errorCode,
+    errorSummary: record.errorSummary,
+    retryable: record.retryable === true,
+    retryAfterSeconds: record.retryAfterSeconds,
+    durationMs: record.durationMs,
+    timeToFirstByteMs: record.timeToFirstByteMs,
+    clientAborted: record.clientAborted === true,
+    hasRequestPayload: record.hasRequestPayload === true,
+    hasResponsePayload: record.hasResponsePayload === true
+  }
+
+  if (includePayload) {
+    safeRecord.requestBodySnapshot = record.requestBodySnapshot
+    safeRecord.clientResponseHeaders = record.clientResponseHeaders
+    safeRecord.clientErrorBody = record.clientErrorBody
+    safeRecord.requestBodyTruncated = record.requestBodyTruncated === true
+    safeRecord.responseBodyTruncated = record.responseBodyTruncated === true
+  }
+  return safeRecord
+}
+
+// ⚠️ 当前登录用户的最终失败明细
+router.get('/request-failures', authenticateUser, async (req, res) => {
+  try {
+    const userApiKeys = await apiKeyService.getUserApiKeys(req.user.id, true)
+    const apiKeyIds = userApiKeys.map((key) => key.id)
+    if (apiKeyIds.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          records: [],
+          pagination: { currentPage: 1, pageSize: 50, totalRecords: 0, totalPages: 0 },
+          summary: {
+            totalFailures: 0,
+            clientErrors: 0,
+            serverErrors: 0,
+            rateLimited: 0,
+            timeouts: 0,
+            streamFailures: 0,
+            clientAborted: 0,
+            avgDurationMs: 0
+          },
+          availableFilters: {
+            models: [],
+            endpoints: [],
+            failureTypes: [],
+            statusCodes: [],
+            dateRange: { earliest: null, latest: null }
+          }
+        }
+      })
+    }
+
+    const requestedKeyId = req.query.apiKeyId
+    if (requestedKeyId && !apiKeyIds.includes(requestedKeyId)) {
+      return res.status(404).json({
+        success: false,
+        error: 'API key not found'
+      })
+    }
+
+    const data = await requestFailureDetailService.listRequestFailures({
+      ...req.query,
+      apiKeyId: requestedKeyId || undefined,
+      apiKeyIds: requestedKeyId ? undefined : apiKeyIds
+    })
+    return res.json({
+      success: true,
+      data: {
+        ...data,
+        records: data.records.map((record) => sanitizeUserRequestFailure(record))
+      }
+    })
+  } catch (error) {
+    logger.error('❌ Get user request failures error:', error)
+    return res.status(error?.statusCode || 500).json({
+      success: false,
+      error: 'Request failure query error',
+      message: error.message
+    })
+  }
+})
+
+router.get('/request-failures/:requestId', authenticateUser, async (req, res) => {
+  try {
+    const userApiKeys = await apiKeyService.getUserApiKeys(req.user.id, true)
+    const apiKeyIds = userApiKeys.map((key) => key.id)
+    const data = await requestFailureDetailService.getRequestFailure(req.params.requestId, {
+      apiKeyIds
+    })
+    if (!data.record) {
+      return res.status(404).json({
+        success: false,
+        error: 'Request failure not found'
+      })
+    }
+    return res.json({
+      success: true,
+      data: {
+        ...data,
+        record: sanitizeUserRequestFailure(data.record, true)
+      }
+    })
+  } catch (error) {
+    logger.error('❌ Get user request failure detail error:', error)
+    return res.status(500).json({
+      success: false,
+      error: 'Request failure query error',
+      message: error.message
     })
   }
 })

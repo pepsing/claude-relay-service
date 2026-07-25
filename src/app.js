@@ -678,24 +678,38 @@ class Application {
         const apiKeyService = require('./services/apiKeyService')
         const claudeAccountService = require('./services/account/claudeAccountService')
         const requestDetailService = require('./services/requestDetailService')
+        const requestFailureDetailService = require('./services/requestFailureDetailService')
         const requestDetailCleanupPromise = requestDetailService
           .cleanupExpiredPostgresRequestDetails()
           .catch((cleanupError) => {
             logger.warn(`⚠️ Failed to cleanup PostgreSQL request details: ${cleanupError.message}`)
             return { deletedRecords: 0, skipped: true, failed: true }
           })
+        const requestFailureCleanupPromise = requestFailureDetailService
+          .cleanupExpiredPostgresRequestFailures()
+          .catch((cleanupError) => {
+            logger.warn(`⚠️ Failed to cleanup PostgreSQL request failures: ${cleanupError.message}`)
+            return { deletedRecords: 0, skipped: true, failed: true }
+          })
 
-        const [expiredKeys, errorAccounts, requestDetailCleanup] = await Promise.all([
+        const [
+          expiredKeys,
+          errorAccounts,
+          _tempErrorAccounts,
+          requestDetailCleanup,
+          requestFailureCleanup
+        ] = await Promise.all([
           apiKeyService.cleanupExpiredKeys(),
           claudeAccountService.cleanupErrorAccounts(),
           claudeAccountService.cleanupTempErrorAccounts(), // 新增：清理临时错误账户
-          requestDetailCleanupPromise
+          requestDetailCleanupPromise,
+          requestFailureCleanupPromise
         ])
 
         await redis.cleanup()
 
         logger.success(
-          `🧹 Cleanup completed: ${expiredKeys} expired keys, ${errorAccounts} error accounts reset, ${requestDetailCleanup.deletedRecords || 0} expired PostgreSQL request details removed`
+          `🧹 Cleanup completed: ${expiredKeys} expired keys, ${errorAccounts} error accounts reset, ${requestDetailCleanup.deletedRecords || 0} expired PostgreSQL request details removed, ${requestFailureCleanup.deletedRecords || 0} expired PostgreSQL request failures removed`
         )
       } catch (error) {
         logger.error('❌ Cleanup task failed:', error)
@@ -896,6 +910,16 @@ class Application {
             logger.info('🧪 Account test scheduler service stopped')
           } catch (error) {
             logger.error('❌ Error stopping account test scheduler service:', error)
+          }
+
+          try {
+            const requestFailureDetailService = require('./services/requestFailureDetailService')
+            const flushResult = await requestFailureDetailService.flush(5000)
+            logger.info(
+              `🧾 Request failure capture queue flushed, remaining: ${flushResult.remaining}`
+            )
+          } catch (error) {
+            logger.error('❌ Error flushing request failure capture queue:', error)
           }
 
           // 🔢 清理所有并发计数（Phase 1 修复：防止重启泄漏）

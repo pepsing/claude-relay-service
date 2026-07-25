@@ -59,6 +59,12 @@ const tabs = computed(() => {
     { key: 'accounts', name: '账户管理', shortName: '账户', icon: 'fas fa-user-circle' },
     { key: 'routeRules', name: '路由规则', shortName: '路由', icon: 'fas fa-route' },
     { key: 'requestDetails', name: '请求明细', shortName: '明细', icon: 'fas fa-table' },
+    {
+      key: 'requestFailures',
+      name: '失败明细',
+      shortName: '失败',
+      icon: 'fas fa-exclamation-circle'
+    },
     { key: 'quotaCards', name: '额度卡', shortName: '额度卡', icon: 'fas fa-ticket-alt' }
   ]
 

@@ -57,6 +57,10 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       requestDetailRetentionHours,
       requestDetailBodyPreviewEnabled,
       purgeRequestDetailBodySnapshots,
+      requestFailureCaptureEnabled,
+      requestFailureRetentionHours,
+      requestFailureBodyPreviewEnabled,
+      requestFailureIncludeClientAbort,
       modelEndpointConfigs
     } = req.body
 
@@ -224,6 +228,40 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       return res.status(400).json({ error: 'purgeRequestDetailBodySnapshots must be a boolean' })
     }
 
+    if (
+      requestFailureCaptureEnabled !== undefined &&
+      typeof requestFailureCaptureEnabled !== 'boolean'
+    ) {
+      return res.status(400).json({ error: 'requestFailureCaptureEnabled must be a boolean' })
+    }
+
+    if (requestFailureRetentionHours !== undefined) {
+      if (
+        typeof requestFailureRetentionHours !== 'number' ||
+        !Number.isInteger(requestFailureRetentionHours) ||
+        requestFailureRetentionHours < 1 ||
+        requestFailureRetentionHours > 720
+      ) {
+        return res.status(400).json({
+          error: 'requestFailureRetentionHours must be an integer between 1 and 720'
+        })
+      }
+    }
+
+    if (
+      requestFailureBodyPreviewEnabled !== undefined &&
+      typeof requestFailureBodyPreviewEnabled !== 'boolean'
+    ) {
+      return res.status(400).json({ error: 'requestFailureBodyPreviewEnabled must be a boolean' })
+    }
+
+    if (
+      requestFailureIncludeClientAbort !== undefined &&
+      typeof requestFailureIncludeClientAbort !== 'boolean'
+    ) {
+      return res.status(400).json({ error: 'requestFailureIncludeClientAbort must be a boolean' })
+    }
+
     let normalizedModelEndpointConfigs
     if (modelEndpointConfigs !== undefined) {
       try {
@@ -288,6 +326,18 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
     }
     if (requestDetailBodyPreviewEnabled !== undefined) {
       updateData.requestDetailBodyPreviewEnabled = requestDetailBodyPreviewEnabled
+    }
+    if (requestFailureCaptureEnabled !== undefined) {
+      updateData.requestFailureCaptureEnabled = requestFailureCaptureEnabled
+    }
+    if (requestFailureRetentionHours !== undefined) {
+      updateData.requestFailureRetentionHours = requestFailureRetentionHours
+    }
+    if (requestFailureBodyPreviewEnabled !== undefined) {
+      updateData.requestFailureBodyPreviewEnabled = requestFailureBodyPreviewEnabled
+    }
+    if (requestFailureIncludeClientAbort !== undefined) {
+      updateData.requestFailureIncludeClientAbort = requestFailureIncludeClientAbort
     }
     if (normalizedModelEndpointConfigs !== undefined) {
       updateData.modelEndpointConfigs = normalizedModelEndpointConfigs

@@ -27,6 +27,15 @@ jest.mock('../src/services/requestDetailService', () => ({
   listRequestDetailSessions: jest.fn(),
   getRequestDetail: jest.fn()
 }))
+jest.mock('../src/services/requestFailureDetailService', () => ({
+  listRequestFailures: jest.fn(),
+  getRequestFailure: jest.fn()
+}))
+jest.mock('../src/services/routeRulesVisualizationService', () => ({
+  getEndpoints: jest.fn(),
+  getExplain: jest.fn(),
+  getLive: jest.fn()
+}))
 jest.mock('../src/services/account/claudeAccountService', () => ({}))
 jest.mock('../src/services/account/claudeConsoleAccountService', () => ({
   getAllAccounts: jest.fn(() => [])
@@ -87,6 +96,7 @@ jest.mock('../src/utils/logger', () => ({
 const apiKeyService = require('../src/services/apiKeyService')
 const redis = require('../src/models/redis')
 const requestDetailService = require('../src/services/requestDetailService')
+const requestFailureDetailService = require('../src/services/requestFailureDetailService')
 const claudeRelayConfigService = require('../src/services/claudeRelayConfigService')
 const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
 const ccrAccountService = require('../src/services/account/ccrAccountService')
@@ -145,6 +155,8 @@ describe('apiStats request detail routes', () => {
     modelsConfig.isHiddenDefaultUiModel.mockReturnValue(false)
     requestDetailService.listRequestDetails.mockReset()
     requestDetailService.getRequestDetail.mockReset()
+    requestFailureDetailService.listRequestFailures.mockReset()
+    requestFailureDetailService.getRequestFailure.mockReset()
     claudeConsoleAccountService.getAllAccounts.mockReset()
     ccrAccountService.getAllAccounts.mockReset()
     geminiAccountService.getAllAccounts.mockReset()
@@ -230,6 +242,58 @@ describe('apiStats request detail routes', () => {
     expect(res.body.data.availableFilters.accounts).toEqual([])
     expect(res.body.data.availableFilters.models).toEqual(['glm-5.1'])
     expect(res.body.data.availableFilters.endpoints).toEqual(['/api/v1/messages'])
+  })
+
+  test('lists only sanitized failures for the current API key', async () => {
+    requestFailureDetailService.listRequestFailures.mockResolvedValue({
+      records: [
+        {
+          requestId: 'req_failure_1',
+          apiKeyId: 'key_current',
+          apiKeyName: 'Current Key',
+          accountId: 'internal_account',
+          accountType: 'openai-responses',
+          clientIp: '127.0.0.1',
+          httpStatus: 503,
+          failureType: 'upstream_unavailable',
+          errorSummary: 'Upstream unavailable'
+        }
+      ],
+      pagination: { currentPage: 1, pageSize: 50, totalRecords: 1, totalPages: 1 },
+      summary: { totalFailures: 1 }
+    })
+
+    const handler = findPostHandler('/api/request-failures')
+    const res = createResponse()
+    await handler(
+      {
+        body: {
+          apiKey: 'cr_valid_key_for_test',
+          apiId: 'key_current',
+          apiKeyId: 'key_other',
+          statusCode: 503
+        },
+        ip: '127.0.0.1'
+      },
+      res
+    )
+
+    expect(requestFailureDetailService.listRequestFailures).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKeyId: 'key_current',
+        statusCode: 503
+      })
+    )
+    expect(res.body.data.records[0]).toEqual(
+      expect.objectContaining({
+        requestId: 'req_failure_1',
+        httpStatus: 503,
+        errorSummary: 'Upstream unavailable'
+      })
+    )
+    expect(res.body.data.records[0]).not.toHaveProperty('accountId')
+    expect(res.body.data.records[0]).not.toHaveProperty('accountType')
+    expect(res.body.data.records[0]).not.toHaveProperty('clientIp')
   })
 
   test('lists current API key request detail sessions', async () => {

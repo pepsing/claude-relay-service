@@ -13,6 +13,8 @@ const { isClaudeFamilyModel } = require('../utils/modelHelper')
 const { createResponsePayloadCapture } = require('../utils/responsePayloadCapture')
 const metadataUserIdHelper = require('../utils/metadataUserIdHelper')
 const { hashRequestDetailIdentifier } = require('../utils/requestDetailHelper')
+const requestFailureDetailService = require('../services/requestFailureDetailService')
+const { markRequestFailure, extractSseFailure } = require('../utils/requestFailureHelper')
 
 // 工具函数
 function sleep(ms) {
@@ -254,6 +256,30 @@ function captureResponsePayloadChunk(req, res, chunk, encoding) {
     capture.setHeaders(res.getHeaders())
   }
   capture.appendChunk(chunk, encoding)
+}
+
+function inspectStreamingFailureChunk(req, chunk, encoding) {
+  if (req?.body?.stream !== true || req.requestFailureContext?.failed === true) {
+    return
+  }
+
+  const chunkText = normalizeResponseChunk(chunk, encoding)
+  if (!chunkText) {
+    return
+  }
+
+  req._requestFailureSseBuffer = `${req._requestFailureSseBuffer || ''}${chunkText}`.slice(-32768)
+  const failure = extractSseFailure(req._requestFailureSseBuffer)
+  if (!failure) {
+    return
+  }
+
+  markRequestFailure(req, {
+    origin: 'upstream',
+    phase: 'stream',
+    type: 'upstream_stream_error',
+    clientErrorBody: failure.payload
+  })
 }
 
 /**
@@ -825,6 +851,16 @@ const authenticateApiKey = async (req, res, next) => {
 
     // 验证API Key（带缓存优化）
     const validation = await apiKeyService.validateApiKey(apiKey)
+
+    // 已存在但停用、过期或所属用户停用的 Key 仍可安全归属失败明细。
+    // 完全无效或不存在的 Key 不建立归属，也不会保存原始 Key。
+    if (validation.keyData?.id) {
+      req.requestFailureIdentity = {
+        apiKeyId: validation.keyData.id,
+        apiKeyName: validation.keyData.name || validation.keyData.id,
+        userId: validation.keyData.userId || null
+      }
+    }
 
     if (!validation.valid) {
       const clientIP = req.ip || req.connection?.remoteAddress || 'unknown'
@@ -2161,6 +2197,26 @@ const corsMiddleware = (req, res, next) => {
 const requestLogger = (req, res, next) => {
   const start = Date.now()
   const requestId = Math.random().toString(36).substring(2, 15)
+  let responseFinished = false
+  let failureCaptureStarted = false
+
+  const captureFinalFailure = (options = {}) => {
+    if (failureCaptureStarted || !req.requestFailureIdentity?.apiKeyId) {
+      return
+    }
+    const possibleFailure =
+      options.clientAborted === true ||
+      Number(res.statusCode || 0) >= 400 ||
+      req.requestFailureContext?.failed === true ||
+      req.body?.stream === true
+    if (!possibleFailure) {
+      return
+    }
+    failureCaptureStarted = true
+    requestFailureDetailService.captureFinalResponse(req, res, options).catch((error) => {
+      logger.warn(`⚠️ Failed to schedule final request failure capture: ${error.message}`)
+    })
+  }
 
   // 添加请求ID到请求对象
   req.requestId = requestId
@@ -2200,6 +2256,7 @@ const requestLogger = (req, res, next) => {
       encoding = undefined
     }
     captureResponsePayloadChunk(req, res, chunk, encoding)
+    inspectStreamingFailureChunk(req, chunk, encoding)
     recordResponseTiming(req, res, chunk, encoding)
     return originalWrite(chunk, encoding, callback)
   }
@@ -2215,12 +2272,16 @@ const requestLogger = (req, res, next) => {
       encoding = undefined
     }
     captureResponsePayloadChunk(req, res, chunk, encoding)
+    inspectStreamingFailureChunk(req, chunk, encoding)
     recordResponseTiming(req, res, chunk, encoding)
     req.requestTiming.responseCompletedAt = Date.now()
     return originalEnd(chunk, encoding, callback)
   }
 
   res.on('finish', () => {
+    responseFinished = true
+    captureFinalFailure()
+
     if (req.originalUrl === '/health') {
       return
     }
@@ -2284,6 +2345,23 @@ const requestLogger = (req, res, next) => {
   res.on('error', (error) => {
     const duration = Date.now() - start
     logger.error(`💥 [${requestId}] Response error after ${duration}ms:`, error)
+    markRequestFailure(req, {
+      origin: 'transport',
+      phase: 'transport',
+      type: 'response_error',
+      message: error.message
+    })
+    captureFinalFailure()
+  })
+
+  res.once('close', () => {
+    if (!responseFinished && !res.writableEnded) {
+      captureFinalFailure({ clientAborted: true })
+    }
+  })
+
+  req.once('aborted', () => {
+    captureFinalFailure({ clientAborted: true })
   })
 
   next()
@@ -2411,6 +2489,19 @@ const errorHandler = (error, req, res, _next) => {
 
   // 设置响应头
   res.setHeader('X-Request-ID', requestId)
+
+  markRequestFailure(req, {
+    origin: statusCode >= 500 ? 'relay' : 'client',
+    phase: statusCode >= 500 ? 'internal' : 'validation',
+    code: error.code || null,
+    accountId: error.accountId || null,
+    message: isDevelopment ? error.message : userMessage,
+    adminDiagnostics: {
+      name: error.name || 'Error',
+      code: error.code || null,
+      message: error.message
+    }
+  })
 
   // 构建错误响应
   const errorResponse = {

@@ -14,13 +14,15 @@
           :subtitle="
             currentTab === 'stats'
               ? 'API Key 使用统计'
-              : currentTab === 'quota'
-                ? '额度卡'
-                : currentTab === 'models'
-                  ? '可用模型'
-                  : currentTab === 'route-rules'
-                    ? '路由规则'
-                    : '使用教程'
+              : currentTab === 'failures'
+                ? '失败明细'
+                : currentTab === 'quota'
+                  ? '额度卡'
+                  : currentTab === 'models'
+                    ? '可用模型'
+                    : currentTab === 'route-rules'
+                      ? '路由规则'
+                      : '使用教程'
           "
           :title="oemSettings.siteName"
         />
@@ -70,6 +72,13 @@
           >
             <i class="fas fa-chart-line mr-1 md:mr-2" />
             <span class="text-sm md:text-base">统计查询</span>
+          </button>
+          <button
+            :class="['tab-pill-button', currentTab === 'failures' ? 'active' : '']"
+            @click="currentTab = 'failures'"
+          >
+            <i class="fas fa-exclamation-circle mr-1 md:mr-2" />
+            <span class="text-sm md:text-base">失败明细</span>
           </button>
           <button
             :class="['tab-pill-button', currentTab === 'quota' ? 'active' : '']"
@@ -245,6 +254,31 @@
           <ApiKeyRequestDetails v-if="!multiKeyMode" :api-id="apiId" :api-key="apiKey" />
         </div>
       </div>
+    </div>
+
+    <div v-if="currentTab === 'failures'" class="tab-content">
+      <div
+        v-if="!apiId || !apiKey"
+        class="glass-strong rounded-2xl p-8 text-center shadow-xl sm:rounded-3xl"
+      >
+        <div class="mb-4 text-gray-500 dark:text-gray-400">
+          <i class="fas fa-key mb-4 block text-4xl opacity-50" />
+          <p>请先在“统计查询”页面输入 API Key</p>
+        </div>
+        <button
+          class="rounded-xl bg-gradient-to-r from-blue-500 to-cyan-500 px-6 py-2.5 font-medium text-white transition-all hover:from-blue-600 hover:to-cyan-600"
+          @click="currentTab = 'stats'"
+        >
+          前往输入 API Key
+        </button>
+      </div>
+      <RequestFailuresPanel
+        v-else
+        :api-id="apiId"
+        :api-key="apiKey"
+        mode="api-stats"
+        title="当前 API Key 的失败明细"
+      />
     </div>
 
     <!-- 教程内容 -->
@@ -595,6 +629,7 @@ import AggregatedStatsCard from '@/components/apistats/AggregatedStatsCard.vue'
 import ModelUsageStats from '@/components/apistats/ModelUsageStats.vue'
 import ServiceCostCards from '@/components/apistats/ServiceCostCards.vue'
 import ApiKeyRequestDetails from '@/components/apistats/ApiKeyRequestDetails.vue'
+import RequestFailuresPanel from '@/components/common/RequestFailuresPanel.vue'
 import AvailableModelsPanel from '@/components/apistats/AvailableModelsPanel.vue'
 import TutorialView from './TutorialView.vue'
 import RouteRulesView from './RouteRulesView.vue'

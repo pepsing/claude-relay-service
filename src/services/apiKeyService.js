@@ -380,10 +380,15 @@ class ApiKeyService {
       }
 
       this._captureApiKeySecret(apiKey, keyData, hashedKey, 'validation')
+      const failureIdentity = {
+        id: keyData.id,
+        name: keyData.name,
+        userId: keyData.userId || null
+      }
 
       // 检查是否激活
       if (keyData.isActive !== 'true') {
-        return { valid: false, error: 'API key is disabled' }
+        return { valid: false, error: 'API key is disabled', keyData: failureIdentity }
       }
 
       // 处理激活逻辑（仅在 activation 模式下）
@@ -421,7 +426,7 @@ class ApiKeyService {
 
       // 检查是否过期
       if (keyData.expiresAt && new Date() > new Date(keyData.expiresAt)) {
-        return { valid: false, error: 'API key has expired' }
+        return { valid: false, error: 'API key has expired', keyData: failureIdentity }
       }
 
       // 如果API Key属于某个用户，检查用户是否被禁用
@@ -430,11 +435,15 @@ class ApiKeyService {
           const userService = require('./userService')
           const user = await userService.getUserById(keyData.userId, false)
           if (!user || !user.isActive) {
-            return { valid: false, error: 'User account is disabled' }
+            return { valid: false, error: 'User account is disabled', keyData: failureIdentity }
           }
         } catch (error) {
           logger.error('❌ Error checking user status during API key validation:', error)
-          return { valid: false, error: 'Unable to validate user status' }
+          return {
+            valid: false,
+            error: 'Unable to validate user status',
+            keyData: failureIdentity
+          }
         }
       }
 
@@ -521,6 +530,7 @@ class ApiKeyService {
         keyData: {
           id: keyData.id,
           name: keyData.name,
+          userId: keyData.userId || null,
           description: keyData.description,
           createdAt: keyData.createdAt,
           expiresAt: keyData.expiresAt,
