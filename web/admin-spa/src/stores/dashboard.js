@@ -92,6 +92,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         ]
       : [
           { value: 'today', label: '今日', days: 1 },
+          { value: 'yesterday', label: '昨日', days: 1 },
           { value: '7days', label: '7天', days: 7 },
           { value: '30days', label: '30天', days: 30 }
         ]
@@ -132,7 +133,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   // 日期筛选
   const dateFilter = ref({
     type: 'preset', // preset 或 custom
-    preset: initialPreset, // today, 7days, 30days
+    preset: initialPreset, // today, yesterday, 7days, 30days
     customStart: '',
     customEnd: '',
     customRange: null,
@@ -244,13 +245,13 @@ export const useDashboardStore = defineStore('dashboard', () => {
     dashboardData.value.dashboardDayRangeLimit ||
     (dashboardData.value.usageReadMode === 'postgres' ? 365 : 31)
 
-  const hasCustomRange = () =>
-    dateFilter.value.type === 'custom' &&
+  const hasExplicitDateRange = () =>
     dateFilter.value.customRange &&
-    dateFilter.value.customRange.length === 2
+    dateFilter.value.customRange.length === 2 &&
+    (dateFilter.value.type === 'custom' || dateFilter.value.preset === 'yesterday')
 
-  const appendCustomRangeParams = (url) => {
-    if (!hasCustomRange()) {
+  const appendDateRangeParams = (url) => {
+    if (!hasExplicitDateRange()) {
       return url
     }
 
@@ -382,7 +383,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         }
       } else {
         url += `granularity=day&days=${days}`
-        url = appendCustomRangeParams(url)
+        url = appendDateRangeParams(url)
       }
 
       const response = await getUsageStatsApi(url)
@@ -418,9 +419,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
         )
         if (option) {
           let startDate, endDate
-          if (dateFilter.value.preset === 'today') {
-            startDate = getSystemTimezoneDay(now, true)
-            endDate = getSystemTimezoneDay(now, false)
+          if (['today', 'yesterday'].includes(dateFilter.value.preset)) {
+            const range = getPresetTimeRange(dateFilter.value.preset)
+            startDate = range.start
+            endDate = range.end
           } else {
             const daysAgo = new Date()
             daysAgo.setDate(daysAgo.getDate() - (option.days - 1))
@@ -463,16 +465,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
           url += `&endDate=${encodeURIComponent(now.toISOString())}`
         }
       } else {
-        days =
-          dateFilter.value.type === 'preset'
-            ? dateFilter.value.preset === 'today'
-              ? 1
-              : dateFilter.value.preset === '7days'
-                ? 7
-                : 30
-            : calculateDaysBetween(dateFilter.value.customStart, dateFilter.value.customEnd)
+        days = getDateFilterDays()
         url += `granularity=day&days=${days}`
-        url = appendCustomRangeParams(url)
+        url = appendDateRangeParams(url)
       }
 
       url += `&metric=${metric}`
@@ -513,16 +508,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
           url += `&endDate=${encodeURIComponent(now.toISOString())}`
         }
       } else {
-        days =
-          dateFilter.value.type === 'preset'
-            ? dateFilter.value.preset === 'today'
-              ? 1
-              : dateFilter.value.preset === '7days'
-                ? 7
-                : 30
-            : calculateDaysBetween(dateFilter.value.customStart, dateFilter.value.customEnd)
+        days = getDateFilterDays()
         url += `granularity=day&days=${days}`
-        url = appendCustomRangeParams(url)
+        url = appendDateRangeParams(url)
       }
 
       url += `&metric=${metric}`
@@ -563,16 +551,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
           url += `&endDate=${encodeURIComponent(now.toISOString())}`
         }
       } else {
-        days =
-          dateFilter.value.type === 'preset'
-            ? dateFilter.value.preset === 'today'
-              ? 1
-              : dateFilter.value.preset === '7days'
-                ? 7
-                : 30
-            : calculateDaysBetween(dateFilter.value.customStart, dateFilter.value.customEnd)
+        days = getDateFilterDays()
         url += `granularity=day&days=${days}`
-        url = appendCustomRangeParams(url)
+        url = appendDateRangeParams(url)
       }
 
       url += `&group=${group}`
@@ -610,9 +591,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
       endDate = range.end
     } else {
       // 日界线按系统时区（UTC+8）计算，不能用浏览器本地的 setHours
-      if (normalizedPreset === 'today') {
-        startDate = getSystemTimezoneDay(now, true)
-        endDate = getSystemTimezoneDay(now, false)
+      if (['today', 'yesterday'].includes(normalizedPreset)) {
+        const range = getPresetTimeRange(normalizedPreset)
+        startDate = range.start
+        endDate = range.end
       } else if (option?.days) {
         const daysAgo = new Date(now)
         daysAgo.setDate(daysAgo.getDate() - (option.days - 1))
@@ -771,7 +753,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
         // 天粒度
         days = option ? option.days : 7
         // 设置模型统计期间
-        if (dateFilter.value.preset === 'today') {
+        if (['today', 'yesterday'].includes(dateFilter.value.preset)) {
           modelPeriod = 'daily'
         } else {
           modelPeriod = 'monthly'
@@ -803,6 +785,17 @@ export const useDashboardStore = defineStore('dashboard', () => {
   function setAccountUsageGroup(group) {
     accountUsageGroup.value = group
     return loadAccountUsageTrend(group, getEffectiveGranularity())
+  }
+
+  function getDateFilterDays() {
+    if (dateFilter.value.type === 'preset') {
+      const option = dateFilter.value.presetOptions.find(
+        (item) => item.value === dateFilter.value.preset
+      )
+      return option?.days || 7
+    }
+
+    return calculateDaysBetween(dateFilter.value.customStart, dateFilter.value.customEnd)
   }
 
   function calculateDaysBetween(start, end) {
