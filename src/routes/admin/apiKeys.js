@@ -395,6 +395,7 @@ router.get('/api-keys', authenticateAdmin, async (req, res) => {
         secretInfo?.keyPreview || apiKey.maskedKey || `${config.security.apiKeyPrefix}****`
       apiKey.secretCapturedAt = secretInfo?.capturedAt || null
       apiKey.secretLastVerifiedAt = secretInfo?.lastVerifiedAt || null
+      delete apiKey.apiKey
     }
 
     // 返回分页数据
@@ -1768,6 +1769,7 @@ router.post('/api-keys', authenticateAdmin, async (req, res) => {
     })
 
     logger.success(`🔑 Admin created new API key: ${name}`)
+    res.set('Cache-Control', 'no-store')
     return res.json({ success: true, data: newKey })
   } catch (error) {
     logger.error('❌ Failed to create API key:', error)
@@ -1899,6 +1901,7 @@ router.post('/api-keys/batch', authenticateAdmin, async (req, res) => {
     }
 
     // 返回创建的keys（包含完整的apiKey）
+    res.set('Cache-Control', 'no-store')
     return res.json({
       success: true,
       data: createdKeys,
@@ -1929,6 +1932,7 @@ router.post('/api-keys/:keyId/reveal-secret', authenticateAdmin, async (req, res
       userAgent: req.get('user-agent') || ''
     })
 
+    res.set('Cache-Control', 'no-store')
     return res.json({
       success: true,
       data: {

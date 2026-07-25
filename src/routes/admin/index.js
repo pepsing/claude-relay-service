@@ -34,6 +34,7 @@ const requestDetailsRoutes = require('./requestDetails')
 const requestFailuresRoutes = require('./requestFailures')
 const routeRulesRoutes = require('./routeRules')
 const accountImportExportRoutes = require('./accountImportExport')
+const managementApiKeysRoutes = require('./managementApiKeys')
 
 // 挂载所有子路由
 // 使用完整路径的模块（直接挂载到根路径）
@@ -58,6 +59,7 @@ router.use('/', requestDetailsRoutes)
 router.use('/', requestFailuresRoutes)
 router.use('/', routeRulesRoutes)
 router.use('/', accountImportExportRoutes)
+router.use('/', managementApiKeysRoutes)
 
 // 使用相对路径的模块（需要指定基础路径前缀）
 router.use('/account-groups', accountGroupsRoutes)

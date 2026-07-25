@@ -423,6 +423,20 @@ export const getAdminServiceRatesApi = (config) =>
 export const updateAdminServiceRatesApi = (data, config) =>
   request({ url: '/admin/service-rates', method: 'PUT', data, ...config })
 
+// 系统管理 API Key
+export const getManagementApiKeyScopesApi = () =>
+  request({ url: '/admin/management-api-keys/scopes', method: 'GET' })
+export const getManagementApiKeysApi = () =>
+  request({ url: '/admin/management-api-keys', method: 'GET' })
+export const createManagementApiKeyApi = (data) =>
+  request({ url: '/admin/management-api-keys', method: 'POST', data })
+export const updateManagementApiKeyApi = (id, data) =>
+  request({ url: `/admin/management-api-keys/${id}`, method: 'PUT', data })
+export const rotateManagementApiKeyApi = (id) =>
+  request({ url: `/admin/management-api-keys/${id}/rotate`, method: 'POST' })
+export const deleteManagementApiKeyApi = (id) =>
+  request({ url: `/admin/management-api-keys/${id}`, method: 'DELETE' })
+
 // 系统
 export const checkUpdatesApi = () => request({ url: '/admin/check-updates', method: 'GET' })
 export const getClaudeCodeVersionApi = () =>

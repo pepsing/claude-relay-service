@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid')
 const config = require('../../config/config')
 const apiKeyService = require('../services/apiKeyService')
+const managementApiKeyService = require('../services/managementApiKeyService')
 const userService = require('../services/userService')
 const logger = require('../utils/logger')
 const redis = require('../models/redis')
@@ -79,6 +80,38 @@ function summarizeLargeRequestBody(body) {
   }
 
   return summary
+}
+
+const LOG_SENSITIVE_FIELD_PATTERN =
+  /^(authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|x[-_]?api[-_]?key|api[-_]?key|management[-_]?api[-_]?key|management[-_]?key|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|api[-_]?secret|password(?:[-_]?hash)?|secret|credential(?:s)?|private[-_]?key|encrypted[-_]?key|key[-_]?hash)$/i
+const LOG_SECRET_VALUE_PATTERN = /\b(crsm|cr)_([a-f0-9]{16})[a-f0-9]{16,}\b/gi
+
+function sanitizeLogPayload(value, seen = new WeakSet()) {
+  if (typeof value === 'string') {
+    return value.replace(
+      LOG_SECRET_VALUE_PATTERN,
+      (_match, prefix, visiblePart) => `${prefix}_${visiblePart.slice(0, 4)}***`
+    )
+  }
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return value
+  }
+  if (seen.has(value)) {
+    return '[Circular]'
+  }
+
+  seen.add(value)
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeLogPayload(item, seen))
+  }
+
+  const sanitized = {}
+  for (const [key, nestedValue] of Object.entries(value)) {
+    sanitized[key] = LOG_SENSITIVE_FIELD_PATTERN.test(key)
+      ? '[REDACTED]'
+      : sanitizeLogPayload(nestedValue, seen)
+  }
+  return sanitized
 }
 
 function normalizeResponseChunk(chunk, encoding) {
@@ -1789,7 +1822,7 @@ const authenticateApiKey = async (req, res, next) => {
 }
 
 // 🛡️ 管理员验证中间件（优化版）
-const authenticateAdmin = async (req, res, next) => {
+const authenticateAdminSession = async (req, res, next) => {
   const startTime = Date.now()
 
   try {
@@ -1817,12 +1850,18 @@ const authenticateAdmin = async (req, res, next) => {
     }
 
     // 获取管理员会话（带超时处理）
-    const adminSession = await Promise.race([
-      redis.getSession(token),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Session lookup timeout')), 5000)
-      )
-    ])
+    let sessionLookupTimeout
+    let adminSession
+    try {
+      adminSession = await Promise.race([
+        redis.getSession(token),
+        new Promise((_, reject) => {
+          sessionLookupTimeout = setTimeout(() => reject(new Error('Session lookup timeout')), 5000)
+        })
+      ])
+    } finally {
+      clearTimeout(sessionLookupTimeout)
+    }
 
     if (!adminSession || Object.keys(adminSession).length === 0) {
       logger.security(`Invalid admin token attempt from ${req.ip || 'unknown'}`)
@@ -1899,6 +1938,63 @@ const authenticateAdmin = async (req, res, next) => {
     return res.status(500).json({
       error: 'Authentication error',
       message: 'Internal server error during admin authentication'
+    })
+  }
+}
+
+const authenticateAdmin = async (req, res, next) => {
+  const authorizationToken = req.headers['authorization']?.replace(/^Bearer\s+/i, '')
+  const managementKey =
+    req.headers['x-management-api-key'] ||
+    (authorizationToken?.startsWith('crsm_') ? authorizationToken : null)
+
+  if (!managementKey) {
+    return authenticateAdminSession(req, res, next)
+  }
+
+  try {
+    const requiredScope = managementApiKeyService.resolveRequiredScope(
+      req.method,
+      req.originalUrl || req.url
+    )
+    const clientIP = req.ip || req.connection?.remoteAddress || 'unknown'
+    const validation = await managementApiKeyService.validateKey(managementKey, requiredScope, {
+      ip: clientIP
+    })
+
+    if (!validation.valid) {
+      logger.security(
+        `Management API key rejected from ${clientIP}: ${validation.error} (${req.method} ${req.originalUrl})`
+      )
+      return res.status(validation.status || 401).json({
+        error:
+          validation.status === 403 ? 'Management API access denied' : 'Invalid management key',
+        message: validation.error
+      })
+    }
+
+    req.admin = {
+      username: `management-key:${validation.keyData.name}`,
+      authType: 'management-api-key',
+      managementApiKeyId: validation.keyData.id,
+      scopes: validation.keyData.scopes
+    }
+    req.managementApiKey = validation.keyData
+    req._authInfo = `${req.admin.username} scope=${requiredScope}`
+
+    logger.security(
+      `Management API key authenticated: ${validation.keyData.id} scope=${requiredScope}`
+    )
+    return next()
+  } catch (error) {
+    logger.error('❌ Management API key authentication error:', {
+      error: error.message,
+      ip: req.ip,
+      url: req.originalUrl
+    })
+    return res.status(500).json({
+      error: 'Authentication error',
+      message: 'Internal server error during management API key authentication'
     })
   }
 }
@@ -2176,6 +2272,7 @@ const corsMiddleware = (req, res, next) => {
       'x-goog-api-key',
       'api-key',
       'x-admin-token',
+      'x-management-api-key',
       'anthropic-version',
       'anthropic-dangerous-direct-browser-access'
     ].join(', ')
@@ -2238,7 +2335,7 @@ const requestLogger = (req, res, next) => {
   if (req.originalUrl !== '/health') {
     logger.debug(`▶ [${requestId}] ${req.method} ${req.originalUrl}`, {
       ip: clientIP,
-      body: req.body && Object.keys(req.body).length > 0 ? req.body : undefined
+      body: req.body && Object.keys(req.body).length > 0 ? sanitizeLogPayload(req.body) : undefined
     })
   }
 
@@ -2301,7 +2398,7 @@ const requestLogger = (req, res, next) => {
 
     // 请求体（非 GET 且有内容时显示）
     if (req.method !== 'GET' && req.body && Object.keys(req.body).length > 0) {
-      meta.req = summarizeLargeRequestBody(req.body)
+      meta.req = sanitizeLogPayload(summarizeLargeRequestBody(req.body))
     }
 
     // 查询参数（GET 请求且有查询参数时单独显示）
@@ -2312,7 +2409,7 @@ const requestLogger = (req, res, next) => {
 
     // 响应体
     if (res._responseBody) {
-      meta.res = res._responseBody
+      meta.res = sanitizeLogPayload(res._responseBody)
     }
 
     // API Key 信息（合并到同一条日志）
@@ -2615,6 +2712,7 @@ const requestSizeLimit = (req, res, next) => {
 module.exports = {
   authenticateApiKey,
   authenticateAdmin,
+  authenticateAdminSession,
   authenticateUser,
   authenticateUserOrAdmin,
   requireRole,
@@ -2624,5 +2722,6 @@ module.exports = {
   securityMiddleware,
   errorHandler,
   globalRateLimit,
-  requestSizeLimit
+  requestSizeLimit,
+  sanitizeLogPayload
 }

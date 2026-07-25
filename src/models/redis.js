@@ -489,6 +489,90 @@ class RedisClient {
     return this.client
   }
 
+  // 🛡️ 系统管理 API Key 相关操作
+  async setManagementApiKey(keyId, keyData, hashedKey = null, previousHashedKey = null) {
+    const key = `management_api_key:${keyId}`
+    const client = this.getClientSafe()
+    const transaction = client.multi()
+
+    if (previousHashedKey && previousHashedKey !== hashedKey) {
+      transaction.hdel('management_api_key:hash_map', previousHashedKey)
+    }
+    if (hashedKey) {
+      transaction.hset('management_api_key:hash_map', hashedKey, keyId)
+    }
+
+    transaction.hset(key, keyData)
+    await transaction.exec()
+  }
+
+  async getManagementApiKey(keyId) {
+    return await this.getClientSafe().hgetall(`management_api_key:${keyId}`)
+  }
+
+  async getAllManagementApiKeys() {
+    const keys = await this.scanKeys('management_api_key:*')
+    const keyIds = keys
+      .filter((key) => key !== 'management_api_key:hash_map' && key.split(':').length === 2)
+      .map((key) => key.replace('management_api_key:', ''))
+
+    if (keyIds.length === 0) {
+      return []
+    }
+
+    const pipeline = this.getClientSafe().pipeline()
+    keyIds.forEach((keyId) => pipeline.hgetall(`management_api_key:${keyId}`))
+    const results = await pipeline.exec()
+
+    return results
+      .map(([error, data], index) => {
+        if (error || !data || Object.keys(data).length === 0) {
+          return null
+        }
+        return { id: keyIds[index], ...data }
+      })
+      .filter(Boolean)
+  }
+
+  async findManagementApiKeyByHash(hashedKey) {
+    const client = this.getClientSafe()
+    const keyId = await client.hget('management_api_key:hash_map', hashedKey)
+    if (!keyId) {
+      return null
+    }
+
+    const keyData = await client.hgetall(`management_api_key:${keyId}`)
+    if (keyData && Object.keys(keyData).length > 0) {
+      return { id: keyId, ...keyData }
+    }
+
+    await client.hdel('management_api_key:hash_map', hashedKey)
+    return null
+  }
+
+  async deleteManagementApiKey(keyId) {
+    const client = this.getClientSafe()
+    const key = `management_api_key:${keyId}`
+    const keyData = await client.hgetall(key)
+
+    if (keyData?.keyHash) {
+      const transaction = client.multi()
+      transaction.hdel('management_api_key:hash_map', keyData.keyHash)
+      transaction.del(key)
+      const results = await transaction.exec()
+      return results?.[1]?.[1] || 0
+    }
+
+    return await client.del(key)
+  }
+
+  async touchManagementApiKey(keyId, lastUsedAt, lastUsedIp = '') {
+    await this.getClientSafe().hset(`management_api_key:${keyId}`, {
+      lastUsedAt,
+      lastUsedIp
+    })
+  }
+
   // 🔑 API Key 相关操作
   async setApiKey(keyId, keyData, hashedKey = null) {
     const key = `apikey:${keyId}`
