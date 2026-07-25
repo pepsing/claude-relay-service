@@ -129,6 +129,48 @@ describe('admin API key list response security', () => {
     expect(res.body.data.items[0]).not.toHaveProperty('apiKey')
   })
 
+  test('accepts page sizes from 1 through 200', async () => {
+    redis.getApiKeysPaginated.mockResolvedValue({
+      items: [],
+      pagination: {
+        page: 1,
+        pageSize: 1,
+        total: 0,
+        totalPages: 1
+      },
+      availableTags: []
+    })
+    apiKeyService.getApiKeySecretInfoMap.mockResolvedValue(new Map())
+    const handler = findHandler('get', '/api-keys')
+    const res = createResponse()
+
+    await handler({ query: { page: '1', pageSize: '1' } }, res)
+
+    expect(res.statusCode).toBe(200)
+    expect(redis.getApiKeysPaginated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        page: 1,
+        pageSize: 1
+      })
+    )
+  })
+
+  test('rejects invalid page sizes without falling back to 200', async () => {
+    const handler = findHandler('get', '/api-keys')
+    const res = createResponse()
+    const callsBeforeRequest = redis.getApiKeysPaginated.mock.calls.length
+
+    await handler({ query: { pageSize: '201' } }, res)
+
+    expect(res.statusCode).toBe(400)
+    expect(res.body).toEqual({
+      success: false,
+      error: 'INVALID_PAGE_SIZE',
+      message: 'pageSize must be an integer between 1 and 200'
+    })
+    expect(redis.getApiKeysPaginated.mock.calls).toHaveLength(callsBeforeRequest)
+  })
+
   test('prevents caching when revealing a plaintext key', async () => {
     apiKeyService.revealApiKeySecret.mockResolvedValue({
       apiKey: `cr_${'a'.repeat(64)}`,

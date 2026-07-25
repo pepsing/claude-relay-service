@@ -16,6 +16,7 @@ the CRS MCP tool schemas unless the user explicitly requests MCP.
    command -v crsctl
    crsctl --version
    crsctl --compact config show
+   crsctl --compact capabilities
    ```
 
 2. If configured, verify access with:
@@ -41,9 +42,12 @@ The configuration defaults to `~/.config/crsctl/config.json`, is written with mo
 
 - Put the global `--compact` option before the subcommand when compact JSON is
   enough.
-- `api-keys list` defaults to 10 records. Increase `--page-size` only when needed.
-- Keep `accounts list --limit` at 20 or fewer unless the user asks for more.
+- `api-keys list` defaults to 10 records. Keep `--page-size` between 1 and 100.
+- `accounts list` is server-paginated and defaults to 20 records. Increase
+  `--page-size` only when needed.
 - Summarize results for the user instead of pasting large JSON responses.
+- The client prefers `/admin/management/v1` and automatically falls back to legacy
+  admin routes while an older Rocky deployment is being upgraded.
 
 ## Inspect CRS
 
@@ -54,7 +58,7 @@ crsctl --compact status
 crsctl --compact api-keys list
 crsctl --compact api-keys reveal KEY_ID
 crsctl --compact accounts types
-crsctl --compact accounts list claude --limit 20
+crsctl --compact accounts list claude --page 1 --page-size 20
 crsctl --compact accounts test claude ACCOUNT_ID
 crsctl --compact stats summary
 crsctl --compact stats api-key KEY_ID --days 7

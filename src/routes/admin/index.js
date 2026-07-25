@@ -35,8 +35,12 @@ const requestFailuresRoutes = require('./requestFailures')
 const routeRulesRoutes = require('./routeRules')
 const accountImportExportRoutes = require('./accountImportExport')
 const managementApiKeysRoutes = require('./managementApiKeys')
+const createManagementV1Router = require('./managementV1')
 
 // 挂载所有子路由
+// 面向 CLI/MCP 的版本化管理 API，保留以下后台页面路由以兼容现有前端
+router.use('/management/v1', createManagementV1Router())
+
 // 使用完整路径的模块（直接挂载到根路径）
 router.use('/', apiKeysRoutes)
 router.use('/', claudeAccountsRoutes)

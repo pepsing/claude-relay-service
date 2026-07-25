@@ -92,6 +92,40 @@ class ManagementApiKeyService {
       return null
     }
 
+    if (path === '/admin/management/v1/capabilities') {
+      return normalizedMethod === 'GET' ? ['api-keys:read', 'accounts:read', 'stats:read'] : null
+    }
+
+    if (
+      path === '/admin/management/v1/api-keys' ||
+      path.startsWith('/admin/management/v1/api-keys/')
+    ) {
+      if (path.endsWith('/reveal')) {
+        return normalizedMethod === 'POST' ? 'api-keys:reveal' : null
+      }
+      return normalizedMethod === 'GET' ? 'api-keys:read' : 'api-keys:write'
+    }
+
+    if (
+      path === '/admin/management/v1/accounts' ||
+      path.startsWith('/admin/management/v1/accounts/')
+    ) {
+      if (normalizedMethod === 'GET') {
+        return 'accounts:read'
+      }
+      if (path.endsWith('/test')) {
+        return normalizedMethod === 'POST' ? 'accounts:test' : null
+      }
+      if (path.endsWith('/refresh')) {
+        return normalizedMethod === 'POST' ? 'accounts:refresh' : null
+      }
+      return 'accounts:write'
+    }
+
+    if (path === '/admin/management/v1/stats' || path.startsWith('/admin/management/v1/stats/')) {
+      return normalizedMethod === 'GET' ? 'stats:read' : null
+    }
+
     if (STATS_PATH_PATTERNS.some((pattern) => pattern.test(path))) {
       return normalizedMethod === 'GET' ? 'stats:read' : null
     }
@@ -269,12 +303,14 @@ class ManagementApiKeyService {
     }
 
     const scopes = parseScopes(keyData.scopes)
-    if (!requiredScope || !scopes.includes(requiredScope)) {
+    const requiredScopes = Array.isArray(requiredScope) ? requiredScope : [requiredScope]
+    const hasRequiredScope = requiredScope && requiredScopes.some((scope) => scopes.includes(scope))
+    if (!hasRequiredScope) {
       return {
         valid: false,
         status: 403,
         error: requiredScope
-          ? `Management API key lacks required scope: ${requiredScope}`
+          ? `Management API key lacks required scope: ${requiredScopes.join(' or ')}`
           : 'Management API key is not permitted for this endpoint'
       }
     }

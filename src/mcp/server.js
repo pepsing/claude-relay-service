@@ -70,8 +70,26 @@ async function createServer(options = {}) {
 
   const server = new McpServer({
     name: 'crs-management',
-    version: '1.0.0'
+    version: '1.1.0'
   })
+
+  registerTool(
+    server,
+    'crs_get_capabilities',
+    {
+      title: 'Get CRS management API capabilities',
+      description:
+        'Get the management API version, pagination limits, current key scopes, and supported operations.',
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true
+      }
+    },
+    async () => await client.getCapabilities()
+  )
 
   registerTool(
     server,
@@ -82,13 +100,7 @@ async function createServer(options = {}) {
         'List relay API keys and their metadata. Secrets are masked; use crs_reveal_api_key for a specific plaintext key.',
       inputSchema: {
         page: z.number().int().positive().optional(),
-        pageSize: z
-          .number()
-          .int()
-          .refine((value) => [10, 20, 50, 100, 200].includes(value), {
-            message: 'pageSize must be one of 10, 20, 50, 100, or 200'
-          })
-          .optional(),
+        pageSize: z.number().int().min(1).max(100).optional(),
         search: z.string().optional(),
         isActive: z.boolean().optional(),
         sortBy: z
@@ -230,7 +242,16 @@ async function createServer(options = {}) {
       description:
         'List upstream accounts. Omit accountType to query every supported account type.',
       inputSchema: {
-        accountType: accountTypeSchema.optional()
+        accountType: accountTypeSchema.optional(),
+        page: z.number().int().positive().optional(),
+        pageSize: z.number().int().min(1).max(100).optional(),
+        search: z.string().optional(),
+        status: z.string().optional(),
+        isActive: z.boolean().optional(),
+        sortBy: z
+          .enum(['name', 'createdAt', 'updatedAt', 'lastUsedAt', 'priority', 'status'])
+          .optional(),
+        sortOrder: z.enum(['asc', 'desc']).optional()
       },
       annotations: {
         readOnlyHint: true,
@@ -239,7 +260,7 @@ async function createServer(options = {}) {
         openWorldHint: true
       }
     },
-    async ({ accountType }) => await client.listAccounts(accountType)
+    async ({ accountType, ...params }) => await client.listAccounts(accountType, params)
   )
 
   registerTool(

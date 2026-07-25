@@ -204,9 +204,15 @@ router.get('/api-keys', authenticateAdmin, async (req, res) => {
 
     // 验证分页参数
     const pageNum = Math.max(1, parseInt(page) || 1)
-    const pageSizeNum = [10, 20, 50, 100, 200].includes(parseInt(pageSize))
-      ? parseInt(pageSize)
-      : 200
+    const parsedPageSize = Number(pageSize)
+    if (!Number.isInteger(parsedPageSize) || parsedPageSize < 1 || parsedPageSize > 200) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_PAGE_SIZE',
+        message: 'pageSize must be an integer between 1 and 200'
+      })
+    }
+    const pageSizeNum = parsedPageSize
 
     // 验证排序参数（新增 cost 排序）
     const validSortFields = [

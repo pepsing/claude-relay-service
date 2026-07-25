@@ -1,5 +1,7 @@
 const axios = require('axios')
 
+const MANAGEMENT_API_BASE = '/admin/management/v1'
+
 const ACCOUNT_ROUTES = {
   claude: {
     basePath: '/admin/claude-accounts',
@@ -58,7 +60,13 @@ const ACCOUNT_STATS_TYPES = new Set([
 
 class CrsClient {
   constructor(options = {}) {
-    const { baseUrl, managementKey, timeoutMs = 30000, httpClient = null } = options
+    const {
+      baseUrl,
+      managementKey,
+      timeoutMs = 30000,
+      httpClient = null,
+      managementApiMode = 'auto'
+    } = options
     if (!baseUrl) {
       throw new Error('CRS base URL is required')
     }
@@ -73,6 +81,11 @@ class CrsClient {
 
     this.baseUrl = baseUrl.replace(/\/+$/, '')
     this.managementKey = managementKey
+    this.managementApiMode = ['auto', 'v1', 'legacy'].includes(managementApiMode)
+      ? managementApiMode
+      : 'auto'
+    this.resolvedManagementApiMode =
+      this.managementApiMode === 'auto' ? null : this.managementApiMode
     this.http =
       httpClient ||
       axios.create({
@@ -90,20 +103,52 @@ class CrsClient {
     return Object.keys(ACCOUNT_ROUTES)
   }
 
+  async getCapabilities() {
+    if (this.resolvedManagementApiMode === 'legacy') {
+      return this.getLegacyCapabilities()
+    }
+
+    try {
+      const response = await this.request('GET', `${MANAGEMENT_API_BASE}/capabilities`)
+      this.resolvedManagementApiMode = 'v1'
+      return response
+    } catch (error) {
+      if (error.status !== 404 || this.managementApiMode === 'v1') {
+        throw error
+      }
+      this.resolvedManagementApiMode = 'legacy'
+      return this.getLegacyCapabilities()
+    }
+  }
+
   async listApiKeys(params = {}) {
-    return await this.request('GET', '/admin/api-keys', { params })
+    const response = await this.requestManagement('GET', '/api-keys', '/admin/api-keys', {
+      params
+    })
+    return this.boundApiKeyResponse(response, params.pageSize)
   }
 
   async createApiKey(data) {
-    return await this.request('POST', '/admin/api-keys', { data })
+    return await this.requestManagement('POST', '/api-keys', '/admin/api-keys', { data })
   }
 
   async updateApiKey(keyId, data) {
-    return await this.request('PUT', `/admin/api-keys/${encodeURIComponent(keyId)}`, { data })
+    const encodedKeyId = encodeURIComponent(keyId)
+    return await this.requestManagement(
+      'PUT',
+      `/api-keys/${encodedKeyId}`,
+      `/admin/api-keys/${encodedKeyId}`,
+      { data }
+    )
   }
 
   async revealApiKey(keyId) {
-    return await this.request('POST', `/admin/api-keys/${encodeURIComponent(keyId)}/reveal-secret`)
+    const encodedKeyId = encodeURIComponent(keyId)
+    return await this.requestManagement(
+      'POST',
+      `/api-keys/${encodedKeyId}/reveal`,
+      `/admin/api-keys/${encodedKeyId}/reveal-secret`
+    )
   }
 
   async disableApiKey(keyId) {
@@ -111,19 +156,30 @@ class CrsClient {
   }
 
   async deleteApiKey(keyId) {
-    return await this.request('DELETE', `/admin/api-keys/${encodeURIComponent(keyId)}`)
+    const encodedKeyId = encodeURIComponent(keyId)
+    return await this.requestManagement(
+      'DELETE',
+      `/api-keys/${encodedKeyId}`,
+      `/admin/api-keys/${encodedKeyId}`
+    )
   }
 
-  async listAccounts(accountType = null) {
+  async listAccounts(accountType = null, params = {}) {
     if (accountType) {
       const route = this.getAccountRoute(accountType)
-      return await this.request('GET', route.basePath)
+      const response = await this.requestManagement(
+        'GET',
+        `/accounts/${encodeURIComponent(accountType)}`,
+        route.basePath,
+        { params }
+      )
+      return this.paginateLegacyAccountResponse(response, params)
     }
 
     const results = await Promise.all(
       this.getAccountTypes().map(async (type) => {
         try {
-          const response = await this.listAccounts(type)
+          const response = await this.listAccounts(type, params)
           return { type, response }
         } catch (error) {
           return {
@@ -134,22 +190,44 @@ class CrsClient {
         }
       })
     )
-    return { success: true, data: results }
+    return {
+      success: true,
+      apiVersion: this.resolvedManagementApiMode || 'auto',
+      data: results
+    }
   }
 
   async createAccount(accountType, data) {
     const route = this.getAccountRoute(accountType)
-    return await this.request('POST', route.basePath, { data })
+    return await this.requestManagement(
+      'POST',
+      `/accounts/${encodeURIComponent(accountType)}`,
+      route.basePath,
+      { data }
+    )
   }
 
   async updateAccount(accountType, accountId, data) {
     const route = this.getAccountRoute(accountType)
-    return await this.request('PUT', `${route.basePath}/${encodeURIComponent(accountId)}`, { data })
+    const encodedAccountType = encodeURIComponent(accountType)
+    const encodedAccountId = encodeURIComponent(accountId)
+    return await this.requestManagement(
+      'PUT',
+      `/accounts/${encodedAccountType}/${encodedAccountId}`,
+      `${route.basePath}/${encodedAccountId}`,
+      { data }
+    )
   }
 
   async deleteAccount(accountType, accountId) {
     const route = this.getAccountRoute(accountType)
-    return await this.request('DELETE', `${route.basePath}/${encodeURIComponent(accountId)}`)
+    const encodedAccountType = encodeURIComponent(accountType)
+    const encodedAccountId = encodeURIComponent(accountId)
+    return await this.requestManagement(
+      'DELETE',
+      `/accounts/${encodedAccountType}/${encodedAccountId}`,
+      `${route.basePath}/${encodedAccountId}`
+    )
   }
 
   async testAccount(accountType, accountId) {
@@ -157,8 +235,9 @@ class CrsClient {
     if (!route.testSuffix) {
       throw new Error(`Account type ${accountType} does not expose a test endpoint`)
     }
-    return await this.request(
+    return await this.requestManagement(
       'POST',
+      `/accounts/${encodeURIComponent(accountType)}/${encodeURIComponent(accountId)}/test`,
       `${route.basePath}/${encodeURIComponent(accountId)}/${route.testSuffix}`
     )
   }
@@ -168,20 +247,25 @@ class CrsClient {
     if (!route.refreshSuffix) {
       throw new Error(`Account type ${accountType} does not expose a refresh endpoint`)
     }
-    return await this.request(
+    return await this.requestManagement(
       'POST',
+      `/accounts/${encodeURIComponent(accountType)}/${encodeURIComponent(accountId)}/refresh`,
       `${route.basePath}/${encodeURIComponent(accountId)}/${route.refreshSuffix}`
     )
   }
 
   async getUsageSummary() {
-    return await this.request('GET', '/admin/dashboard')
+    return await this.requestManagement('GET', '/stats/summary', '/admin/dashboard')
   }
 
   async getApiKeyStats(keyId, params = {}) {
-    return await this.request('GET', `/admin/api-keys/${encodeURIComponent(keyId)}/model-stats`, {
-      params
-    })
+    const encodedKeyId = encodeURIComponent(keyId)
+    return await this.requestManagement(
+      'GET',
+      `/stats/api-keys/${encodedKeyId}`,
+      `/admin/api-keys/${encodedKeyId}/model-stats`,
+      { params }
+    )
   }
 
   async getAccountStats(accountType, accountId, days = 30) {
@@ -189,16 +273,128 @@ class CrsClient {
     if (!ACCOUNT_STATS_TYPES.has(accountType)) {
       throw new Error(`Account statistics are not available for account type ${accountType}`)
     }
-    return await this.request(
+    return await this.requestManagement(
       'GET',
+      `/stats/accounts/${encodeURIComponent(accountType)}/${encodeURIComponent(accountId)}`,
       `/admin/accounts/${encodeURIComponent(accountId)}/usage-history`,
       {
         params: {
-          platform: accountType,
-          days
+          days,
+          platform: accountType
         }
       }
     )
+  }
+
+  getLegacyCapabilities() {
+    return {
+      success: true,
+      apiVersion: 'legacy',
+      data: {
+        version: 'legacy',
+        pagination: {
+          defaultPageSize: 20,
+          maxPageSize: 200
+        },
+        accounts: this.getAccountTypes().map((type) => {
+          const route = ACCOUNT_ROUTES[type]
+          return {
+            type,
+            operations: [
+              'list',
+              'create',
+              'update',
+              'delete',
+              ...(route.testSuffix ? ['test'] : []),
+              ...(route.refreshSuffix ? ['refresh'] : []),
+              ...(ACCOUNT_STATS_TYPES.has(type) ? ['stats'] : [])
+            ]
+          }
+        })
+      }
+    }
+  }
+
+  boundApiKeyResponse(response, pageSize) {
+    const items = response?.data?.items
+    if (!Number.isInteger(pageSize) || !Array.isArray(items) || items.length <= pageSize) {
+      return response
+    }
+    return {
+      ...response,
+      data: {
+        ...response.data,
+        items: items.slice(0, pageSize),
+        pagination: {
+          ...response.data.pagination,
+          pageSize
+        }
+      }
+    }
+  }
+
+  paginateLegacyAccountResponse(response, params = {}) {
+    if (Array.isArray(response?.data?.items)) {
+      return response
+    }
+    if (!Array.isArray(response?.data)) {
+      return response
+    }
+
+    const page = Number.isInteger(params.page) && params.page > 0 ? params.page : 1
+    const pageSize = Number.isInteger(params.pageSize) && params.pageSize > 0 ? params.pageSize : 20
+    const total = response.data.length
+    const totalPages = Math.max(1, Math.ceil(total / pageSize))
+    const safePage = Math.min(page, totalPages)
+    const start = (safePage - 1) * pageSize
+
+    return {
+      ...response,
+      data: {
+        items: response.data.slice(start, start + pageSize),
+        pagination: {
+          page: safePage,
+          pageSize,
+          total,
+          totalPages,
+          hasNext: safePage < totalPages,
+          hasPrevious: safePage > 1
+        }
+      }
+    }
+  }
+
+  annotateLegacyResponse(response) {
+    if (!response || typeof response !== 'object' || Array.isArray(response)) {
+      return response
+    }
+    return {
+      ...response,
+      apiVersion: response.apiVersion || 'legacy'
+    }
+  }
+
+  async requestManagement(method, v1Path, legacyPath, options = {}) {
+    if (this.resolvedManagementApiMode === 'legacy') {
+      return this.annotateLegacyResponse(await this.request(method, legacyPath, options))
+    }
+
+    try {
+      const response = await this.request(method, `${MANAGEMENT_API_BASE}${v1Path}`, options)
+      this.resolvedManagementApiMode = 'v1'
+      return response
+    } catch (error) {
+      if (
+        error.status !== 404 ||
+        this.managementApiMode === 'v1' ||
+        !legacyPath ||
+        this.resolvedManagementApiMode === 'v1'
+      ) {
+        throw error
+      }
+      this.resolvedManagementApiMode = 'legacy'
+      return this.annotateLegacyResponse(await this.request(method, legacyPath, options))
+    }
   }
 
   getAccountRoute(accountType) {
@@ -225,6 +421,7 @@ class CrsClient {
       const responseData = error.response?.data
       const message =
         responseData?.message ||
+        responseData?.error?.message ||
         responseData?.error ||
         (status ? `CRS request failed with HTTP ${status}` : error.message)
       const clientError = new Error(String(message))
@@ -238,5 +435,6 @@ class CrsClient {
 module.exports = {
   CrsClient,
   ACCOUNT_ROUTES,
-  ACCOUNT_STATS_TYPES
+  ACCOUNT_STATS_TYPES,
+  MANAGEMENT_API_BASE
 }

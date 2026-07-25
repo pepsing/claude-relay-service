@@ -68,6 +68,12 @@ describe('ManagementApiKeyService', () => {
     ['DELETE', '/admin/bedrock-accounts/account-1', 'accounts:write'],
     ['GET', '/admin/dashboard?period=daily', 'stats:read'],
     ['GET', '/admin/api-keys/key-1/model-stats', 'stats:read'],
+    ['GET', '/admin/management/v1/api-keys?pageSize=1', 'api-keys:read'],
+    ['POST', '/admin/management/v1/api-keys/key-1/reveal', 'api-keys:reveal'],
+    ['GET', '/admin/management/v1/accounts/claude', 'accounts:read'],
+    ['POST', '/admin/management/v1/accounts/claude/account-1/test', 'accounts:test'],
+    ['POST', '/admin/management/v1/accounts/claude/account-1/refresh', 'accounts:refresh'],
+    ['GET', '/admin/management/v1/stats/summary', 'stats:read'],
     ['GET', '/admin/management-api-keys', null],
     ['GET', '/admin/users', null]
   ])('maps %s %s to scope %s', (method, path, expectedScope) => {
@@ -98,6 +104,26 @@ describe('ManagementApiKeyService', () => {
       expect.any(String),
       '127.0.0.1'
     )
+  })
+
+  test('allows capabilities access with any supported read scope', async () => {
+    const managementKey = `crsm_${'c'.repeat(64)}`
+    const keyHash = service.hashKey(managementKey)
+    redis.findManagementApiKeyByHash.mockResolvedValue({
+      id: 'key-3',
+      name: 'Accounts reader',
+      keyHash,
+      isActive: 'true',
+      scopes: JSON.stringify(['accounts:read']),
+      expiresAt: ''
+    })
+    redis.touchManagementApiKey.mockResolvedValue()
+
+    const requiredScopes = service.resolveRequiredScope('GET', '/admin/management/v1/capabilities')
+    const result = await service.validateKey(managementKey, requiredScopes)
+
+    expect(requiredScopes).toEqual(['api-keys:read', 'accounts:read', 'stats:read'])
+    expect(result.valid).toBe(true)
   })
 
   test('rejects valid keys that lack the endpoint scope', async () => {

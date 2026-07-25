@@ -14,9 +14,21 @@ describe('CRS MCP server', () => {
   test('lists tools and executes a tool through the MCP protocol', async () => {
     const crsClient = {
       getAccountTypes: jest.fn().mockReturnValue(['claude', 'openai']),
+      getCapabilities: jest.fn().mockResolvedValue({
+        success: true,
+        apiVersion: 'v1',
+        data: { version: 'v1' }
+      }),
       listApiKeys: jest.fn().mockResolvedValue({
         success: true,
         data: [{ id: 'key-1', name: 'Example' }]
+      }),
+      listAccounts: jest.fn().mockResolvedValue({
+        success: true,
+        data: {
+          items: [{ id: 'account-1', name: 'Example' }],
+          pagination: { page: 1, pageSize: 5, total: 1, totalPages: 1 }
+        }
       })
     }
     server = await createServer({ client: crsClient })
@@ -33,6 +45,7 @@ describe('CRS MCP server', () => {
     expect(tools.tools.map((tool) => tool.name)).toEqual(
       expect.arrayContaining([
         'crs_list_api_keys',
+        'crs_get_capabilities',
         'crs_create_api_key',
         'crs_reveal_api_key',
         'crs_list_accounts',
@@ -51,5 +64,22 @@ describe('CRS MCP server', () => {
       success: true,
       data: [{ id: 'key-1', name: 'Example' }]
     })
+
+    const accountResult = await protocolClient.callTool({
+      name: 'crs_list_accounts',
+      arguments: {
+        accountType: 'claude',
+        page: 1,
+        pageSize: 5,
+        status: 'active'
+      }
+    })
+
+    expect(crsClient.listAccounts).toHaveBeenCalledWith('claude', {
+      page: 1,
+      pageSize: 5,
+      status: 'active'
+    })
+    expect(accountResult.isError).not.toBe(true)
   })
 })

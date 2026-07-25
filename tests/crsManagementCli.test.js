@@ -3,6 +3,7 @@ const os = require('os')
 const path = require('path')
 const {
   maskManagementKey,
+  parsePageSize,
   resolveConnectionConfig,
   run,
   saveConnectionConfig
@@ -22,6 +23,14 @@ function memoryStream() {
 
 function createClient() {
   return {
+    getCapabilities: jest.fn().mockResolvedValue({
+      success: true,
+      apiVersion: 'v1',
+      data: {
+        version: 'v1',
+        accounts: [{ type: 'claude' }, { type: 'openai-responses' }]
+      }
+    }),
     getUsageSummary: jest.fn().mockResolvedValue({ success: true, data: { requests: 3 } }),
     listApiKeys: jest.fn().mockResolvedValue({ success: true, data: { items: [] } }),
     createApiKey: jest.fn().mockResolvedValue({
@@ -32,9 +41,21 @@ function createClient() {
     revealApiKey: jest.fn().mockResolvedValue({ success: true }),
     disableApiKey: jest.fn().mockResolvedValue({ success: true }),
     deleteApiKey: jest.fn().mockResolvedValue({ success: true }),
-    listAccounts: jest.fn().mockResolvedValue({
-      success: true,
-      data: Array.from({ length: 25 }, (_, index) => ({ id: `account-${index}` }))
+    listAccounts: jest.fn().mockImplementation(async (_type, options = {}) => {
+      const pageSize = options.pageSize || 20
+      return {
+        success: true,
+        apiVersion: 'v1',
+        data: {
+          items: Array.from({ length: pageSize }, (_, index) => ({ id: `account-${index}` })),
+          pagination: {
+            page: options.page || 1,
+            pageSize,
+            total: 25,
+            totalPages: Math.ceil(25 / pageSize)
+          }
+        }
+      }
     }),
     createAccount: jest.fn().mockResolvedValue({ success: true }),
     updateAccount: jest.fn().mockResolvedValue({ success: true }),
@@ -148,17 +169,36 @@ describe('CRS management CLI', () => {
     })
   })
 
-  test('limits account list responses locally', async () => {
+  test('passes account pagination to the management API', async () => {
     const execution = await runCommand(['accounts', 'list', 'claude', '--limit', '3'])
     const response = JSON.parse(execution.stdout)
 
-    expect(execution.client.listAccounts).toHaveBeenCalledWith('claude')
-    expect(response.data).toHaveLength(3)
-    expect(response.cli).toEqual({
-      truncated: true,
-      returned: 3,
-      total: 25
+    expect(execution.client.listAccounts).toHaveBeenCalledWith('claude', {
+      page: 1,
+      pageSize: 3,
+      search: undefined,
+      status: undefined,
+      isActive: undefined,
+      sortBy: undefined,
+      sortOrder: 'asc'
     })
+    expect(response.data.items).toHaveLength(3)
+    expect(response.data.pagination.pageSize).toBe(3)
+  })
+
+  test('lists account types from server capabilities', async () => {
+    const execution = await runCommand(['accounts', 'types'])
+
+    expect(execution.client.getCapabilities).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(execution.stdout)).toEqual({
+      success: true,
+      apiVersion: 'v1',
+      data: ['claude', 'openai-responses']
+    })
+  })
+
+  test('rejects page sizes above the management API maximum', () => {
+    expect(() => parsePageSize('101')).toThrow('page-size must be between 1 and 100')
   })
 
   test('reads sensitive account data from a file without echoing it', async () => {

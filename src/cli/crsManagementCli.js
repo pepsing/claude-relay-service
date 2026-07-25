@@ -6,6 +6,7 @@ const inquirer = require('inquirer')
 const { ACCOUNT_ROUTES, CrsClient } = require('../mcp/crsClient')
 
 const DEFAULT_TIMEOUT_MS = 30000
+const CLI_VERSION = '1.1.0'
 const MANAGEMENT_KEY_PATTERN = /^crsm_[a-f0-9]{64}$/
 
 function defaultConfigPath() {
@@ -20,6 +21,14 @@ function parsePositiveInteger(value, label = 'value') {
   const parsed = Number(value)
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${label} must be a positive integer`)
+  }
+  return parsed
+}
+
+function parsePageSize(value) {
+  const parsed = parsePositiveInteger(value, 'page-size')
+  if (parsed > 100) {
+    throw new Error('page-size must be between 1 and 100')
   }
   return parsed
 }
@@ -225,7 +234,7 @@ function createProgram(dependencies = {}) {
   const program = new Command()
     .name('crsctl')
     .description('Agent-friendly CLI for managing a remote CRS instance')
-    .version('1.0.0')
+    .version(CLI_VERSION)
     .option('--config <path>', 'configuration file path')
     .option('--compact', 'emit compact single-line JSON')
     .option('--timeout <ms>', 'request timeout in milliseconds', (value) =>
@@ -315,6 +324,13 @@ function createProgram(dependencies = {}) {
     })
 
   program
+    .command('capabilities')
+    .description('show management API version, limits, scopes, and supported operations')
+    .action(async (_options, command) => {
+      await execute(command, async (client) => await client.getCapabilities())
+    })
+
+  program
     .command('status')
     .description('get the CRS dashboard and service summary')
     .action(async (_options, command) => {
@@ -327,12 +343,7 @@ function createProgram(dependencies = {}) {
     .command('list')
     .description('list relay API keys (defaults to 10 results)')
     .option('--page <number>', 'page number', (value) => parsePositiveInteger(value, 'page'), 1)
-    .option(
-      '--page-size <number>',
-      'page size: 10, 20, 50, 100, or 200',
-      (value) => parsePositiveInteger(value, 'page-size'),
-      10
-    )
+    .option('--page-size <number>', 'page size between 1 and 100', parsePageSize, 10)
     .option('--search <text>', 'search term')
     .option('--active <boolean>', 'filter by active state', parseBoolean)
     .option('--sort-by <field>', 'sort field', 'createdAt')
@@ -422,22 +433,45 @@ function createProgram(dependencies = {}) {
   accounts
     .command('types')
     .description('list supported account type identifiers')
-    .action((_options, command) => {
-      output(command, { success: true, data: Object.keys(ACCOUNT_ROUTES) })
+    .action(async (_options, command) => {
+      await execute(command, async (client) => {
+        const capabilities = await client.getCapabilities()
+        const accountTypes = capabilities?.data?.accounts?.map((account) => account.type)
+        return {
+          success: true,
+          apiVersion: capabilities?.apiVersion || capabilities?.data?.version || 'unknown',
+          data: Array.isArray(accountTypes) ? accountTypes : Object.keys(ACCOUNT_ROUTES)
+        }
+      })
     })
 
   accounts
     .command('list <type>')
     .description('list accounts for one account type')
-    .option(
-      '--limit <number>',
-      'maximum returned accounts',
-      (value) => parsePositiveInteger(value, 'limit'),
-      20
+    .option('--page <number>', 'page number', (value) => parsePositiveInteger(value, 'page'), 1)
+    .option('--page-size <number>', 'page size between 1 and 100', parsePageSize, 20)
+    .option('--limit <number>', 'deprecated alias for --page-size', (value) =>
+      parsePositiveInteger(value, 'limit')
     )
+    .option('--search <text>', 'search account ID or name')
+    .option('--status <status>', 'filter by exact account status')
+    .option('--active <boolean>', 'filter by active state', parseBoolean)
+    .option('--sort-by <field>', 'name, createdAt, updatedAt, lastUsedAt, priority, or status')
+    .option('--sort-order <order>', 'asc or desc', 'asc')
     .action(async (type, options, command) => {
-      await execute(command, async (client) =>
-        limitKnownCollection(await client.listAccounts(type), options.limit)
+      const pageSize = options.limit ? parsePageSize(options.limit) : options.pageSize
+      await execute(
+        command,
+        async (client) =>
+          await client.listAccounts(type, {
+            page: options.page,
+            pageSize,
+            search: options.search,
+            status: options.status,
+            isActive: options.active,
+            sortBy: options.sortBy,
+            sortOrder: options.sortOrder
+          })
       )
     })
 
@@ -561,6 +595,7 @@ module.exports = {
   maskManagementKey,
   parseBoolean,
   parseCsv,
+  parsePageSize,
   parsePositiveInteger,
   readJsonPayload,
   readStoredConfig,
