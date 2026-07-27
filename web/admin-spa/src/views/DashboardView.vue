@@ -462,7 +462,7 @@
     <div class="mb-8">
       <div class="mb-4 flex flex-col gap-4 sm:mb-6">
         <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 sm:text-xl">
-          模型使用分布与Token使用趋势
+          模型与账号使用分布及Token使用趋势
         </h3>
         <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-end">
           <!-- 快捷日期选择 -->
@@ -572,24 +572,87 @@
         </div>
       </div>
 
+      <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div
+          class="inline-flex w-fit gap-1 rounded-lg bg-gray-100 p-1 dark:bg-gray-700"
+          role="tablist"
+        >
+          <button
+            :aria-selected="distributionView === 'model'"
+            :class="[
+              'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+              distributionView === 'model'
+                ? 'bg-white text-blue-600 shadow-sm dark:bg-gray-800'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100'
+            ]"
+            role="tab"
+            @click="distributionView = 'model'"
+          >
+            <i class="fas fa-robot mr-1" />模型分布
+          </button>
+          <button
+            :aria-selected="distributionView === 'account'"
+            :class="[
+              'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+              distributionView === 'account'
+                ? 'bg-white text-blue-600 shadow-sm dark:bg-gray-800'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100'
+            ]"
+            role="tab"
+            @click="distributionView = 'account'"
+          >
+            <i class="fas fa-user-circle mr-1" />账号分布
+          </button>
+        </div>
+
+        <div
+          v-if="distributionView === 'account'"
+          class="flex w-fit gap-1 overflow-x-auto rounded-lg bg-gray-100 p-1 dark:bg-gray-700"
+        >
+          <button
+            v-for="option in accountGroupOptions"
+            :key="option.value"
+            :class="[
+              'whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium transition-colors sm:px-3 sm:text-sm',
+              accountUsageGroup === option.value
+                ? 'bg-white text-blue-600 shadow-sm dark:bg-gray-800'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100'
+            ]"
+            :disabled="accountTrendUpdating"
+            @click="handleAccountUsageGroupChange(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </div>
+
       <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <!-- 饼图 -->
         <div class="card p-4 sm:p-6">
           <h4 class="mb-4 text-base font-semibold text-gray-800 dark:text-gray-200 sm:text-lg">
-            Token使用分布
+            {{ distributionView === 'model' ? '模型Token使用分布' : '账号Token使用分布' }}
           </h4>
-          <div class="relative" style="height: 250px">
-            <canvas ref="modelUsageChart" />
+          <div
+            v-if="activeDistributionStats.length === 0"
+            class="flex h-[250px] items-center justify-center text-sm text-gray-500 dark:text-gray-400"
+          >
+            {{ distributionView === 'model' ? '暂无模型使用数据' : '暂无账号使用数据' }}
+          </div>
+          <div v-else class="relative" style="height: 250px">
+            <canvas v-if="distributionView === 'model'" ref="modelUsageChart" />
+            <canvas v-else ref="accountDistributionChart" />
           </div>
         </div>
 
         <!-- 详细数据表格 -->
         <div class="card p-4 sm:p-6">
           <h4 class="mb-4 text-base font-semibold text-gray-800 dark:text-gray-200 sm:text-lg">
-            详细统计数据
+            {{ distributionView === 'model' ? '模型详细统计' : '账号详细统计' }}
           </h4>
-          <div v-if="dashboardModelStats.length === 0" class="py-8 text-center">
-            <p class="text-sm text-gray-500 sm:text-base">暂无模型使用数据</p>
+          <div v-if="activeDistributionStats.length === 0" class="py-8 text-center">
+            <p class="text-sm text-gray-500 sm:text-base">
+              {{ distributionView === 'model' ? '暂无模型使用数据' : '暂无账号使用数据' }}
+            </p>
           </div>
           <div v-else class="max-h-[250px] overflow-auto sm:max-h-[300px]">
             <table class="min-w-full">
@@ -598,7 +661,7 @@
                   <th
                     class="px-2 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 sm:px-4"
                   >
-                    模型
+                    {{ distributionView === 'model' ? '模型' : '账号' }}
                   </th>
                   <th
                     class="hidden px-2 py-2 text-right text-xs font-medium text-gray-700 dark:text-gray-300 sm:table-cell sm:px-4"
@@ -624,13 +687,19 @@
               </thead>
               <tbody class="divide-y divide-gray-200 dark:divide-gray-600">
                 <tr
-                  v-for="stat in dashboardModelStats"
-                  :key="stat.model"
+                  v-for="stat in activeDistributionStats"
+                  :key="stat.id"
                   class="hover:bg-gray-50 dark:hover:bg-gray-700"
                 >
                   <td class="px-2 py-2 text-xs text-gray-900 dark:text-gray-100 sm:px-4 sm:text-sm">
-                    <span class="block max-w-[100px] truncate sm:max-w-none" :title="stat.model">
-                      {{ stat.model }}
+                    <span class="block max-w-[100px] truncate sm:max-w-none" :title="stat.name">
+                      {{ stat.name }}
+                    </span>
+                    <span
+                      v-if="stat.platform"
+                      class="mt-0.5 block text-[11px] text-gray-500 dark:text-gray-400"
+                    >
+                      {{ getBalancePlatformLabel(stat.platform) }}
                     </span>
                   </td>
                   <td
@@ -646,7 +715,7 @@
                   <td
                     class="px-2 py-2 text-right text-xs font-medium text-green-600 sm:px-4 sm:text-sm"
                   >
-                    {{ stat.formatted ? stat.formatted.total : '$0.000000' }}
+                    {{ stat.formattedCost }}
                   </td>
                   <td
                     class="hidden px-2 py-2 text-right text-xs font-medium sm:table-cell sm:px-4 sm:text-sm"
@@ -654,7 +723,7 @@
                     <span
                       class="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
                     >
-                      {{ calculatePercentage(stat.allTokens, dashboardModelStats) }}%
+                      {{ calculatePercentage(stat.allTokens, activeDistributionStats) }}%
                     </span>
                   </td>
                 </tr>
@@ -892,12 +961,15 @@ const modelUsageTrendChart = ref(null)
 const usageTrendChart = ref(null)
 const apiKeysUsageTrendChart = ref(null)
 const accountUsageTrendChart = ref(null)
+const accountDistributionChart = ref(null)
 let modelUsageChartInstance = null
 let modelUsageTrendChartInstance = null
 let usageTrendChartInstance = null
 let apiKeysUsageTrendChartInstance = null
 let accountUsageTrendChartInstance = null
+let accountDistributionChartInstance = null
 
+const distributionView = ref('model')
 const accountGroupOptions = [
   { value: 'claude', label: 'Claude' },
   { value: 'openai', label: 'OpenAI' },
@@ -1016,6 +1088,19 @@ const chartColors = computed(() => ({
   legend: isDarkMode.value ? '#e5e7eb' : '#374151'
 }))
 
+const distributionChartColors = [
+  '#3B82F6',
+  '#10B981',
+  '#F59E0B',
+  '#EF4444',
+  '#8B5CF6',
+  '#EC4899',
+  '#14B8A6',
+  '#F97316',
+  '#6366F1',
+  '#84CC16'
+]
+
 function formatCostValue(cost) {
   if (!Number.isFinite(cost)) {
     return '$0.000000'
@@ -1028,6 +1113,54 @@ function formatCostValue(cost) {
   }
   return `$${cost.toFixed(6)}`
 }
+
+const accountDistributionStats = computed(() => {
+  const accountStats = new Map()
+  const trendData = accountUsageTrendData.value?.data || []
+
+  trendData.forEach((point) => {
+    Object.entries(point.accounts || {}).forEach(([accountId, account]) => {
+      const current = accountStats.get(accountId) || {
+        id: accountId,
+        name: account.name || `账号 ${accountId.slice(0, 8)}`,
+        platform: account.platform || '',
+        requests: 0,
+        allTokens: 0,
+        cost: 0
+      }
+
+      current.name = account.name || current.name
+      current.platform = account.platform || current.platform
+      current.requests += Number(account.requests) || 0
+      current.allTokens += Number(account.allTokens) || 0
+      current.cost += Number(account.cost) || 0
+      accountStats.set(accountId, current)
+    })
+  })
+
+  return Array.from(accountStats.values())
+    .filter((stat) => stat.requests > 0 || stat.allTokens > 0 || stat.cost > 0)
+    .sort((a, b) => b.cost - a.cost || b.allTokens - a.allTokens)
+    .map((stat) => ({
+      ...stat,
+      formattedCost: formatCostValue(stat.cost)
+    }))
+})
+
+const activeDistributionStats = computed(() => {
+  if (distributionView.value === 'account') {
+    return accountDistributionStats.value
+  }
+
+  return (dashboardModelStats.value || []).map((stat) => ({
+    id: stat.model,
+    name: stat.model,
+    platform: '',
+    requests: Number(stat.requests) || 0,
+    allTokens: Number(stat.allTokens) || 0,
+    formattedCost: stat.formatted?.total || '$0.000000'
+  }))
+})
 
 // 计算百分比
 function calculatePercentage(value, stats) {
@@ -1051,18 +1184,9 @@ function createModelUsageChart() {
     datasets: [
       {
         data: data.map((d) => d.allTokens),
-        backgroundColor: [
-          '#3B82F6',
-          '#10B981',
-          '#F59E0B',
-          '#EF4444',
-          '#8B5CF6',
-          '#EC4899',
-          '#14B8A6',
-          '#F97316',
-          '#6366F1',
-          '#84CC16'
-        ],
+        backgroundColor: data.map(
+          (_, index) => distributionChartColors[index % distributionChartColors.length]
+        ),
         borderWidth: 0
       }
     ]
@@ -1093,6 +1217,62 @@ function createModelUsageChart() {
               const value = formatNumber(context.parsed)
               const percentage = calculatePercentage(context.parsed, data)
               return `${label}: ${value} (${percentage}%)`
+            }
+          }
+        }
+      }
+    }
+  })
+}
+
+// 创建账号使用饼图
+function createAccountDistributionChart() {
+  if (!accountDistributionChart.value) return
+
+  if (accountDistributionChartInstance) {
+    accountDistributionChartInstance.destroy()
+  }
+
+  const data = accountDistributionStats.value
+  accountDistributionChartInstance = new Chart(accountDistributionChart.value, {
+    type: 'doughnut',
+    data: {
+      labels: data.map((stat) => stat.name),
+      datasets: [
+        {
+          data: data.map((stat) => stat.allTokens),
+          backgroundColor: data.map(
+            (_, index) => distributionChartColors[index % distributionChartColors.length]
+          ),
+          borderWidth: 0
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: {
+            padding: 15,
+            usePointStyle: true,
+            font: {
+              size: 12
+            },
+            color: chartColors.value.legend
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: function (context) {
+              const stat = data[context.dataIndex]
+              const percentage = calculatePercentage(stat.allTokens, data)
+              return [
+                `${stat.name}: ${formatNumber(stat.allTokens)} (${percentage}%)`,
+                `请求: ${formatNumber(stat.requests)}`,
+                `费用: ${stat.formattedCost}`
+              ]
             }
           }
         }
@@ -1988,6 +2168,7 @@ async function handleAccountUsageGroupChange(group) {
   try {
     await setAccountUsageGroup(group)
     await nextTick()
+    createAccountDistributionChart()
     createAccountUsageTrendChart()
   } finally {
     accountTrendUpdating.value = false
@@ -2012,7 +2193,20 @@ watch(apiKeysTrendData, () => {
 })
 
 watch(accountUsageTrendData, () => {
-  nextTick(() => createAccountUsageTrendChart())
+  nextTick(() => {
+    createAccountDistributionChart()
+    createAccountUsageTrendChart()
+  })
+})
+
+watch(distributionView, (view) => {
+  nextTick(() => {
+    if (view === 'account') {
+      createAccountDistributionChart()
+    } else {
+      createModelUsageChart()
+    }
+  })
 })
 
 // 刷新所有数据
@@ -2096,6 +2290,7 @@ watch(autoRefreshEnabled, (newVal) => {
 watch(isDarkMode, () => {
   nextTick(() => {
     createModelUsageChart()
+    createAccountDistributionChart()
     createModelUsageTrendChart()
     createUsageTrendChart()
     createApiKeysUsageTrendChart()
@@ -2109,6 +2304,7 @@ watch(
   () => {
     nextTick(() => {
       createModelUsageChart()
+      createAccountDistributionChart()
       createModelUsageTrendChart()
       createUsageTrendChart()
       createApiKeysUsageTrendChart()
@@ -2125,6 +2321,7 @@ onMounted(async () => {
   // 创建图表
   await nextTick()
   createModelUsageChart()
+  createAccountDistributionChart()
   createModelUsageTrendChart()
   createUsageTrendChart()
   createApiKeysUsageTrendChart()
@@ -2149,6 +2346,9 @@ onUnmounted(() => {
   }
   if (accountUsageTrendChartInstance) {
     accountUsageTrendChartInstance.destroy()
+  }
+  if (accountDistributionChartInstance) {
+    accountDistributionChartInstance.destroy()
   }
 })
 </script>

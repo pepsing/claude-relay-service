@@ -1683,6 +1683,7 @@ async function getAccountUsageTrend({
   endDate = null
 } = {}) {
   const accountIds = accounts.map((account) => account.id).filter(Boolean)
+  const accountTypes = [...new Set(accounts.map((account) => account.platform).filter(Boolean))]
   const accountMap = new Map(accounts.map((account) => [account.id, account]))
   const { periodType, periodInfos } = buildPeriodInfos({ days, granularity, startDate, endDate })
   const trendData = periodInfos.map((info) =>
@@ -1691,7 +1692,7 @@ async function getAccountUsageTrend({
       : { date: info.date, accounts: {} }
   )
 
-  if (accountIds.length === 0 || periodInfos.length === 0) {
+  if ((accountIds.length === 0 && accountTypes.length === 0) || periodInfos.length === 0) {
     return { data: trendData, topAccounts: [], totalAccounts: accountIds.length }
   }
 
@@ -1707,43 +1708,51 @@ async function getAccountUsageTrend({
       SELECT
         ${bucketExpression} AS period_start,
         account_id,
+        account_type,
         SUM(request_count) AS request_count,
+        SUM(total_tokens) AS total_tokens,
         SUM(cost) AS cost
       FROM (
         SELECT
           timestamp,
           account_id,
+          account_type,
           1 AS request_count,
+          total_tokens,
           cost
         FROM usage_events
         WHERE timestamp >= $2
           AND timestamp < $3
-          AND account_id = ANY($4)
+          AND (account_id = ANY($4) OR account_type = ANY($5))
       ) AS usage_rows
-      GROUP BY period_start, account_id
+      GROUP BY period_start, account_id, account_type
     `,
-    [Math.trunc(getOffsetMs() / 1000), start, endExclusive, accountIds]
+    [Math.trunc(getOffsetMs() / 1000), start, endExclusive, accountIds, accountTypes]
   )
 
   const pointByPeriod = new Map(
     periodInfos.map((info, index) => [info.periodStart.toISOString(), trendData[index]])
   )
   const accountCostTotals = new Map()
+  const usedAccountIds = new Set()
   for (const row of result.rows) {
     const accountId = row.account_id
     const point = pointByPeriod.get(new Date(row.period_start).toISOString())
-    if (!point || !accountMap.has(accountId)) {
+    if (!point) {
       continue
     }
 
     const cost = normalizeNumber(row.cost)
-    const accountInfo = accountMap.get(accountId)
+    const accountInfo = accountMap.get(accountId) || {}
     point.accounts[accountId] = {
       name: accountInfo.name || `账号 ${accountId.slice(0, 8)}`,
+      platform: accountInfo.platform || row.account_type || '',
       cost,
       formattedCost: formatCost(cost),
-      requests: normalizeInteger(row.request_count)
+      requests: normalizeInteger(row.request_count),
+      allTokens: normalizeInteger(row.total_tokens)
     }
+    usedAccountIds.add(accountId)
     accountCostTotals.set(accountId, (accountCostTotals.get(accountId) || 0) + cost)
   }
 
@@ -1755,7 +1764,7 @@ async function getAccountUsageTrend({
   return {
     data: trendData,
     topAccounts,
-    totalAccounts: accountIds.length
+    totalAccounts: new Set([...accountIds, ...usedAccountIds]).size
   }
 }
 

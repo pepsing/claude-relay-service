@@ -1878,9 +1878,11 @@ router.get('/account-usage-trend', authenticateAdmin, async (req, res) => {
 
           hourData.accounts[accountId] = {
             name: accountInfo ? accountInfo.name : `账号 ${accountId.slice(0, 8)}`,
+            platform: accountInfo ? accountInfo.platform : '',
             cost,
             formattedCost,
-            requests
+            requests,
+            allTokens
           }
 
           accountCostTotals.set(accountId, (accountCostTotals.get(accountId) || 0) + cost)
@@ -2045,9 +2047,11 @@ router.get('/account-usage-trend', authenticateAdmin, async (req, res) => {
 
           dayData.accounts[accountId] = {
             name: accountInfo ? accountInfo.name : `账号 ${accountId.slice(0, 8)}`,
+            platform: accountInfo ? accountInfo.platform : '',
             cost,
             formattedCost,
-            requests
+            requests,
+            allTokens
           }
 
           accountCostTotals.set(accountId, (accountCostTotals.get(accountId) || 0) + cost)
