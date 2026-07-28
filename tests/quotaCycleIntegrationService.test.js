@@ -38,6 +38,7 @@ function createDependencies() {
     },
     langfuseService: {
       isEnabled: jest.fn().mockReturnValue(true),
+      isQuotaCycleEnabled: jest.fn().mockReturnValue(true),
       captureQuotaCycleSummary: jest.fn()
     }
   }
@@ -330,7 +331,7 @@ describe('QuotaCycleIntegrationService', () => {
 
   test('keeps finalized summaries pending while Langfuse is disabled', async () => {
     const dependencies = createDependencies()
-    dependencies.langfuseService.isEnabled.mockReturnValue(false)
+    dependencies.langfuseService.isQuotaCycleEnabled.mockReturnValue(false)
     const service = new QuotaCycleIntegrationService(dependencies)
 
     const result = await service.processPendingCycles({
@@ -376,7 +377,7 @@ describe('QuotaCycleIntegrationService', () => {
 
   test('finalizes as partial after the account discovery retry window expires', async () => {
     const dependencies = createDependencies()
-    dependencies.langfuseService.isEnabled.mockReturnValue(false)
+    dependencies.langfuseService.isQuotaCycleEnabled.mockReturnValue(false)
     dependencies.cycleService.listCycles.mockResolvedValue({
       items: [
         {

@@ -47,6 +47,8 @@
     "backfill:request-detail-pg": "node scripts/backfill-request-details-to-postgres.js",
     "init:usage-pg": "node scripts/init-usage-postgres.js",
     "backfill:usage-pg": "node scripts/backfill-usage-to-postgres.js",
+    "backfill:usage-dimensional": "node scripts/backfill-dimensional-usage.js",
+    "import:usage-langfuse-rollups": "node scripts/import-langfuse-usage-rollups.js",
     "import:usage-redis-baseline": "node scripts/import-usage-redis-baseline-to-postgres.js",
     "migrate:fix-usage-stats": "node scripts/fix-usage-stats.js",
     "data:export": "node scripts/data-transfer.js export",

@@ -851,6 +851,11 @@ class Application {
     } else {
       logger.info('🧪 Account test scheduler service disabled')
     }
+
+    const usageDimensionalRollupService = require('./services/usageDimensionalRollupService')
+    usageDimensionalRollupService.start().catch((error) => {
+      logger.warn(`⚠️ Failed to start dimensional usage rollups: ${error.message}`)
+    })
   }
 
   setupGracefulShutdown() {
@@ -912,6 +917,14 @@ class Application {
             logger.info('🧪 Account test scheduler service stopped')
           } catch (error) {
             logger.error('❌ Error stopping account test scheduler service:', error)
+          }
+
+          try {
+            const usageDimensionalRollupService = require('./services/usageDimensionalRollupService')
+            usageDimensionalRollupService.stop()
+            logger.info('📈 Dimensional usage rollup service stopped')
+          } catch (error) {
+            logger.error('❌ Error stopping dimensional usage rollup service:', error)
           }
 
           try {

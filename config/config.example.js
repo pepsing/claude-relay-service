@@ -69,6 +69,23 @@ const config = {
       : 'postgres'
   },
 
+  // 📈 分维度用量汇总（账户 × 模型 × API Key × 时间桶）
+  usageAggregation: {
+    enabled: process.env.USAGE_DIMENSIONAL_ROLLUP_ENABLED === 'true',
+    readEnabled: process.env.USAGE_DIMENSIONAL_READ_ENABLED === 'true',
+    cleanupEnabled: process.env.USAGE_EVENT_CLEANUP_ENABLED === 'true',
+    businessTimezone: process.env.USAGE_BUSINESS_TIMEZONE || 'Asia/Shanghai',
+    minuteRetentionHours: Math.max(1, parseInt(process.env.USAGE_MINUTE_RETENTION_HOURS) || 48),
+    hourlyRetentionDays: Math.max(1, parseInt(process.env.USAGE_HOURLY_RETENTION_DAYS) || 30),
+    eventRetentionDays: Math.max(1, parseInt(process.env.USAGE_EVENT_RETENTION_DAYS) || 14),
+    repairDays: Math.max(1, parseInt(process.env.USAGE_ROLLUP_REPAIR_DAYS) || 14),
+    materializeIntervalMs: Math.max(60000, parseInt(process.env.USAGE_ROLLUP_INTERVAL_MS) || 60000),
+    cleanupBatchSize: Math.min(
+      50000,
+      Math.max(100, parseInt(process.env.USAGE_EVENT_CLEANUP_BATCH_SIZE) || 50000)
+    )
+  },
+
   // 🧾 请求明细响应报文捕获（仅影响 request detail，不影响接口返回）
   responsePayloadCapture: {
     mode: ['off', 'preview', 'full'].includes(process.env.RESPONSE_PAYLOAD_CAPTURE_MODE)
@@ -254,9 +271,20 @@ const config = {
     retries: parseInt(process.env.WEBHOOK_RETRIES) || 3 // 重试3次
   },
 
-  // 🧵 Langfuse trace 采集（旁路投递，不影响请求返回）
+  // 🧵 Langfuse 旁路观测（请求 trace 与额度周期独立开关）
   langfuse: {
     enabled: process.env.LANGFUSE_ENABLED === 'true',
+    requestTracesEnabled: process.env.LANGFUSE_REQUEST_TRACES_ENABLED !== 'false',
+    quotaCyclesEnabled: process.env.LANGFUSE_QUOTA_CYCLES_ENABLED !== 'false',
+    requestPayloadsEnabled: process.env.LANGFUSE_REQUEST_PAYLOADS_ENABLED === 'true',
+    successSampleRate: Number.isFinite(Number(process.env.LANGFUSE_SUCCESS_SAMPLE_RATE))
+      ? Math.min(1, Math.max(0, Number(process.env.LANGFUSE_SUCCESS_SAMPLE_RATE)))
+      : 0.01,
+    captureSlowRequests: process.env.LANGFUSE_CAPTURE_SLOW_REQUESTS !== 'false',
+    slowRequestThresholdMs: Math.max(
+      1,
+      parseInt(process.env.LANGFUSE_SLOW_REQUEST_THRESHOLD_MS) || 30000
+    ),
     baseUrl: process.env.LANGFUSE_BASE_URL || '',
     publicKey: process.env.LANGFUSE_PUBLIC_KEY || '',
     secretKey: process.env.LANGFUSE_SECRET_KEY || '',

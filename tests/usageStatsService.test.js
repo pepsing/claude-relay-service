@@ -1,7 +1,8 @@
-const loadService = ({ writeMode = 'redis', readMode = 'redis' } = {}) => {
+const loadService = ({ writeMode = 'redis', readMode = 'redis', dimensionalRead = false } = {}) => {
   jest.resetModules()
   process.env.USAGE_WRITE_MODE = writeMode
   process.env.USAGE_READ_MODE = readMode
+  process.env.USAGE_DIMENSIONAL_READ_ENABLED = dimensionalRead ? 'true' : 'false'
 
   const redisMock = {
     getApiKey: jest
@@ -28,20 +29,67 @@ const loadService = ({ writeMode = 'redis', readMode = 'redis' } = {}) => {
     getAllUsedModels: jest.fn().mockResolvedValue(['glm-5.1']),
     getKeyIdsWithModels: jest.fn().mockResolvedValue(new Set(['key_1'])),
     getBatchKeyCosts: jest.fn().mockResolvedValue(new Map([['key_1', 1.23]])),
-    calculateCustomRangeCosts: jest.fn().mockResolvedValue(new Map([['key_1', 1.23]]))
+    calculateCustomRangeCosts: jest.fn().mockResolvedValue(new Map([['key_1', 1.23]])),
+    getUsageTrend: jest.fn().mockResolvedValue([]),
+    getAccountUsageHistory: jest.fn().mockResolvedValue({ history: [] }),
+    getAccountUsageSummary: jest.fn().mockResolvedValue({ totalRequests: 0 })
   }
   const loggerMock = {
     warn: jest.fn()
   }
+  const dimensionalStoreMock = {
+    getUsageTrend: jest.fn().mockResolvedValue([{ date: '2026-07-28', requests: 2 }]),
+    getApiKeysUsageTrend: jest.fn(),
+    getModelUsageTrend: jest.fn(),
+    getAccountUsageTrend: jest.fn(),
+    getAccountUsageHistory: jest.fn().mockResolvedValue({
+      history: [{ date: '2026-07-28', requests: 2 }]
+    }),
+    getAccountUsageSummary: jest.fn().mockResolvedValue({
+      totalRequests: 20,
+      monthlyRequests: 10,
+      dailyRequests: 2
+    }),
+    buildTrendPeriods: jest.fn().mockResolvedValue({
+      granularity: 'day',
+      periods: [{ date: '2026-07-28' }],
+      start: new Date('2026-07-27T16:00:00.000Z'),
+      endExclusive: new Date('2026-07-28T16:00:00.000Z')
+    }),
+    queryDimensionalUsage: jest.fn().mockResolvedValue([
+      {
+        bucketStart: '2026-07-27T16:00:00.000Z',
+        accountId: 'acct-1',
+        apiKeyId: 'key-1',
+        model: 'gpt-5'
+      }
+    ])
+  }
+  const dimensionalServiceMock = {
+    getSettings: jest.fn().mockReturnValue({
+      readEnabled: dimensionalRead,
+      businessTimezone: 'Asia/Shanghai',
+      minuteRetentionHours: 48,
+      hourlyRetentionDays: 30
+    }),
+    getHealth: jest.fn().mockResolvedValue({ started: true })
+  }
 
   jest.doMock('../src/models/redis', () => redisMock)
   jest.doMock('../src/services/usageStores/postgresUsageStore', () => pgStoreMock)
+  jest.doMock(
+    '../src/services/usageStores/postgresDimensionalUsageStore',
+    () => dimensionalStoreMock
+  )
+  jest.doMock('../src/services/usageDimensionalRollupService', () => dimensionalServiceMock)
   jest.doMock('../src/utils/logger', () => loggerMock)
 
   return {
     service: require('../src/services/usageStatsService'),
     redisMock,
     pgStoreMock,
+    dimensionalStoreMock,
+    dimensionalServiceMock,
     loggerMock
   }
 }
@@ -49,13 +97,17 @@ const loadService = ({ writeMode = 'redis', readMode = 'redis' } = {}) => {
 describe('usageStatsService', () => {
   const originalWriteMode = process.env.USAGE_WRITE_MODE
   const originalReadMode = process.env.USAGE_READ_MODE
+  const originalDimensionalRead = process.env.USAGE_DIMENSIONAL_READ_ENABLED
 
   afterEach(() => {
     jest.dontMock('../src/models/redis')
     jest.dontMock('../src/services/usageStores/postgresUsageStore')
+    jest.dontMock('../src/services/usageStores/postgresDimensionalUsageStore')
+    jest.dontMock('../src/services/usageDimensionalRollupService')
     jest.dontMock('../src/utils/logger')
     process.env.USAGE_WRITE_MODE = originalWriteMode
     process.env.USAGE_READ_MODE = originalReadMode
+    process.env.USAGE_DIMENSIONAL_READ_ENABLED = originalDimensionalRead
   })
 
   test('redis mode delegates reads to Redis', async () => {
@@ -119,5 +171,82 @@ describe('usageStatsService', () => {
     await expect(
       service.recordUsageEvent('key_1', { requestId: 'req_1' }, { name: 'dev key' })
     ).rejects.toThrow('pg down')
+  })
+
+  test('can cut trend reads over to dimensional rollups without changing the response shape', async () => {
+    const { service, pgStoreMock, dimensionalStoreMock } = loadService({
+      readMode: 'postgres',
+      dimensionalRead: true
+    })
+
+    const result = await service.getUsageTrend({ days: 7, granularity: 'day' })
+
+    expect(result).toEqual([{ date: '2026-07-28', requests: 2 }])
+    expect(dimensionalStoreMock.getUsageTrend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        days: 7,
+        granularity: 'day',
+        businessTimezone: 'Asia/Shanghai'
+      })
+    )
+    expect(pgStoreMock.getUsageTrend).not.toHaveBeenCalled()
+  })
+
+  test('exposes the full account/model/API-key dimensional query range', async () => {
+    const { service, dimensionalStoreMock } = loadService({ readMode: 'postgres' })
+
+    const result = await service.getDimensionalUsage({
+      granularity: 'day',
+      startDate: '2026-07-28',
+      endDate: '2026-07-28',
+      groupBy: ['account', 'apiKey', 'model']
+    })
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        granularity: 'day',
+        startDate: '2026-07-27T16:00:00.000Z',
+        endDate: '2026-07-28T16:00:00.000Z',
+        rows: [expect.objectContaining({ accountId: 'acct-1', model: 'gpt-5' })]
+      })
+    )
+    expect(dimensionalStoreMock.queryDimensionalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        granularity: 'day',
+        startDate: new Date('2026-07-27T16:00:00.000Z'),
+        endDate: new Date('2026-07-28T16:00:00.000Z')
+      })
+    )
+  })
+
+  test('keeps account history and summaries on rollups after raw-event cleanup', async () => {
+    const { service, pgStoreMock, dimensionalStoreMock } = loadService({
+      readMode: 'postgres',
+      dimensionalRead: true
+    })
+
+    await expect(
+      service.getAccountUsageHistory({ accountId: 'acct-1', days: 30 })
+    ).resolves.toEqual({
+      history: [{ date: '2026-07-28', requests: 2 }]
+    })
+    await expect(service.getAccountUsageSummary('acct-1')).resolves.toEqual({
+      totalRequests: 20,
+      monthlyRequests: 10,
+      dailyRequests: 2
+    })
+    expect(dimensionalStoreMock.getAccountUsageHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'acct-1',
+        days: 30,
+        businessTimezone: 'Asia/Shanghai'
+      })
+    )
+    expect(dimensionalStoreMock.getAccountUsageSummary).toHaveBeenCalledWith(
+      'acct-1',
+      'Asia/Shanghai'
+    )
+    expect(pgStoreMock.getAccountUsageHistory).not.toHaveBeenCalled()
+    expect(pgStoreMock.getAccountUsageSummary).not.toHaveBeenCalled()
   })
 })

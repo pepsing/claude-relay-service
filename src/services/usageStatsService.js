@@ -2,6 +2,8 @@ const config = require('../../config/config')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const CostCalculator = require('../utils/costCalculator')
+const usageDimensionalRollupService = require('./usageDimensionalRollupService')
+const postgresDimensionalUsageStore = require('./usageStores/postgresDimensionalUsageStore')
 const postgresUsageStore = require('./usageStores/postgresUsageStore')
 
 function getWriteMode() {
@@ -22,6 +24,18 @@ function shouldWritePostgres() {
 
 function shouldReadPostgres() {
   return getReadMode() === 'postgres'
+}
+
+function shouldReadDimensionalRollups() {
+  return shouldReadPostgres() && usageDimensionalRollupService.getSettings().readEnabled
+}
+
+function withAggregationSettings(options = {}) {
+  const aggregationSettings = usageDimensionalRollupService.getSettings()
+  return {
+    ...options,
+    businessTimezone: aggregationSettings.businessTimezone
+  }
 }
 
 function normalizeUsageRecordForPostgres(keyId, usageRecord = {}, keyData = {}) {
@@ -234,6 +248,14 @@ async function getUsageTrend(options = {}) {
     return null
   }
 
+  if (shouldReadDimensionalRollups()) {
+    try {
+      return await postgresDimensionalUsageStore.getUsageTrend(withAggregationSettings(options))
+    } catch (error) {
+      logger.warn(`⚠️ Dimensional usage trend failed, using legacy rollups: ${error.message}`)
+    }
+  }
+
   return postgresUsageStore.getUsageTrend(options)
 }
 
@@ -259,12 +281,32 @@ async function getApiKeysUsageTrend(options = {}) {
     return null
   }
 
+  if (shouldReadDimensionalRollups()) {
+    try {
+      return await postgresDimensionalUsageStore.getApiKeysUsageTrend(
+        withAggregationSettings(options)
+      )
+    } catch (error) {
+      logger.warn(`⚠️ Dimensional API key trend failed, using legacy rollups: ${error.message}`)
+    }
+  }
+
   return postgresUsageStore.getApiKeysUsageTrend(options)
 }
 
 async function getModelUsageTrend(options = {}) {
   if (!shouldReadPostgres()) {
     return null
+  }
+
+  if (shouldReadDimensionalRollups()) {
+    try {
+      return await postgresDimensionalUsageStore.getModelUsageTrend(
+        withAggregationSettings(options)
+      )
+    } catch (error) {
+      logger.warn(`⚠️ Dimensional model trend failed, using legacy rollups: ${error.message}`)
+    }
   }
 
   return postgresUsageStore.getModelUsageTrend(options)
@@ -275,12 +317,82 @@ async function getAccountUsageTrend(options = {}) {
     return null
   }
 
+  if (shouldReadDimensionalRollups()) {
+    try {
+      return await postgresDimensionalUsageStore.getAccountUsageTrend(
+        withAggregationSettings(options)
+      )
+    } catch (error) {
+      logger.warn(`⚠️ Dimensional account trend failed, using usage events: ${error.message}`)
+    }
+  }
+
   return postgresUsageStore.getAccountUsageTrend(options)
+}
+
+async function getDimensionalUsage(options = {}) {
+  if (!shouldReadPostgres()) {
+    return null
+  }
+  const aggregationConfig = usageDimensionalRollupService.getSettings()
+  const trend = await postgresDimensionalUsageStore.buildTrendPeriods(
+    withAggregationSettings({
+      granularity: options.granularity,
+      days: options.days,
+      startDate: options.startDate,
+      endDate: options.endDate
+    })
+  )
+  const maxPoints =
+    trend.granularity === 'minute'
+      ? (aggregationConfig.minuteRetentionHours || 48) * 60 + 1
+      : trend.granularity === 'hour'
+        ? (aggregationConfig.hourlyRetentionDays || 30) * 24 + 1
+        : 3660
+  if (trend.periods.length > maxPoints) {
+    throw new Error(
+      `${trend.granularity} granularity query exceeds the configured retention window`
+    )
+  }
+
+  const rows =
+    trend.periods.length === 0
+      ? []
+      : await postgresDimensionalUsageStore.queryDimensionalUsage({
+          ...options,
+          granularity: trend.granularity,
+          startDate: trend.start,
+          endDate: trend.endExclusive
+        })
+  return {
+    granularity: trend.granularity,
+    businessTimezone: aggregationConfig.businessTimezone || 'Asia/Shanghai',
+    startDate: trend.start?.toISOString() || null,
+    endDate: trend.endExclusive?.toISOString() || null,
+    rows
+  }
+}
+
+async function getDimensionalUsageHealth() {
+  if (!shouldReadPostgres()) {
+    return null
+  }
+  return usageDimensionalRollupService.getHealth()
 }
 
 async function getAccountUsageHistory(options = {}) {
   if (!shouldReadPostgres()) {
     return null
+  }
+
+  if (shouldReadDimensionalRollups()) {
+    try {
+      return await postgresDimensionalUsageStore.getAccountUsageHistory(
+        withAggregationSettings(options)
+      )
+    } catch (error) {
+      logger.warn(`⚠️ Dimensional account history failed, using usage events: ${error.message}`)
+    }
   }
 
   return postgresUsageStore.getAccountUsageHistory(options)
@@ -289,6 +401,18 @@ async function getAccountUsageHistory(options = {}) {
 async function getAccountUsageSummary(accountId) {
   if (!shouldReadPostgres()) {
     return null
+  }
+
+  if (shouldReadDimensionalRollups()) {
+    try {
+      const settings = usageDimensionalRollupService.getSettings()
+      return await postgresDimensionalUsageStore.getAccountUsageSummary(
+        accountId,
+        settings.businessTimezone
+      )
+    } catch (error) {
+      logger.warn(`⚠️ Dimensional account summary failed, using usage events: ${error.message}`)
+    }
   }
 
   return postgresUsageStore.getAccountUsageSummary(accountId)
@@ -300,6 +424,7 @@ module.exports = {
   shouldWriteRedis,
   shouldWritePostgres,
   shouldReadPostgres,
+  shouldReadDimensionalRollups,
   recordUsageEvent,
   getUsageStats,
   getUsageStatsWithRecords,
@@ -319,6 +444,8 @@ module.exports = {
   getApiKeysUsageTrend,
   getModelUsageTrend,
   getAccountUsageTrend,
+  getDimensionalUsage,
+  getDimensionalUsageHealth,
   getAccountUsageHistory,
   getAccountUsageSummary,
   decorateModelStats

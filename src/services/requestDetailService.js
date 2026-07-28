@@ -982,7 +982,12 @@ class RequestDetailService {
   }
 
   async _queueLangfuseCapture(detail, normalized, requestId) {
-    if (!langfuseTraceService.isEnabled()) {
+    const captureCandidate = {
+      ...detail,
+      ...normalized,
+      requestId
+    }
+    if (!langfuseTraceService.shouldCaptureRequest(captureCandidate)) {
       return
     }
 
@@ -996,9 +1001,7 @@ class RequestDetailService {
       new Map()
     )
     const langfuseDetail = {
-      ...detail,
-      ...normalized,
-      requestId,
+      ...captureCandidate,
       apiKeyName,
       accountId: accountInfo?.accountId || normalized.accountId || detail.accountId,
       accountName: detail.accountName || normalized.accountName || accountInfo?.accountName,

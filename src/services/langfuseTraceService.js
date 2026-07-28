@@ -15,6 +15,11 @@ function parseTimeout(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS
 }
 
+function parseSampleRate(value, fallback = 0.01) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : fallback
+}
+
 function trimTrailingSlash(value) {
   return typeof value === 'string' ? value.replace(/\/+$/, '') : ''
 }
@@ -23,12 +28,43 @@ function getRuntimeConfig() {
   const langfuseConfig = config.langfuse || {}
   return {
     enabled: parseBoolean(langfuseConfig.enabled ?? process.env.LANGFUSE_ENABLED),
+    requestTracesEnabled: parseBoolean(
+      langfuseConfig.requestTracesEnabled ?? process.env.LANGFUSE_REQUEST_TRACES_ENABLED ?? true
+    ),
+    quotaCyclesEnabled: parseBoolean(
+      langfuseConfig.quotaCyclesEnabled ?? process.env.LANGFUSE_QUOTA_CYCLES_ENABLED ?? true
+    ),
+    requestPayloadsEnabled: parseBoolean(
+      langfuseConfig.requestPayloadsEnabled ??
+        process.env.LANGFUSE_REQUEST_PAYLOADS_ENABLED ??
+        false
+    ),
+    successSampleRate: parseSampleRate(
+      langfuseConfig.successSampleRate ?? process.env.LANGFUSE_SUCCESS_SAMPLE_RATE
+    ),
+    captureSlowRequests: parseBoolean(
+      langfuseConfig.captureSlowRequests ?? process.env.LANGFUSE_CAPTURE_SLOW_REQUESTS ?? true
+    ),
+    slowRequestThresholdMs: parseTimeout(
+      langfuseConfig.slowRequestThresholdMs ||
+        process.env.LANGFUSE_SLOW_REQUEST_THRESHOLD_MS ||
+        30000
+    ),
     baseUrl: trimTrailingSlash(langfuseConfig.baseUrl || process.env.LANGFUSE_BASE_URL),
     publicKey: langfuseConfig.publicKey || process.env.LANGFUSE_PUBLIC_KEY,
     secretKey: langfuseConfig.secretKey || process.env.LANGFUSE_SECRET_KEY,
     timeoutMs: parseTimeout(langfuseConfig.timeoutMs || process.env.LANGFUSE_TIMEOUT_MS),
     environment: langfuseConfig.environment || process.env.LANGFUSE_ENVIRONMENT || 'default'
   }
+}
+
+function isConfigured(runtimeConfig = {}) {
+  return Boolean(
+    runtimeConfig.enabled &&
+      runtimeConfig.baseUrl &&
+      runtimeConfig.publicKey &&
+      runtimeConfig.secretKey
+  )
 }
 
 function toIsoString(value, fallback = null) {
@@ -149,6 +185,17 @@ function buildCostDetails(detail = {}) {
 
 function buildMetadata(detail = {}, runtimeConfig = {}) {
   const parsedMetadataUser = metadataUserIdHelper.parse(detail.metadataUserId)
+  const payloadMetadata = runtimeConfig.requestPayloadsEnabled
+    ? {
+        responseHeaders: safeJsonValue(detail.responseHeaders),
+        responseTextPreview: detail.responseTextPreview,
+        responseBodySizeBytes: detail.responseBodySizeBytes,
+        responseBodyTruncated: detail.responseBodyTruncated,
+        errorBody: safeJsonValue(detail.errorBody),
+        responseMetadata: safeJsonValue(detail.responseMetadata),
+        metadata: safeJsonValue(detail.metadata)
+      }
+    : {}
 
   return cleanObject({
     source: 'claude-relay-service',
@@ -197,15 +244,9 @@ function buildMetadata(detail = {}, runtimeConfig = {}) {
     pricingSource: detail.pricingSource,
     usedFallbackPricing: detail.usedFallbackPricing,
     costRecomputed: detail.costRecomputed,
-    responseHeaders: safeJsonValue(detail.responseHeaders),
-    responseTextPreview: detail.responseTextPreview,
-    responseBodySizeBytes: detail.responseBodySizeBytes,
-    responseBodyTruncated: detail.responseBodyTruncated,
     upstreamResponseId: detail.upstreamResponseId,
     finishReason: detail.finishReason,
-    errorBody: safeJsonValue(detail.errorBody),
-    responseMetadata: safeJsonValue(detail.responseMetadata),
-    metadata: safeJsonValue(detail.metadata)
+    ...payloadMetadata
   })
 }
 
@@ -231,8 +272,13 @@ function buildTags(detail = {}, runtimeConfig = {}) {
 function buildTracePayload(detail = {}, runtimeConfig = {}) {
   const traceId = detail.requestId
   const timestamp = toIsoString(detail.timestamp, new Date().toISOString())
-  const requestBody = safeJsonValue(detail.requestBody ?? detail.requestBodySnapshot)
-  const responseBody = safeJsonValue(detail.responseBody ?? detail.responseBodySnapshot)
+  const includePayloads = runtimeConfig.requestPayloadsEnabled === true
+  const requestBody = includePayloads
+    ? safeJsonValue(detail.requestBody ?? detail.requestBodySnapshot)
+    : undefined
+  const responseBody = includePayloads
+    ? safeJsonValue(detail.responseBody ?? detail.responseBodySnapshot)
+    : undefined
   const metadata = buildMetadata(detail, runtimeConfig)
   const sessionId = firstNonEmpty(detail.sessionId, detail.conversationId, detail.sessionHash)
   const userId = buildUserId(detail)
@@ -250,8 +296,6 @@ function buildTracePayload(detail = {}, runtimeConfig = {}) {
           name,
           userId,
           sessionId,
-          input: requestBody,
-          output: responseBody,
           metadata,
           tags: buildTags(detail, runtimeConfig)
         })
@@ -267,16 +311,49 @@ function buildTracePayload(detail = {}, runtimeConfig = {}) {
           startTime: toIsoString(detail.requestStartedAt, timestamp),
           endTime: toIsoString(detail.responseCompletedAt),
           model: detail.model,
-          input: requestBody,
-          output: responseBody,
+          input: includePayloads ? requestBody : undefined,
+          output: includePayloads ? responseBody : undefined,
           usage: buildUsage(detail),
           usageDetails: buildUsageDetails(detail),
-          costDetails: buildCostDetails(detail),
-          metadata
+          costDetails: buildCostDetails(detail)
         })
       }
     ]
   }
+}
+
+function deterministicSample(requestId, sampleRate) {
+  if (sampleRate <= 0) {
+    return false
+  }
+  if (sampleRate >= 1) {
+    return true
+  }
+  const sample = crypto
+    .createHash('sha256')
+    .update(String(requestId || ''))
+    .digest()
+    .readUInt32BE(0)
+  return sample / 0x100000000 < sampleRate
+}
+
+function getRequestCaptureDecision(detail = {}, runtimeConfig = getRuntimeConfig()) {
+  if (!isConfigured(runtimeConfig) || !runtimeConfig.requestTracesEnabled || !detail.requestId) {
+    return { capture: false, reason: 'disabled' }
+  }
+  if (Number(detail.statusCode) >= 400 || detail.error || detail.errorBody) {
+    return { capture: true, reason: 'error' }
+  }
+  if (
+    runtimeConfig.captureSlowRequests &&
+    toFiniteNumber(detail.durationMs) >= runtimeConfig.slowRequestThresholdMs
+  ) {
+    return { capture: true, reason: 'slow' }
+  }
+  if (deterministicSample(detail.requestId, runtimeConfig.successSampleRate)) {
+    return { capture: true, reason: 'sampled' }
+  }
+  return { capture: false, reason: 'sampled_out' }
 }
 
 function buildDeterministicId(prefix, ...parts) {
@@ -643,25 +720,28 @@ function buildQuotaCycleSummaryPayload(summary = {}, runtimeConfig = {}) {
 
 class LangfuseTraceService {
   isEnabled() {
+    return isConfigured(getRuntimeConfig())
+  }
+
+  isRequestTraceEnabled() {
     const runtimeConfig = getRuntimeConfig()
-    return Boolean(
-      runtimeConfig.enabled &&
-        runtimeConfig.baseUrl &&
-        runtimeConfig.publicKey &&
-        runtimeConfig.secretKey
-    )
+    return isConfigured(runtimeConfig) && runtimeConfig.requestTracesEnabled
+  }
+
+  isQuotaCycleEnabled() {
+    const runtimeConfig = getRuntimeConfig()
+    return isConfigured(runtimeConfig) && runtimeConfig.quotaCyclesEnabled
+  }
+
+  shouldCaptureRequest(detail = {}) {
+    return getRequestCaptureDecision(detail).capture
   }
 
   async captureRequestDetail(detail = {}) {
     const runtimeConfig = getRuntimeConfig()
-    if (
-      !runtimeConfig.enabled ||
-      !runtimeConfig.baseUrl ||
-      !runtimeConfig.publicKey ||
-      !runtimeConfig.secretKey ||
-      !detail.requestId
-    ) {
-      return { captured: false, reason: 'disabled' }
+    const decision = getRequestCaptureDecision(detail, runtimeConfig)
+    if (!decision.capture) {
+      return { captured: false, reason: decision.reason }
     }
 
     const payload = buildTracePayload(detail, runtimeConfig)
@@ -692,12 +772,7 @@ class LangfuseTraceService {
     const cycleId = firstNonEmpty(summary.cycleId, summary.id)
     const traceId = cycleId ? buildQuotaCycleTraceId(cycleId) : undefined
 
-    if (
-      !runtimeConfig.enabled ||
-      !runtimeConfig.baseUrl ||
-      !runtimeConfig.publicKey ||
-      !runtimeConfig.secretKey
-    ) {
+    if (!isConfigured(runtimeConfig) || !runtimeConfig.quotaCyclesEnabled) {
       return { captured: false, reason: 'disabled', cycleId, traceId }
     }
 
@@ -747,5 +822,7 @@ module.exports._private = {
   buildQuotaCycleTraceId,
   buildQuotaCycleGenerationId,
   normalizeQuotaCycleModels,
-  getRuntimeConfig
+  getRuntimeConfig,
+  deterministicSample,
+  getRequestCaptureDecision
 }

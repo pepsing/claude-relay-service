@@ -53,6 +53,7 @@ jest.mock('../src/services/requestDetailStores/postgresRequestDetailStore', () =
 
 jest.mock('../src/services/langfuseTraceService', () => ({
   isEnabled: jest.fn(),
+  shouldCaptureRequest: jest.fn(),
   captureRequestDetail: jest.fn()
 }))
 
@@ -74,6 +75,7 @@ describe('requestDetailService', () => {
     appConfig.requestDetailStorage.writeMode = 'redis'
     appConfig.requestDetailStorage.readMode = 'redis'
     langfuseTraceService.isEnabled.mockReturnValue(false)
+    langfuseTraceService.shouldCaptureRequest.mockReturnValue(false)
     langfuseTraceService.captureRequestDetail.mockResolvedValue({ captured: true })
     jest.useFakeTimers().setSystemTime(Date.parse('2026-04-07T18:00:00.000Z'))
   })
@@ -100,6 +102,7 @@ describe('requestDetailService', () => {
     redis.getApiKey.mockResolvedValue({ name: 'Primary Key' })
     openaiAccountService.getAccount.mockResolvedValue({ name: 'OpenAI Main' })
     langfuseTraceService.isEnabled.mockReturnValue(true)
+    langfuseTraceService.shouldCaptureRequest.mockReturnValue(true)
 
     const result = await requestDetailService.captureRequestDetail({
       requestId: 'req_capture_1',

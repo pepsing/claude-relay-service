@@ -352,7 +352,7 @@ class QuotaCycleIntegrationService {
       }
     }
 
-    if (!this.langfuseService.isEnabled()) {
+    if (!this.langfuseService.isQuotaCycleEnabled()) {
       result.exportSkipped = 'langfuse_disabled'
       return result
     }

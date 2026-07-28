@@ -5,6 +5,12 @@ jest.mock('axios', () => ({
 jest.mock('../config/config', () => ({
   langfuse: {
     enabled: true,
+    requestTracesEnabled: true,
+    quotaCyclesEnabled: true,
+    requestPayloadsEnabled: true,
+    successSampleRate: 1,
+    captureSlowRequests: true,
+    slowRequestThresholdMs: 30000,
     baseUrl: 'http://langfuse.local:3300/',
     publicKey: 'pk-test',
     secretKey: 'sk-test',
@@ -29,6 +35,10 @@ describe('langfuseTraceService', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     config.langfuse.enabled = true
+    config.langfuse.requestTracesEnabled = true
+    config.langfuse.quotaCyclesEnabled = true
+    config.langfuse.requestPayloadsEnabled = true
+    config.langfuse.successSampleRate = 1
     axios.post.mockResolvedValue({
       data: {
         successes: [{ id: 'req_1-trace-create', status: 201 }],
@@ -37,7 +47,7 @@ describe('langfuseTraceService', () => {
     })
   })
 
-  test('captures request detail as trace and generation with raw payloads', async () => {
+  test('captures sampled request detail with payloads only on the generation', async () => {
     const result = await langfuseTraceService.captureRequestDetail({
       requestId: 'req_1',
       timestamp: '2026-06-04T07:00:00.000Z',
@@ -109,8 +119,6 @@ describe('langfuseTraceService', () => {
         name: '/api/v1/messages',
         userId: '吴满江',
         sessionId: 'session_hash_1',
-        input: expect.objectContaining({ apiKey: 'raw-secret' }),
-        output: expect.objectContaining({ id: 'resp_1' }),
         tags: expect.arrayContaining([
           'crs',
           'test',
@@ -122,6 +130,8 @@ describe('langfuseTraceService', () => {
         ])
       })
     )
+    expect(traceEvent.body).not.toHaveProperty('input')
+    expect(traceEvent.body).not.toHaveProperty('output')
     expect(traceEvent.body.metadata.detail).toBeUndefined()
     expect(traceEvent.body.metadata.accountName).toBe('Claude Console Main')
     expect(traceEvent.body.metadata.accountTypeName).toBe('Claude Console')
@@ -132,6 +142,8 @@ describe('langfuseTraceService', () => {
         id: 'req_1-generation',
         traceId: 'req_1',
         model: 'gpt-5.5',
+        input: expect.objectContaining({ apiKey: 'raw-secret' }),
+        output: expect.objectContaining({ id: 'resp_1' }),
         usage: expect.objectContaining({
           input: 10,
           output: 5,
@@ -155,6 +167,63 @@ describe('langfuseTraceService', () => {
         })
       })
     )
+  })
+
+  test('omits request payloads and large response metadata by default', async () => {
+    config.langfuse.requestPayloadsEnabled = false
+
+    const result = await langfuseTraceService.captureRequestDetail({
+      requestId: 'req_minimal',
+      statusCode: 500,
+      durationMs: 10,
+      model: 'gpt-5.5',
+      requestBody: { secret: 'do-not-copy' },
+      responseBody: { content: 'do-not-copy' },
+      responseHeaders: { authorization: 'do-not-copy' },
+      responseTextPreview: 'do-not-copy',
+      responseMetadata: { raw: 'do-not-copy' },
+      metadata: { raw: 'do-not-copy' }
+    })
+
+    expect(result).toEqual({ captured: true, requestId: 'req_minimal' })
+    const payload = axios.post.mock.calls[0][1]
+    for (const event of payload.batch) {
+      expect(event.body).not.toHaveProperty('input')
+      expect(event.body).not.toHaveProperty('output')
+    }
+    expect(payload.batch[0].body.metadata).not.toHaveProperty('responseHeaders')
+    expect(payload.batch[0].body.metadata).not.toHaveProperty('responseTextPreview')
+    expect(payload.batch[0].body.metadata).not.toHaveProperty('responseMetadata')
+    expect(payload.batch[0].body.metadata).not.toHaveProperty('metadata')
+  })
+
+  test('always captures errors and slow requests but samples ordinary successes', async () => {
+    config.langfuse.requestPayloadsEnabled = false
+    config.langfuse.successSampleRate = 0
+    config.langfuse.slowRequestThresholdMs = 1000
+
+    await expect(
+      langfuseTraceService.captureRequestDetail({
+        requestId: 'req_success',
+        statusCode: 200,
+        durationMs: 20
+      })
+    ).resolves.toEqual({ captured: false, reason: 'sampled_out' })
+    await expect(
+      langfuseTraceService.captureRequestDetail({
+        requestId: 'req_error',
+        statusCode: 500,
+        durationMs: 20
+      })
+    ).resolves.toEqual({ captured: true, requestId: 'req_error' })
+    await expect(
+      langfuseTraceService.captureRequestDetail({
+        requestId: 'req_slow',
+        statusCode: 200,
+        durationMs: 1000
+      })
+    ).resolves.toEqual({ captured: true, requestId: 'req_slow' })
+    expect(axios.post).toHaveBeenCalledTimes(2)
   })
 
   test('captures a body-free quota cycle trace with one deterministic generation per model', async () => {
@@ -385,7 +454,7 @@ describe('langfuseTraceService', () => {
   })
 
   test('does not throw or post when quota cycle capture is disabled', async () => {
-    config.langfuse.enabled = false
+    config.langfuse.quotaCyclesEnabled = false
 
     const result = await langfuseTraceService.captureQuotaCycleSummary({
       cycleId: 'cycle_disabled'

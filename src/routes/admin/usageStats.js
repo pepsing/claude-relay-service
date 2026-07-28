@@ -27,6 +27,13 @@ const USAGE_RECORD_SORT_FIELDS = new Set([
   'totalTokens',
   'cost'
 ])
+const DIMENSIONAL_GRANULARITIES = new Set(['minute', 'hour', 'day'])
+const DIMENSIONAL_GROUPS = new Set(['account', 'apiKey', 'model'])
+
+function parseCommaSeparatedQuery(value) {
+  const values = Array.isArray(value) ? value : String(value || '').split(',')
+  return [...new Set(values.map((item) => String(item).trim()).filter(Boolean))]
+}
 
 function normalizeUsageRecordSortBy(value) {
   return USAGE_RECORD_SORT_FIELDS.has(value) ? value : 'timestamp'
@@ -784,6 +791,93 @@ router.get('/accounts/:accountId/usage-history', authenticateAdmin, async (req, 
 })
 
 // 📊 使用趋势和成本分析
+
+// 账户 × 模型 × API Key × 时间桶统一查询
+router.get('/usage-dimensional', authenticateAdmin, async (req, res) => {
+  try {
+    if (!usageStatsService.shouldReadPostgres()) {
+      return res.status(409).json({
+        success: false,
+        error: 'Dimensional usage requires PostgreSQL read mode'
+      })
+    }
+
+    const granularity = String(req.query.granularity || 'day').toLowerCase()
+    if (!DIMENSIONAL_GRANULARITIES.has(granularity)) {
+      return res.status(400).json({
+        success: false,
+        error: 'granularity must be minute, hour, or day'
+      })
+    }
+    for (const field of ['startDate', 'endDate']) {
+      if (req.query[field] && Number.isNaN(new Date(req.query[field]).getTime())) {
+        return res.status(400).json({
+          success: false,
+          error: `${field} is not a valid date`
+        })
+      }
+    }
+
+    const groupBy = parseCommaSeparatedQuery(req.query.groupBy || 'account,apiKey,model')
+    if (groupBy.some((dimension) => !DIMENSIONAL_GROUPS.has(dimension))) {
+      return res.status(400).json({
+        success: false,
+        error: 'groupBy only supports account, apiKey, and model'
+      })
+    }
+
+    const result = await usageStatsService.getDimensionalUsage({
+      granularity,
+      days: req.query.days,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
+      accountIds: parseCommaSeparatedQuery(req.query.accountIds),
+      accountTypes: parseCommaSeparatedQuery(req.query.accountTypes),
+      apiKeyIds: parseCommaSeparatedQuery(req.query.apiKeyIds),
+      models: parseCommaSeparatedQuery(req.query.models),
+      groupBy,
+      limit: req.query.limit
+    })
+    return res.json({
+      success: true,
+      data: result.rows,
+      granularity: result.granularity,
+      businessTimezone: result.businessTimezone,
+      range: {
+        startDate: result.startDate,
+        endDate: result.endDate
+      }
+    })
+  } catch (error) {
+    const rangeError = error.message.includes('retention window')
+    logger.error('❌ Failed to query dimensional usage:', error)
+    return res.status(rangeError ? 400 : 500).json({
+      success: false,
+      error: 'Failed to query dimensional usage',
+      message: error.message
+    })
+  }
+})
+
+router.get('/usage-dimensional/health', authenticateAdmin, async (_req, res) => {
+  try {
+    const health = await usageStatsService.getDimensionalUsageHealth()
+    if (!health) {
+      return res.status(409).json({
+        success: false,
+        error: 'Dimensional usage requires PostgreSQL read mode'
+      })
+    }
+    return res.json({ success: true, data: health })
+  } catch (error) {
+    logger.error('❌ Failed to get dimensional usage health:', error)
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get dimensional usage health',
+      message: error.message
+    })
+  }
+})
 
 // 获取使用趋势数据
 router.get('/usage-trend', authenticateAdmin, async (req, res) => {
