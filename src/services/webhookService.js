@@ -539,6 +539,7 @@ class WebhookService {
       systemError: '❌ 系统错误',
       securityAlert: '🔒 安全警报',
       rateLimitRecovery: '🎉 限流恢复通知',
+      serviceLifecycle: '🔄 服务重启通知',
       test: '🧪 测试通知'
     }
 

@@ -2,6 +2,7 @@
 
 const { spawn, exec } = require('child_process')
 const fs = require('fs')
+const os = require('os')
 const path = require('path')
 const process = require('process')
 
@@ -9,6 +10,10 @@ const PID_FILE = path.join(__dirname, '..', 'claude-relay-service.pid')
 const LOG_FILE = path.join(__dirname, '..', 'logs', 'service.log')
 const ERROR_LOG_FILE = path.join(__dirname, '..', 'logs', 'service-error.log')
 const APP_FILE = path.join(__dirname, '..', 'src', 'app.js')
+const RESTART_HEALTH_TIMEOUT_MS = Math.max(
+  1000,
+  parseInt(process.env.SERVICE_RESTART_HEALTH_TIMEOUT_MS) || 60000
+)
 
 class ServiceManager {
   constructor() {
@@ -77,6 +82,71 @@ class ServiceManager {
     })
   }
 
+  getHealthUrl() {
+    const config = require('../config/config')
+    const configuredHost = config.server.host
+    const host = ['0.0.0.0', '::'].includes(configuredHost) ? '127.0.0.1' : configuredHost
+    const urlHost = host.includes(':') ? `[${host}]` : host
+    return `http://${urlHost}:${config.server.port}/health`
+  }
+
+  async checkHealth() {
+    try {
+      const response = await global.fetch(this.getHealthUrl(), {
+        signal: global.AbortSignal.timeout(2000)
+      })
+      if (!response.ok) {
+        return false
+      }
+
+      const body = await response.json()
+      return body.status === 'healthy'
+    } catch (_error) {
+      return false
+    }
+  }
+
+  async waitForHealth(timeoutMs = RESTART_HEALTH_TIMEOUT_MS, intervalMs = 1000) {
+    const startedAt = Date.now()
+
+    while (Date.now() - startedAt < timeoutMs) {
+      if (await this.checkHealth()) {
+        return true
+      }
+
+      await this.wait(intervalMs)
+    }
+
+    return this.checkHealth()
+  }
+
+  async sendServiceLifecycleNotification(status, message) {
+    const redis = require('../src/models/redis')
+    const webhookService = require('../src/services/webhookService')
+    let connectedHere = false
+
+    try {
+      if (!redis.isConnected) {
+        await redis.connect()
+        connectedHere = true
+      }
+
+      return await webhookService.sendNotification('serviceLifecycle', {
+        status,
+        message
+      })
+    } catch (error) {
+      console.warn(`⚠️ 发送服务生命周期通知失败: ${error.message}`)
+      return null
+    } finally {
+      if (connectedHere) {
+        await redis.disconnect().catch((error) => {
+          console.warn(`⚠️ 关闭通知 Redis 连接失败: ${error.message}`)
+        })
+      }
+    }
+  }
+
   async waitForProcessExit(pid, timeoutMs, intervalMs = 1000) {
     const startedAt = Date.now()
 
@@ -123,11 +193,6 @@ class ServiceManager {
           console.error('❌ 无法获取进程ID')
         }
       })
-
-      // 给exec一点时间执行
-      setTimeout(() => {
-        process.exit(0)
-      }, 1000)
     } else {
       // 前台运行模式
       const child = spawn('node', [APP_FILE], {
@@ -208,8 +273,54 @@ class ServiceManager {
 
   async restart(daemon = false) {
     console.log('🔄 重启服务...')
-    await this.stop()
-    return this.start(daemon)
+    const restartStartedAt = Date.now()
+    const previousStatus = this.getStatus()
+    const hostname = os.hostname()
+
+    await this.sendServiceLifecycleNotification(
+      '准备重启',
+      `主机 ${hostname} 准备重启服务，当前 PID: ${previousStatus.pid || '无'}`
+    )
+
+    const stopped = await this.stop()
+    if (previousStatus.running && !stopped) {
+      await this.sendServiceLifecycleNotification(
+        '启动失败',
+        `主机 ${hostname} 停止旧服务失败，重启已中止`
+      )
+      return false
+    }
+
+    const started = await this.start(daemon)
+    if (!started) {
+      await this.sendServiceLifecycleNotification('启动失败', `主机 ${hostname} 未能拉起新服务进程`)
+      return false
+    }
+
+    console.log(`⏳ 等待健康检查: ${this.getHealthUrl()}`)
+    const healthy = await this.waitForHealth()
+    const currentStatus = this.getStatus()
+    const durationSeconds = ((Date.now() - restartStartedAt) / 1000).toFixed(1)
+
+    if (!healthy || !currentStatus.running) {
+      await this.sendServiceLifecycleNotification(
+        '启动失败',
+        `主机 ${hostname} 在 ${durationSeconds} 秒内未确认新进程健康运行，PID: ${
+          currentStatus.pid || '未知'
+        }`
+      )
+      console.error('❌ 服务启动后未确认新进程健康运行')
+      return false
+    }
+
+    await this.sendServiceLifecycleNotification(
+      '启动成功',
+      `主机 ${hostname} 已完成重启，PID: ${currentStatus.pid || '未知'}，耗时: ${
+        durationSeconds
+      } 秒`
+    )
+    console.log('✅ 服务已通过健康检查')
+    return true
   }
 
   status() {

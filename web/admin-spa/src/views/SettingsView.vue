@@ -2415,7 +2415,8 @@ const DEFAULT_WEBHOOK_NOTIFICATION_TYPES = {
   quotaWarning: true,
   systemError: true,
   securityAlert: true,
-  rateLimitRecovery: true
+  rateLimitRecovery: true,
+  serviceLifecycle: true
 }
 
 const webhookConfig = ref({
@@ -3756,6 +3757,7 @@ const getNotificationTypeName = (type) => {
     systemError: '系统错误',
     securityAlert: '安全警报',
     rateLimitRecovery: '限流恢复',
+    serviceLifecycle: '服务重启',
     test: '测试通知'
   }
   return names[type] || type
@@ -3768,6 +3770,7 @@ const getNotificationTypeDescription = (type) => {
     systemError: '系统运行错误和故障',
     securityAlert: '安全相关的警报通知',
     rateLimitRecovery: '限流状态恢复时发送提醒',
+    serviceLifecycle: '服务重启前、健康检查成功或失败时发送提醒',
     test: '用于测试Webhook连接是否正常'
   }
   return descriptions[type] || ''

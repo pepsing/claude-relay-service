@@ -330,6 +330,7 @@ class WebhookConfigService {
         systemError: true, // 系统错误
         securityAlert: true, // 安全警报
         rateLimitRecovery: true, // 限流恢复
+        serviceLifecycle: true, // 服务重启
         test: true // 测试通知
       },
       retrySettings: {
