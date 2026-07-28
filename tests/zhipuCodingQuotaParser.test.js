@@ -9,9 +9,20 @@ jest.mock('../src/utils/logger', () => ({
 
 jest.mock('../src/models/redis', () => ({}))
 
+jest.mock('../src/services/quotaCycleIntegrationService', () => ({
+  syncZhipuQuota: jest.fn().mockResolvedValue(undefined)
+}))
+
 const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
+const quotaCycleIntegrationService = require('../src/services/quotaCycleIntegrationService')
 
 describe('Zhipu Coding Plan quota parser', () => {
+  beforeEach(() => {
+    jest.restoreAllMocks()
+    jest.clearAllMocks()
+    quotaCycleIntegrationService.syncZhipuQuota.mockResolvedValue(undefined)
+  })
+
   afterAll(() => {
     jest.useRealTimers()
   })
@@ -112,5 +123,76 @@ describe('Zhipu Coding Plan quota parser', () => {
         resetAt: '2026-06-27T02:49:30.992Z'
       })
     )
+  })
+
+  it('keeps Claude Console stopped until its persisted exhausted snapshot is synchronized', async () => {
+    const persistedQuotaStatus = {
+      exhausted: true,
+      buckets: [
+        {
+          type: 'TOKENS_LIMIT',
+          windowType: 'weekly',
+          percentage: 100,
+          remaining: 0,
+          resetAt: '2026-08-03T00:00:00.000Z'
+        }
+      ]
+    }
+    const healthyQuotaStatus = {
+      exhausted: false,
+      buckets: [
+        {
+          type: 'TOKENS_LIMIT',
+          windowType: 'weekly',
+          percentage: 20,
+          remaining: 80,
+          resetAt: '2026-08-10T00:00:00.000Z'
+        }
+      ],
+      quota: { buckets: [] }
+    }
+    const account = {
+      id: 'zhipu-console-outbox',
+      name: 'Zhipu Console Outbox',
+      apiUrl: 'https://open.bigmodel.cn/api/anthropic',
+      apiKey: 'test-key',
+      zhipuCodingQuotaAutoStopped: true,
+      zhipuCodingQuotaStoppedAt: '2026-07-27T00:00:00.000Z',
+      zhipuCodingQuotaStatusObservedAt: '2026-07-28T00:00:00.000Z',
+      zhipuCodingQuotaStatus: persistedQuotaStatus
+    }
+    jest.spyOn(claudeConsoleAccountService, 'getAccount').mockResolvedValue(account)
+    jest.spyOn(claudeConsoleAccountService, '_cacheZhipuCodingQuota').mockResolvedValue(undefined)
+    const fetchQuota = jest
+      .spyOn(claudeConsoleAccountService, 'fetchZhipuCodingQuota')
+      .mockResolvedValue(healthyQuotaStatus)
+    const recover = jest
+      .spyOn(claudeConsoleAccountService, 'recoverZhipuCodingQuotaExceeded')
+      .mockResolvedValue({ success: true })
+    quotaCycleIntegrationService.syncZhipuQuota
+      .mockRejectedValueOnce(new Error('PostgreSQL unavailable'))
+      .mockResolvedValue(undefined)
+
+    await expect(
+      claudeConsoleAccountService.refreshZhipuCodingQuotaProtection(account.id)
+    ).rejects.toThrow('PostgreSQL unavailable')
+    expect(fetchQuota).not.toHaveBeenCalled()
+    expect(recover).not.toHaveBeenCalled()
+
+    await expect(
+      claudeConsoleAccountService.refreshZhipuCodingQuotaProtection(account.id)
+    ).resolves.toEqual(
+      expect.objectContaining({ checked: true, exhausted: false, recovered: true })
+    )
+    expect(quotaCycleIntegrationService.syncZhipuQuota).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        accountType: 'claude-console',
+        account,
+        quotaStatus: persistedQuotaStatus,
+        observedAt: account.zhipuCodingQuotaStatusObservedAt
+      })
+    )
+    expect(recover).toHaveBeenCalledWith(account.id, healthyQuotaStatus)
   })
 })

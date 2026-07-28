@@ -122,7 +122,10 @@ describe('ManagementApiService', () => {
             type: 'claude',
             operations: ['list', 'create', 'update', 'delete', 'test', 'refresh', 'stats']
           }
-        ]
+        ],
+        stats: {
+          operations: ['summary', 'api-key', 'account', 'quota-cycles']
+        }
       })
     )
   })

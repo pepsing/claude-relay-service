@@ -2,7 +2,8 @@ jest.useFakeTimers()
 
 const mockRedisClient = {
   hset: jest.fn().mockResolvedValue(undefined),
-  hdel: jest.fn().mockResolvedValue(undefined)
+  hdel: jest.fn().mockResolvedValue(undefined),
+  eval: jest.fn().mockResolvedValue(2)
 }
 
 jest.mock('../src/models/redis', () => ({
@@ -27,6 +28,24 @@ jest.mock('../src/utils/upstreamErrorHelper', () => ({
   recordErrorHistory: jest.fn().mockResolvedValue(undefined)
 }))
 
+jest.mock('../src/services/quotaCycleIntegrationService', () => ({
+  recordKimiExceeded: jest.fn().mockResolvedValue(undefined),
+  recordKimiRecovered: jest.fn().mockResolvedValue(undefined),
+  reconcilePersistedQuotaState: jest.fn().mockResolvedValue({
+    kimiExceeded: false,
+    kimiRecovered: false,
+    volcengineExceeded: false
+  })
+}))
+
+jest.mock('../src/services/quotaIdentityService', () => ({
+  buildQuotaGroupId: jest.fn(() => 'qg-kimi-shared')
+}))
+
+jest.mock('../src/utils/webhookNotifier', () => ({
+  sendAccountAnomalyNotification: jest.fn().mockResolvedValue(undefined)
+}))
+
 jest.mock('../src/utils/proxyHelper', () => {
   class MockProxyHelper {
     static createProxyAgent = jest.fn().mockReturnValue(null)
@@ -42,6 +61,7 @@ jest.mock('axios')
 const axios = require('axios')
 const redis = require('../src/models/redis')
 const upstreamErrorHelper = require('../src/utils/upstreamErrorHelper')
+const quotaCycleIntegrationService = require('../src/services/quotaCycleIntegrationService')
 const claudeConsoleAccountService = require('../src/services/account/claudeConsoleAccountService')
 const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
 const rateLimitCleanupService = require('../src/services/rateLimitCleanupService')
@@ -53,10 +73,19 @@ describe('Kimi billing-cycle quota recovery', () => {
     jest.setSystemTime(new Date('2026-07-28T02:00:00.000Z'))
     mockRedisClient.hset.mockResolvedValue(undefined)
     mockRedisClient.hdel.mockResolvedValue(undefined)
+    mockRedisClient.eval.mockResolvedValue(2)
     redis.setAccountLock.mockResolvedValue(true)
     redis.releaseAccountLock.mockResolvedValue(true)
     upstreamErrorHelper.clearTempUnavailable.mockResolvedValue(undefined)
+    quotaCycleIntegrationService.recordKimiExceeded.mockResolvedValue(undefined)
+    quotaCycleIntegrationService.recordKimiRecovered.mockResolvedValue(undefined)
+    quotaCycleIntegrationService.reconcilePersistedQuotaState.mockResolvedValue({
+      kimiExceeded: false,
+      kimiRecovered: false,
+      volcengineExceeded: false
+    })
     rateLimitCleanupService.clearedAccounts = []
+    rateLimitCleanupService.quotaCycleCleanupBlocks.clear()
   })
 
   afterAll(() => {
@@ -208,6 +237,48 @@ describe('Kimi billing-cycle quota recovery', () => {
     expect(upstreamErrorHelper.clearTempUnavailable).not.toHaveBeenCalled()
   })
 
+  it('closes open Kimi cycles when accounts are manually reset', async () => {
+    const consoleAccount = {
+      id: 'kimi-console-manual',
+      name: 'Kimi Console Manual',
+      apiUrl: 'https://api.kimi.com/coding',
+      apiKey: 'kimi-key',
+      kimiBillingCycleQuotaStoppedAt: '2026-07-28T00:00:00.000Z'
+    }
+    const responsesAccount = {
+      id: 'kimi-responses-manual',
+      name: 'Kimi Responses Manual',
+      baseApi: 'https://api.kimi.com/coding',
+      apiKey: 'kimi-key',
+      kimiBillingCycleQuotaStoppedAt: '2026-07-28T00:00:00.000Z'
+    }
+    jest.spyOn(claudeConsoleAccountService, 'getAccount').mockResolvedValue(consoleAccount)
+    jest.spyOn(openaiResponsesAccountService, 'getAccount').mockResolvedValue(responsesAccount)
+    jest.spyOn(openaiResponsesAccountService, 'updateAccount').mockResolvedValue({ success: true })
+    axios.mockResolvedValue({ status: 200, data: { choices: [{ message: { content: 'hi' } }] } })
+
+    await claudeConsoleAccountService.resetAccountStatus(consoleAccount.id)
+    await openaiResponsesAccountService.resetAccountStatus(responsesAccount.id)
+
+    expect(quotaCycleIntegrationService.recordKimiRecovered).toHaveBeenCalledTimes(2)
+    expect(quotaCycleIntegrationService.recordKimiRecovered).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        accountType: 'claude-console',
+        account: consoleAccount,
+        recoveredAt: '2026-07-28T02:00:00.000Z'
+      })
+    )
+    expect(quotaCycleIntegrationService.recordKimiRecovered).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        accountType: 'openai-responses',
+        account: responsesAccount,
+        recoveredAt: '2026-07-28T02:00:00.000Z'
+      })
+    )
+  })
+
   it('collects recovered Kimi accounts from both supported account types', async () => {
     jest.spyOn(claudeConsoleAccountService, 'getAllAccounts').mockResolvedValue([
       {
@@ -243,5 +314,207 @@ describe('Kimi billing-cycle quota recovery', () => {
         currentStatus: 'active'
       })
     ])
+  })
+
+  it('retries persisted quota events before cleanup clears account state', async () => {
+    const consoleSummary = {
+      id: 'kimi-console-outbox',
+      name: 'Kimi Console Outbox',
+      kimiQuotaCycleRecoveryPendingAt: '2026-07-28T01:00:00.000Z'
+    }
+    const responsesSummary = {
+      id: 'kimi-responses-outbox',
+      name: 'Kimi Responses Outbox',
+      kimiQuotaCycleRecoveryPendingAt: '2026-07-28T01:00:00.000Z'
+    }
+    jest.spyOn(claudeConsoleAccountService, 'getAllAccounts').mockResolvedValue([consoleSummary])
+    jest
+      .spyOn(openaiResponsesAccountService, 'getAllAccounts')
+      .mockResolvedValue([responsesSummary])
+    jest.spyOn(claudeConsoleAccountService, 'getAccount').mockResolvedValue(consoleSummary)
+    jest.spyOn(openaiResponsesAccountService, 'getAccount').mockResolvedValue(responsesSummary)
+    jest
+      .spyOn(claudeConsoleAccountService, 'clearKimiQuotaCycleRecoveryPending')
+      .mockResolvedValue(2)
+    jest
+      .spyOn(openaiResponsesAccountService, 'clearKimiQuotaCycleRecoveryPending')
+      .mockResolvedValue(2)
+    quotaCycleIntegrationService.reconcilePersistedQuotaState
+      .mockResolvedValueOnce({
+        kimiExceeded: false,
+        kimiRecovered: true,
+        volcengineExceeded: false
+      })
+      .mockResolvedValueOnce({
+        kimiExceeded: false,
+        kimiRecovered: true,
+        volcengineExceeded: false
+      })
+    const result = { checked: 0, synced: 0, errors: [] }
+
+    await rateLimitCleanupService.reconcilePersistedQuotaCycles(result)
+
+    expect(result).toEqual({ checked: 2, synced: 2, errors: [] })
+    expect(claudeConsoleAccountService.clearKimiQuotaCycleRecoveryPending).toHaveBeenCalledWith(
+      consoleSummary.id,
+      consoleSummary.kimiQuotaCycleRecoveryPendingAt,
+      undefined
+    )
+    expect(openaiResponsesAccountService.clearKimiQuotaCycleRecoveryPending).toHaveBeenCalledWith(
+      responsesSummary.id,
+      responsesSummary.kimiQuotaCycleRecoveryPendingAt,
+      undefined
+    )
+  })
+
+  it('atomically deletes only the expected persisted recovery markers', async () => {
+    await claudeConsoleAccountService.clearKimiQuotaCycleRecoveryPending(
+      'kimi-console-pending',
+      '2026-07-28T01:00:00.000Z',
+      '2026-07-28T00:00:00.000Z'
+    )
+    await openaiResponsesAccountService.clearKimiQuotaCycleRecoveryPending(
+      'kimi-responses-pending',
+      '2026-07-28T02:00:00.000Z',
+      '2026-07-28T01:00:00.000Z'
+    )
+
+    expect(mockRedisClient.eval).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining('if pending_at ~= ARGV[1]'),
+      1,
+      'claude_console_account:kimi-console-pending',
+      '2026-07-28T01:00:00.000Z',
+      '2026-07-28T00:00:00.000Z'
+    )
+    expect(mockRedisClient.eval).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('if pending_at ~= ARGV[1]'),
+      1,
+      'openai_responses_account:kimi-responses-pending',
+      '2026-07-28T02:00:00.000Z',
+      '2026-07-28T01:00:00.000Z'
+    )
+  })
+
+  it('keeps Kimi recovery monitoring after a manual reset when the upstream probe still fails', async () => {
+    const consoleAccount = {
+      id: 'kimi-console-manual-still-limited',
+      name: 'Kimi Console Manual Still Limited',
+      apiUrl: 'https://api.kimi.com/coding',
+      apiKey: 'kimi-key',
+      kimiBillingCycleQuotaStoppedAt: '2026-07-28T00:00:00.000Z'
+    }
+    const responsesAccount = {
+      id: 'kimi-responses-manual-still-limited',
+      name: 'Kimi Responses Manual Still Limited',
+      baseApi: 'https://api.kimi.com/coding',
+      apiKey: 'kimi-key',
+      kimiBillingCycleQuotaStoppedAt: '2026-07-28T00:00:00.000Z'
+    }
+    jest.spyOn(claudeConsoleAccountService, 'getAccount').mockResolvedValue(consoleAccount)
+    jest.spyOn(openaiResponsesAccountService, 'getAccount').mockResolvedValue(responsesAccount)
+    jest
+      .spyOn(claudeConsoleAccountService, 'checkAndRecoverKimiBillingCycleQuota')
+      .mockResolvedValue({ checked: true, recovered: false, status: 403 })
+    jest
+      .spyOn(openaiResponsesAccountService, 'checkAndRecoverKimiBillingCycleQuota')
+      .mockResolvedValue({ checked: true, recovered: false, status: 403 })
+    const responsesUpdate = jest
+      .spyOn(openaiResponsesAccountService, 'updateAccount')
+      .mockResolvedValue({ success: true })
+
+    await claudeConsoleAccountService.resetAccountStatus(consoleAccount.id)
+    await openaiResponsesAccountService.resetAccountStatus(responsesAccount.id)
+
+    const consoleResetDelete = mockRedisClient.hdel.mock.calls.find(
+      ([key]) => key === `claude_console_account:${consoleAccount.id}`
+    )
+    expect(consoleResetDelete).toBeDefined()
+    expect(consoleResetDelete).not.toContain('kimiBillingCycleQuotaStoppedAt')
+    expect(responsesUpdate).toHaveBeenCalledWith(
+      responsesAccount.id,
+      expect.not.objectContaining({ kimiBillingCycleQuotaStoppedAt: '' })
+    )
+    expect(quotaCycleIntegrationService.recordKimiRecovered).not.toHaveBeenCalled()
+  })
+
+  it('does not clear Volcengine reset evidence until cycle reconciliation succeeds', async () => {
+    const account = {
+      id: 'volcengine-outbox',
+      name: 'Volcengine Outbox',
+      baseApi: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+      apiKey: 'test-key',
+      rateLimitAutoStopped: 'true',
+      rateLimitResetAt: '2026-07-28T01:00:00.000Z',
+      rateLimitStatus: { isRateLimited: true }
+    }
+    jest.spyOn(openaiResponsesAccountService, 'getAllAccounts').mockResolvedValue([account])
+    jest.spyOn(openaiResponsesAccountService, 'getAccount').mockResolvedValue(account)
+    const clearRateLimit = jest
+      .spyOn(openaiResponsesAccountService, 'checkAndClearRateLimit')
+      .mockResolvedValue(true)
+    quotaCycleIntegrationService.reconcilePersistedQuotaState
+      .mockRejectedValueOnce(new Error('PostgreSQL unavailable'))
+      .mockResolvedValueOnce({
+        kimiExceeded: false,
+        kimiRecovered: false,
+        volcengineExceeded: true
+      })
+    const reconciliation = { checked: 0, synced: 0, errors: [] }
+
+    await rateLimitCleanupService.reconcilePersistedQuotaCycles(reconciliation)
+    await rateLimitCleanupService.cleanupOpenAIResponsesAccounts({
+      checked: 0,
+      cleared: 0,
+      errors: []
+    })
+    expect(clearRateLimit).not.toHaveBeenCalled()
+    expect(rateLimitCleanupService.quotaCycleCleanupBlocks).toContain(
+      `openai-responses:${account.id}`
+    )
+
+    await rateLimitCleanupService.reconcilePersistedQuotaCycles(reconciliation)
+    await rateLimitCleanupService.cleanupOpenAIResponsesAccounts({
+      checked: 0,
+      cleared: 0,
+      errors: []
+    })
+    expect(clearRateLimit).toHaveBeenCalledWith(account.id)
+    expect(rateLimitCleanupService.quotaCycleCleanupBlocks).not.toContain(
+      `openai-responses:${account.id}`
+    )
+  })
+
+  it('blocks a whole provider when quota reconciliation cannot discover its accounts', async () => {
+    const account = {
+      id: 'volcengine-discovery-race',
+      name: 'Volcengine Discovery Race',
+      rateLimitAutoStopped: 'true',
+      rateLimitResetAt: '2026-07-28T01:00:00.000Z',
+      rateLimitStatus: { isRateLimited: true }
+    }
+    jest
+      .spyOn(openaiResponsesAccountService, 'getAllAccounts')
+      .mockRejectedValueOnce(new Error('Redis index unavailable'))
+      .mockResolvedValueOnce([account])
+    jest.spyOn(claudeConsoleAccountService, 'getAllAccounts').mockResolvedValue([])
+    const clearRateLimit = jest
+      .spyOn(openaiResponsesAccountService, 'checkAndClearRateLimit')
+      .mockResolvedValue(true)
+
+    await rateLimitCleanupService.reconcilePersistedQuotaCycles({
+      checked: 0,
+      synced: 0,
+      errors: []
+    })
+    await rateLimitCleanupService.cleanupOpenAIResponsesAccounts({
+      checked: 0,
+      cleared: 0,
+      errors: []
+    })
+
+    expect(rateLimitCleanupService.quotaCycleCleanupBlocks).toContain('openai-responses:*')
+    expect(clearRateLimit).not.toHaveBeenCalled()
   })
 })

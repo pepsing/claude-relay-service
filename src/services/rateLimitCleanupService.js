@@ -10,6 +10,7 @@ const claudeAccountService = require('./account/claudeAccountService')
 const claudeConsoleAccountService = require('./account/claudeConsoleAccountService')
 const unifiedOpenAIScheduler = require('./scheduler/unifiedOpenAIScheduler')
 const webhookService = require('./webhookService')
+const quotaCycleIntegrationService = require('./quotaCycleIntegrationService')
 
 class RateLimitCleanupService {
   constructor() {
@@ -19,6 +20,8 @@ class RateLimitCleanupService {
     this.intervalMs = 5 * 60 * 1000
     // 存储已清理的账户信息，用于发送恢复通知
     this.clearedAccounts = []
+    // 周期补偿失败时，阻止同一轮清理删除唯一的 Redis 补偿凭据
+    this.quotaCycleCleanupBlocks = new Set()
   }
 
   /**
@@ -69,6 +72,7 @@ class RateLimitCleanupService {
 
     try {
       logger.debug('🔍 Starting rate limit cleanup check...')
+      this.quotaCycleCleanupBlocks.clear()
 
       const results = {
         openai: { checked: 0, cleared: 0, errors: [] },
@@ -77,9 +81,14 @@ class RateLimitCleanupService {
         claudeConsole: { checked: 0, cleared: 0, errors: [] },
         kimiBillingCycle: { checked: 0, recovered: 0, errors: [] },
         zhipuCodingQuota: { checked: 0, suspended: 0, recovered: 0, errors: [] },
+        quotaCycleReconciliation: { checked: 0, synced: 0, errors: [] },
+        quotaCycles: { finalized: 0, exported: 0, failed: 0, errors: [] },
         quotaExceeded: { checked: 0, cleared: 0, errors: [] },
         tokenRefresh: { checked: 0, refreshed: 0, errors: [] }
       }
+
+      // 优先根据 Redis 中的持久状态补偿尚未写入 PostgreSQL 的供应商额度事件
+      await this.reconcilePersistedQuotaCycles(results.quotaCycleReconciliation)
 
       // 清理 OpenAI 账号
       await this.cleanupOpenAIAccounts(results.openai)
@@ -98,6 +107,17 @@ class RateLimitCleanupService {
 
       // 检查智谱 Coding Plan 窗口配额并处理自动停调度/恢复
       await this.cleanupZhipuCodingQuota(results.zhipuCodingQuota)
+
+      // 固化已达限周期的实际用量，并将小型汇总事件导出到 Langfuse
+      try {
+        Object.assign(
+          results.quotaCycles,
+          await quotaCycleIntegrationService.processPendingCycles()
+        )
+      } catch (error) {
+        results.quotaCycles.errors.push({ error: error.message })
+        logger.warn(`⚠️ Failed to process quota cycle summaries: ${error.message}`)
+      }
 
       // 清理 Claude Console 配额超限状态
       await this.cleanupClaudeConsoleQuotaExceeded(results.quotaExceeded)
@@ -172,6 +192,8 @@ class RateLimitCleanupService {
         ...results.claudeConsole.errors,
         ...results.kimiBillingCycle.errors,
         ...results.zhipuCodingQuota.errors,
+        ...results.quotaCycleReconciliation.errors,
+        ...results.quotaCycles.errors,
         ...results.quotaExceeded.errors,
         ...results.tokenRefresh.errors
       ]
@@ -184,6 +206,91 @@ class RateLimitCleanupService {
       // 确保无论成功或失败都重置列表，避免重复通知
       this.clearedAccounts = []
       this.isRunning = false
+    }
+  }
+
+  async reconcilePersistedQuotaCycles(result) {
+    const providers = [
+      {
+        accountType: 'claude-console',
+        getAccounts: () => claudeConsoleAccountService.getAllAccounts(),
+        getAccount: (accountId) => claudeConsoleAccountService.getAccount(accountId),
+        clearRecoveryPending: (accountId, expectedPendingAt, expectedPendingStoppedAt) =>
+          claudeConsoleAccountService.clearKimiQuotaCycleRecoveryPending(
+            accountId,
+            expectedPendingAt,
+            expectedPendingStoppedAt
+          )
+      },
+      {
+        accountType: 'openai-responses',
+        getAccounts: () => openaiResponsesAccountService.getAllAccounts(true),
+        getAccount: (accountId) => openaiResponsesAccountService.getAccount(accountId),
+        clearRecoveryPending: (accountId, expectedPendingAt, expectedPendingStoppedAt) =>
+          openaiResponsesAccountService.clearKimiQuotaCycleRecoveryPending(
+            accountId,
+            expectedPendingAt,
+            expectedPendingStoppedAt
+          )
+      }
+    ]
+
+    for (const provider of providers) {
+      const providerBlockKey = `${provider.accountType}:*`
+      this.quotaCycleCleanupBlocks.delete(providerBlockKey)
+      let accounts
+      try {
+        accounts = await provider.getAccounts()
+      } catch (error) {
+        this.quotaCycleCleanupBlocks.add(providerBlockKey)
+        result.errors.push({ accountType: provider.accountType, error: error.message })
+        continue
+      }
+
+      for (const summary of accounts) {
+        const reconciliationKey = `${provider.accountType}:${summary.id}`
+        const resetAt = summary.rateLimitEndAt || summary.rateLimitResetAt
+        const autoStopped =
+          summary.rateLimitAutoStopped === true || summary.rateLimitAutoStopped === 'true'
+        if (
+          !summary.kimiBillingCycleQuotaStoppedAt &&
+          !summary.kimiQuotaCycleRecoveryPendingAt &&
+          !(autoStopped && resetAt)
+        ) {
+          continue
+        }
+
+        result.checked += 1
+        this.quotaCycleCleanupBlocks.delete(reconciliationKey)
+        try {
+          const account = await provider.getAccount(summary.id)
+          if (!account) {
+            throw new Error('Account not found')
+          }
+          const synced = await quotaCycleIntegrationService.reconcilePersistedQuotaState({
+            accountType: provider.accountType,
+            account
+          })
+          if (synced.kimiRecovered) {
+            await provider.clearRecoveryPending(
+              summary.id,
+              account.kimiQuotaCycleRecoveryPendingAt,
+              account.kimiQuotaCycleRecoveryPendingStoppedAt
+            )
+          }
+          if (synced.kimiExceeded || synced.kimiRecovered || synced.volcengineExceeded) {
+            result.synced += 1
+          }
+        } catch (error) {
+          this.quotaCycleCleanupBlocks.add(reconciliationKey)
+          result.errors.push({
+            accountType: provider.accountType,
+            accountId: summary.id,
+            accountName: summary.name,
+            error: error.message
+          })
+        }
+      }
     }
   }
 
@@ -260,6 +367,13 @@ class RateLimitCleanupService {
         }
 
         result.checked += 1
+        if (
+          (this.quotaCycleCleanupBlocks.has('openai-responses:*') ||
+            this.quotaCycleCleanupBlocks.has(`openai-responses:${account.id}`)) &&
+          autoStopped
+        ) {
+          continue
+        }
         try {
           const cleared = await openaiResponsesAccountService.checkAndClearRateLimit(account.id)
           if (cleared) {
@@ -407,6 +521,13 @@ class RateLimitCleanupService {
 
         if (isRateLimited || hasStatusRateLimited || needsAutoStopRecovery) {
           result.checked++
+          if (
+            (this.quotaCycleCleanupBlocks.has('claude-console:*') ||
+              this.quotaCycleCleanupBlocks.has(`claude-console:${account.id}`)) &&
+            autoStopped
+          ) {
+            continue
+          }
 
           try {
             // 使用 claudeConsoleAccountService 的检查方法，它会自动清除过期的限流

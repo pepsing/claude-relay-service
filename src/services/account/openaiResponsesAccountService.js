@@ -12,6 +12,8 @@ const {
   normalizeOpenAIProviderEndpoint
 } = require('../../utils/openaiProviderEndpoint')
 const { normalizeAccountStickySessionMode } = require('../../utils/stickySessionPolicy')
+const quotaCycleIntegrationService = require('../quotaCycleIntegrationService')
+const quotaIdentityService = require('../quotaIdentityService')
 
 class OpenAIResponsesAccountService {
   constructor() {
@@ -434,9 +436,18 @@ class OpenAIResponsesAccountService {
       status: 'quota_exceeded',
       schedulable: 'false',
       errorMessage: 'Kimi Code billing cycle quota exhausted (403), scheduling suspended',
-      kimiBillingCycleQuotaStoppedAt: now,
+      kimiBillingCycleQuotaStoppedAt: account.kimiBillingCycleQuotaStoppedAt || now,
       updatedAt: now
     })
+    await quotaCycleIntegrationService
+      .recordKimiExceeded({
+        accountType: 'openai-responses',
+        account,
+        observedAt: now
+      })
+      .catch((error) => {
+        logger.warn(`⚠️ Failed to record Kimi quota cycle for ${accountId}: ${error.message}`)
+      })
     upstreamErrorHelper
       .recordErrorHistory(accountId, 'openai-responses', 403, 'quota_exceeded')
       .catch(() => {})
@@ -536,7 +547,8 @@ class OpenAIResponsesAccountService {
       }
     }
 
-    const lockKey = `lock:kimi-quota-recovery:openai-responses:${accountId}`
+    const quotaGroupId = quotaIdentityService.buildQuotaGroupId('kimi', account)
+    const lockKey = `lock:kimi-quota-recovery:${quotaGroupId}`
     const lockValue = uuidv4()
     const lockTtlMs = Math.max(60000, timeoutMs + 10000)
     const lockAcquired = await redis.setAccountLock(lockKey, lockValue, lockTtlMs)
@@ -618,6 +630,8 @@ class OpenAIResponsesAccountService {
         status: 'active',
         schedulable: 'true',
         errorMessage: '',
+        kimiQuotaCycleRecoveryPendingAt: recoveredAt,
+        kimiQuotaCycleRecoveryPendingStoppedAt: account.kimiBillingCycleQuotaStoppedAt,
         updatedAt: recoveredAt
       })
       await client.hdel(
@@ -625,6 +639,25 @@ class OpenAIResponsesAccountService {
         'kimiBillingCycleQuotaStoppedAt',
         'kimiBillingCycleQuotaLastCheckedAt'
       )
+      try {
+        await quotaCycleIntegrationService.recordKimiExceeded({
+          accountType: 'openai-responses',
+          account,
+          observedAt: account.kimiBillingCycleQuotaStoppedAt
+        })
+        await quotaCycleIntegrationService.recordKimiRecovered({
+          accountType: 'openai-responses',
+          account,
+          recoveredAt
+        })
+        await client.hdel(
+          accountKey,
+          'kimiQuotaCycleRecoveryPendingAt',
+          'kimiQuotaCycleRecoveryPendingStoppedAt'
+        )
+      } catch (error) {
+        logger.warn(`⚠️ Failed to recover Kimi quota cycle for ${accountId}: ${error.message}`)
+      }
       await upstreamErrorHelper.clearTempUnavailable(accountId, 'openai-responses').catch(() => {})
 
       logger.success(
@@ -639,6 +672,42 @@ class OpenAIResponsesAccountService {
     } finally {
       await redis.releaseAccountLock(lockKey, lockValue)
     }
+  }
+
+  async clearKimiQuotaCycleRecoveryPending(accountId, expectedPendingAt, expectedPendingStoppedAt) {
+    if (!expectedPendingAt) {
+      return false
+    }
+    const client = redis.getClientSafe()
+    const script = `
+      local pending_at = redis.call(
+        'HGET',
+        KEYS[1],
+        'kimiQuotaCycleRecoveryPendingAt'
+      ) or ''
+      local pending_stopped_at = redis.call(
+        'HGET',
+        KEYS[1],
+        'kimiQuotaCycleRecoveryPendingStoppedAt'
+      ) or ''
+      if pending_at ~= ARGV[1] or pending_stopped_at ~= ARGV[2] then
+        return 0
+      end
+      return redis.call(
+        'HDEL',
+        KEYS[1],
+        'kimiQuotaCycleRecoveryPendingAt',
+        'kimiQuotaCycleRecoveryPendingStoppedAt'
+      )
+    `
+    const deleted = await client.eval(
+      script,
+      1,
+      `${this.ACCOUNT_KEY_PREFIX}${accountId}`,
+      String(expectedPendingAt),
+      String(expectedPendingStoppedAt || '')
+    )
+    return Number(deleted) > 0
   }
 
   async markVolcengineArkMonthlyQuotaExceeded(accountId, options = {}) {
@@ -666,6 +735,18 @@ class OpenAIResponsesAccountService {
       updatedAt: now
     }
     await this.updateAccount(accountId, updates)
+    await quotaCycleIntegrationService
+      .recordVolcengineExceeded({
+        accountType: 'openai-responses',
+        account,
+        resetAt,
+        observedAt: now
+      })
+      .catch((error) => {
+        logger.warn(
+          `⚠️ Failed to record Volcengine monthly quota cycle for ${accountId}: ${error.message}`
+        )
+      })
     upstreamErrorHelper
       .recordErrorHistory(accountId, 'openai-responses', 429, 'monthly_quota_exceeded')
       .catch(() => {})
@@ -722,6 +803,7 @@ class OpenAIResponsesAccountService {
       zhipuCodingQuotaNextResetAt: quotaStatus?.nextResetAt || '',
       zhipuCodingQuotaAutoStopped: 'true',
       zhipuCodingQuotaStatus: JSON.stringify(this._compactZhipuQuotaStatus(quotaStatus) || {}),
+      zhipuCodingQuotaStatusObservedAt: now,
       updatedAt: now
     }
     await this.updateAccount(accountId, updates)
@@ -761,6 +843,7 @@ class OpenAIResponsesAccountService {
       zhipuCodingQuotaStatus: quotaStatus
         ? JSON.stringify(this._compactZhipuQuotaStatus(quotaStatus) || {})
         : '',
+      zhipuCodingQuotaStatusObservedAt: '',
       updatedAt: new Date().toISOString()
     }
     if (account.status === 'quota_exceeded') {
@@ -786,12 +869,35 @@ class OpenAIResponsesAccountService {
       return { checked: false, skipped: true, reason: 'not_zhipu_coding_plan' }
     }
 
-    const quotaStatus = await this.fetchZhipuCodingQuota(account)
-    await this._cacheZhipuCodingQuota(accountId, quotaStatus).catch(() => {})
     const autoStopped =
       account.zhipuCodingQuotaAutoStopped === true ||
       account.zhipuCodingQuotaAutoStopped === 'true' ||
       !!account.zhipuCodingQuotaStoppedAt
+    if (autoStopped && account.zhipuCodingQuotaStatus?.exhausted) {
+      await quotaCycleIntegrationService.syncZhipuQuota({
+        accountType: 'openai-responses',
+        account,
+        quotaStatus: account.zhipuCodingQuotaStatus,
+        observedAt:
+          account.zhipuCodingQuotaStatusObservedAt ||
+          account.zhipuCodingQuotaStoppedAt ||
+          new Date()
+      })
+    }
+
+    const quotaStatus = await this.fetchZhipuCodingQuota(account)
+    await this._cacheZhipuCodingQuota(accountId, quotaStatus).catch(() => {})
+    let cycleSyncError = null
+    try {
+      await quotaCycleIntegrationService.syncZhipuQuota({
+        accountType: 'openai-responses',
+        account,
+        quotaStatus
+      })
+    } catch (error) {
+      cycleSyncError = error
+      logger.warn(`⚠️ Failed to sync Zhipu quota cycles for ${accountId}: ${error.message}`)
+    }
 
     if (quotaStatus.exhausted) {
       const result = await this.markZhipuCodingQuotaExceeded(
@@ -799,6 +905,9 @@ class OpenAIResponsesAccountService {
         quotaStatus,
         options.errorDetails || ''
       )
+      if (cycleSyncError) {
+        throw cycleSyncError
+      }
       return {
         checked: true,
         exhausted: true,
@@ -807,6 +916,9 @@ class OpenAIResponsesAccountService {
       }
     }
     if (autoStopped || account.status === 'quota_exceeded') {
+      if (cycleSyncError) {
+        throw cycleSyncError
+      }
       await this.recoverZhipuCodingQuotaExceeded(accountId, quotaStatus)
       return { checked: true, exhausted: false, recovered: true, quotaStatus }
     }
@@ -822,8 +934,8 @@ class OpenAIResponsesAccountService {
       return { handled: false }
     }
 
-    const status = Number(options.status)
-    const errorData = options.errorData
+    const { status: rawStatus, errorData } = options
+    const status = Number(rawStatus)
     if (this.isKimiBillingCycleQuotaError(status, errorData, account)) {
       await this.markKimiBillingCycleQuotaExceeded(accountId, errorData)
       return { handled: true, provider: 'kimi', quotaType: 'billing_cycle' }
@@ -1473,6 +1585,16 @@ class OpenAIResponsesAccountService {
       throw new Error('Account not found')
     }
 
+    let kimiRecovery = null
+    if (account.kimiBillingCycleQuotaStoppedAt && this.isKimiCodingAccount(account)) {
+      kimiRecovery = await this.checkAndRecoverKimiBillingCycleQuota(accountId, {
+        intervalMs: 1,
+        timeoutMs: 10000
+      })
+    }
+    const keepKimiRecoveryMonitoring =
+      Boolean(account.kimiBillingCycleQuotaStoppedAt) && kimiRecovery?.recovered !== true
+
     const updates = {
       // 根据是否有有效的 apiKey 来设置 status
       status: account.apiKey ? 'active' : 'created',
@@ -1486,11 +1608,14 @@ class OpenAIResponsesAccountService {
       rateLimitDuration: '',
       rateLimitAutoStopped: '',
       quotaStoppedAt: '',
-      kimiBillingCycleQuotaStoppedAt: '',
       zhipuCodingQuotaStoppedAt: '',
       zhipuCodingQuotaNextResetAt: '',
       zhipuCodingQuotaAutoStopped: '',
       zhipuCodingQuotaStatus: ''
+    }
+    updates.zhipuCodingQuotaStatusObservedAt = ''
+    if (!keepKimiRecoveryMonitoring) {
+      updates.kimiBillingCycleQuotaStoppedAt = ''
     }
 
     await this.updateAccount(accountId, updates)

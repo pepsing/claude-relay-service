@@ -22,8 +22,19 @@ jest.mock('../src/utils/webhookNotifier', () => ({
   sendAccountAnomalyNotification: jest.fn().mockResolvedValue(undefined)
 }))
 
+jest.mock('../src/services/quotaCycleIntegrationService', () => ({
+  recordKimiExceeded: jest.fn().mockResolvedValue(undefined),
+  recordVolcengineExceeded: jest.fn().mockResolvedValue(undefined),
+  syncZhipuQuota: jest.fn().mockResolvedValue(undefined)
+}))
+
+jest.mock('../src/services/quotaIdentityService', () => ({
+  buildQuotaGroupId: jest.fn(() => 'qg-provider-shared')
+}))
+
 const axios = require('axios')
 const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
+const quotaCycleIntegrationService = require('../src/services/quotaCycleIntegrationService')
 
 jest.mock('axios')
 
@@ -67,6 +78,12 @@ describe('OpenAI Responses provider subscription quota protection', () => {
         kimiBillingCycleQuotaStoppedAt: expect.any(String)
       })
     )
+    expect(quotaCycleIntegrationService.recordKimiExceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountType: 'openai-responses',
+        account
+      })
+    )
   })
 
   it('suspends Volcengine Chat Completions accounts until the monthly reset time', async () => {
@@ -102,6 +119,13 @@ describe('OpenAI Responses provider subscription quota protection', () => {
         schedulable: 'false',
         rateLimitResetAt: '2026-07-31T15:59:59.000Z',
         rateLimitAutoStopped: 'true'
+      })
+    )
+    expect(quotaCycleIntegrationService.recordVolcengineExceeded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountType: 'openai-responses',
+        account,
+        resetAt: new Date('2026-07-31T15:59:59.000Z')
       })
     )
   })
@@ -153,6 +177,89 @@ describe('OpenAI Responses provider subscription quota protection', () => {
       account.id,
       expect.objectContaining({ status: 'quota_exceeded', schedulable: 'false' })
     )
+    expect(quotaCycleIntegrationService.syncZhipuQuota).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountType: 'openai-responses',
+        account,
+        quotaStatus: expect.objectContaining({ exhausted: true })
+      })
+    )
+  })
+
+  it('replays a persisted exhausted Zhipu snapshot before allowing account recovery', async () => {
+    const persistedQuotaStatus = {
+      exhausted: true,
+      buckets: [
+        {
+          type: 'TOKENS_LIMIT',
+          windowType: 'five_hour',
+          percentage: 100,
+          remaining: 0,
+          resetAt: '2026-07-28T05:00:00.000Z'
+        }
+      ]
+    }
+    const healthyQuotaStatus = {
+      exhausted: false,
+      buckets: [
+        {
+          type: 'TOKENS_LIMIT',
+          windowType: 'five_hour',
+          percentage: 10,
+          remaining: 90,
+          resetAt: '2026-07-28T10:00:00.000Z'
+        }
+      ],
+      quota: { buckets: [] }
+    }
+    const account = {
+      id: 'zhipu-recovery-outbox',
+      name: 'zhipu-recovery-outbox',
+      baseApi: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      apiKey: 'test-key',
+      zhipuCodingQuotaAutoStopped: true,
+      zhipuCodingQuotaStoppedAt: '2026-07-28T01:00:00.000Z',
+      zhipuCodingQuotaStatusObservedAt: '2026-07-28T02:00:00.000Z',
+      zhipuCodingQuotaStatus: persistedQuotaStatus
+    }
+    jest.spyOn(openaiResponsesAccountService, 'getAccount').mockResolvedValue(account)
+    const fetchQuota = jest
+      .spyOn(openaiResponsesAccountService, 'fetchZhipuCodingQuota')
+      .mockResolvedValue(healthyQuotaStatus)
+    const recover = jest
+      .spyOn(openaiResponsesAccountService, 'recoverZhipuCodingQuotaExceeded')
+      .mockResolvedValue({ success: true })
+    quotaCycleIntegrationService.syncZhipuQuota
+      .mockRejectedValueOnce(new Error('PostgreSQL unavailable'))
+      .mockResolvedValue(undefined)
+
+    await expect(
+      openaiResponsesAccountService.refreshZhipuCodingQuotaProtection(account.id)
+    ).rejects.toThrow('PostgreSQL unavailable')
+    expect(fetchQuota).not.toHaveBeenCalled()
+    expect(recover).not.toHaveBeenCalled()
+
+    await expect(
+      openaiResponsesAccountService.refreshZhipuCodingQuotaProtection(account.id)
+    ).resolves.toEqual(
+      expect.objectContaining({ checked: true, exhausted: false, recovered: true })
+    )
+    expect(quotaCycleIntegrationService.syncZhipuQuota).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        account,
+        quotaStatus: persistedQuotaStatus,
+        observedAt: account.zhipuCodingQuotaStatusObservedAt
+      })
+    )
+    expect(quotaCycleIntegrationService.syncZhipuQuota).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        account,
+        quotaStatus: healthyQuotaStatus
+      })
+    )
+    expect(recover).toHaveBeenCalledWith(account.id, healthyQuotaStatus)
   })
 
   it('automatically restores a Volcengine account after its reset time', async () => {

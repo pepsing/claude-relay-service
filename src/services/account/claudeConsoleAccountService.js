@@ -8,6 +8,8 @@ const config = require('../../../config/config')
 const LRUCache = require('../../utils/lruCache')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const { normalizeAccountStickySessionMode } = require('../../utils/stickySessionPolicy')
+const quotaCycleIntegrationService = require('../quotaCycleIntegrationService')
+const quotaIdentityService = require('../quotaIdentityService')
 
 class ClaudeConsoleAccountService {
   constructor() {
@@ -553,6 +555,9 @@ class ClaudeConsoleAccountService {
             status: accountData.status || 'active',
             errorMessage: accountData.errorMessage,
             kimiBillingCycleQuotaStoppedAt: accountData.kimiBillingCycleQuotaStoppedAt || null,
+            kimiQuotaCycleRecoveryPendingAt: accountData.kimiQuotaCycleRecoveryPendingAt || null,
+            kimiQuotaCycleRecoveryPendingStoppedAt:
+              accountData.kimiQuotaCycleRecoveryPendingStoppedAt || null,
             rateLimitedAt: accountData.rateLimitedAt || null,
             rateLimitStatus: accountData.rateLimitStatus || '',
             rateLimitEndAt: accountData.rateLimitEndAt || null,
@@ -574,6 +579,7 @@ class ClaudeConsoleAccountService {
             zhipuCodingQuotaNextResetAt: accountData.zhipuCodingQuotaNextResetAt || null,
             zhipuCodingQuotaAutoStopped: accountData.zhipuCodingQuotaAutoStopped === 'true',
             zhipuCodingQuotaStatus: this._parseOptionalJson(accountData.zhipuCodingQuotaStatus),
+            zhipuCodingQuotaStatusObservedAt: accountData.zhipuCodingQuotaStatusObservedAt || null,
 
             // 并发控制相关
             maxConcurrentTasks: parseInt(accountData.maxConcurrentTasks) || 0,
@@ -970,11 +976,20 @@ class ClaudeConsoleAccountService {
         status: 'quota_exceeded',
         schedulable: 'false',
         errorMessage: 'Kimi Code billing cycle quota exhausted (403), scheduling suspended',
-        kimiBillingCycleQuotaStoppedAt: now,
+        kimiBillingCycleQuotaStoppedAt: account.kimiBillingCycleQuotaStoppedAt || now,
         updatedAt: now
       }
 
       await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updates)
+      await quotaCycleIntegrationService
+        .recordKimiExceeded({
+          accountType: 'claude-console',
+          account,
+          observedAt: now
+        })
+        .catch((error) => {
+          logger.warn(`⚠️ Failed to record Kimi quota cycle for ${accountId}: ${error.message}`)
+        })
       upstreamErrorHelper
         .recordErrorHistory(accountId, 'claude-console', 403, 'quota_exceeded')
         .catch(() => {})
@@ -1109,7 +1124,8 @@ class ClaudeConsoleAccountService {
       }
     }
 
-    const lockKey = `lock:kimi-quota-recovery:claude-console:${accountId}`
+    const quotaGroupId = quotaIdentityService.buildQuotaGroupId('kimi', account)
+    const lockKey = `lock:kimi-quota-recovery:${quotaGroupId}`
     const lockValue = uuidv4()
     const lockTtlMs = Math.max(60000, timeoutMs + 10000)
     const lockAcquired = await redis.setAccountLock(lockKey, lockValue, lockTtlMs)
@@ -1195,6 +1211,8 @@ class ClaudeConsoleAccountService {
         status: 'active',
         schedulable: 'true',
         errorMessage: '',
+        kimiQuotaCycleRecoveryPendingAt: recoveredAt,
+        kimiQuotaCycleRecoveryPendingStoppedAt: account.kimiBillingCycleQuotaStoppedAt,
         updatedAt: recoveredAt
       })
       await client.hdel(
@@ -1202,6 +1220,25 @@ class ClaudeConsoleAccountService {
         'kimiBillingCycleQuotaStoppedAt',
         'kimiBillingCycleQuotaLastCheckedAt'
       )
+      try {
+        await quotaCycleIntegrationService.recordKimiExceeded({
+          accountType: 'claude-console',
+          account,
+          observedAt: account.kimiBillingCycleQuotaStoppedAt
+        })
+        await quotaCycleIntegrationService.recordKimiRecovered({
+          accountType: 'claude-console',
+          account,
+          recoveredAt
+        })
+        await client.hdel(
+          accountKey,
+          'kimiQuotaCycleRecoveryPendingAt',
+          'kimiQuotaCycleRecoveryPendingStoppedAt'
+        )
+      } catch (error) {
+        logger.warn(`⚠️ Failed to recover Kimi quota cycle for ${accountId}: ${error.message}`)
+      }
       await upstreamErrorHelper.clearTempUnavailable(accountId, 'claude-console').catch(() => {})
 
       logger.success(
@@ -1216,6 +1253,42 @@ class ClaudeConsoleAccountService {
     } finally {
       await redis.releaseAccountLock(lockKey, lockValue)
     }
+  }
+
+  async clearKimiQuotaCycleRecoveryPending(accountId, expectedPendingAt, expectedPendingStoppedAt) {
+    if (!expectedPendingAt) {
+      return false
+    }
+    const client = redis.getClientSafe()
+    const script = `
+      local pending_at = redis.call(
+        'HGET',
+        KEYS[1],
+        'kimiQuotaCycleRecoveryPendingAt'
+      ) or ''
+      local pending_stopped_at = redis.call(
+        'HGET',
+        KEYS[1],
+        'kimiQuotaCycleRecoveryPendingStoppedAt'
+      ) or ''
+      if pending_at ~= ARGV[1] or pending_stopped_at ~= ARGV[2] then
+        return 0
+      end
+      return redis.call(
+        'HDEL',
+        KEYS[1],
+        'kimiQuotaCycleRecoveryPendingAt',
+        'kimiQuotaCycleRecoveryPendingStoppedAt'
+      )
+    `
+    const deleted = await client.eval(
+      script,
+      1,
+      `${this.ACCOUNT_KEY_PREFIX}${accountId}`,
+      String(expectedPendingAt),
+      String(expectedPendingStoppedAt || '')
+    )
+    return Number(deleted) > 0
   }
 
   async markVolcengineArkMonthlyQuotaExceeded(accountId, options = {}) {
@@ -1248,6 +1321,18 @@ class ClaudeConsoleAccountService {
       }
 
       await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updates)
+      await quotaCycleIntegrationService
+        .recordVolcengineExceeded({
+          accountType: 'claude-console',
+          account,
+          resetAt,
+          observedAt: now
+        })
+        .catch((error) => {
+          logger.warn(
+            `⚠️ Failed to record Volcengine monthly quota cycle for ${accountId}: ${error.message}`
+          )
+        })
       upstreamErrorHelper
         .recordErrorHistory(accountId, 'claude-console', 429, 'monthly_quota_exceeded')
         .catch(() => {})
@@ -1337,6 +1422,7 @@ class ClaudeConsoleAccountService {
         zhipuCodingQuotaNextResetAt: quotaStatus?.nextResetAt || '',
         zhipuCodingQuotaAutoStopped: 'true',
         zhipuCodingQuotaStatus: JSON.stringify(compactStatus || {}),
+        zhipuCodingQuotaStatusObservedAt: now,
         updatedAt: now
       }
 
@@ -1386,6 +1472,7 @@ class ClaudeConsoleAccountService {
         zhipuCodingQuotaStatus: quotaStatus
           ? JSON.stringify(this._compactZhipuQuotaStatus(quotaStatus) || {})
           : '',
+        zhipuCodingQuotaStatusObservedAt: '',
         updatedAt: new Date().toISOString()
       }
 
@@ -1423,13 +1510,35 @@ class ClaudeConsoleAccountService {
       return { checked: false, skipped: true, reason: 'not_zhipu_coding_plan' }
     }
 
-    const quotaStatus = await this.fetchZhipuCodingQuota(account)
-    await this._cacheZhipuCodingQuota(accountId, quotaStatus).catch(() => {})
-
     const autoStopped =
       account.zhipuCodingQuotaAutoStopped === true ||
       account.zhipuCodingQuotaAutoStopped === 'true' ||
       !!account.zhipuCodingQuotaStoppedAt
+    if (autoStopped && account.zhipuCodingQuotaStatus?.exhausted) {
+      await quotaCycleIntegrationService.syncZhipuQuota({
+        accountType: 'claude-console',
+        account,
+        quotaStatus: account.zhipuCodingQuotaStatus,
+        observedAt:
+          account.zhipuCodingQuotaStatusObservedAt ||
+          account.zhipuCodingQuotaStoppedAt ||
+          new Date()
+      })
+    }
+
+    const quotaStatus = await this.fetchZhipuCodingQuota(account)
+    await this._cacheZhipuCodingQuota(accountId, quotaStatus).catch(() => {})
+    let cycleSyncError = null
+    try {
+      await quotaCycleIntegrationService.syncZhipuQuota({
+        accountType: 'claude-console',
+        account,
+        quotaStatus
+      })
+    } catch (error) {
+      cycleSyncError = error
+      logger.warn(`⚠️ Failed to sync Zhipu quota cycles for ${accountId}: ${error.message}`)
+    }
 
     if (quotaStatus.exhausted) {
       const result = await this.markZhipuCodingQuotaExceeded(
@@ -1437,6 +1546,9 @@ class ClaudeConsoleAccountService {
         quotaStatus,
         options.errorDetails || ''
       )
+      if (cycleSyncError) {
+        throw cycleSyncError
+      }
       return {
         checked: true,
         exhausted: true,
@@ -1446,6 +1558,9 @@ class ClaudeConsoleAccountService {
     }
 
     if (autoStopped || account.status === 'quota_exceeded') {
+      if (cycleSyncError) {
+        throw cycleSyncError
+      }
       await this.recoverZhipuCodingQuotaExceeded(accountId, quotaStatus)
       return { checked: true, exhausted: false, recovered: true, quotaStatus }
     }
@@ -2506,6 +2621,16 @@ class ClaudeConsoleAccountService {
         throw new Error('Account not found')
       }
 
+      let kimiRecovery = null
+      if (accountData.kimiBillingCycleQuotaStoppedAt && this._isKimiCodingAccount(accountData)) {
+        kimiRecovery = await this.checkAndRecoverKimiBillingCycleQuota(accountId, {
+          intervalMs: 1,
+          timeoutMs: 10000
+        })
+      }
+      const keepKimiRecoveryMonitoring =
+        Boolean(accountData.kimiBillingCycleQuotaStoppedAt) && kimiRecovery?.recovered !== true
+
       const client = redis.getClientSafe()
       const accountKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
 
@@ -2529,12 +2654,15 @@ class ClaudeConsoleAccountService {
         'overloadStatus',
         'blockedAt',
         'quotaStoppedAt',
-        'kimiBillingCycleQuotaStoppedAt',
         'zhipuCodingQuotaStoppedAt',
         'zhipuCodingQuotaNextResetAt',
         'zhipuCodingQuotaAutoStopped',
-        'zhipuCodingQuotaStatus'
+        'zhipuCodingQuotaStatus',
+        'zhipuCodingQuotaStatusObservedAt'
       ]
+      if (!keepKimiRecoveryMonitoring) {
+        fieldsToDelete.push('kimiBillingCycleQuotaStoppedAt')
+      }
 
       // 执行更新
       await client.hset(accountKey, updates)

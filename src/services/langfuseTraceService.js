@@ -1,4 +1,5 @@
 const axios = require('axios')
+const crypto = require('crypto')
 const config = require('../../config/config')
 const logger = require('../utils/logger')
 const metadataUserIdHelper = require('../utils/metadataUserIdHelper')
@@ -278,6 +279,368 @@ function buildTracePayload(detail = {}, runtimeConfig = {}) {
   }
 }
 
+function buildDeterministicId(prefix, ...parts) {
+  const digest = crypto
+    .createHash('sha256')
+    .update(parts.map((part) => String(part ?? '')).join('\u0000'))
+    .digest('hex')
+    .slice(0, 32)
+
+  return `${prefix}-${digest}`
+}
+
+function buildQuotaCycleTraceId(cycleId) {
+  return buildDeterministicId('quota-cycle', cycleId)
+}
+
+function buildQuotaCycleGenerationId(cycleId, model) {
+  return buildDeterministicId('quota-model', cycleId, model)
+}
+
+function firstDefinedNumber(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') {
+      return toFiniteNumber(value)
+    }
+  }
+  return 0
+}
+
+function normalizeQuotaCycleModelEntry(entry = {}, fallbackModel = null) {
+  const source = entry && typeof entry === 'object' ? entry : {}
+  const model = firstNonEmpty(source.model, source.modelName, source.name, fallbackModel, 'unknown')
+  const inputTokens = firstDefinedNumber(source.inputTokens, source.input, source.input_tokens)
+  const outputTokens = firstDefinedNumber(source.outputTokens, source.output, source.output_tokens)
+  const cacheReadTokens = firstDefinedNumber(
+    source.cacheReadTokens,
+    source.cacheRead,
+    source.cache_read_input,
+    source.cache_read_tokens
+  )
+  const cacheCreateTokens = firstDefinedNumber(
+    source.cacheCreateTokens,
+    source.cacheCreate,
+    source.cacheWriteTokens,
+    source.cacheWrite,
+    source.cache_creation_input,
+    source.cache_create_tokens
+  )
+  const totalTokens =
+    firstDefinedNumber(source.totalTokens, source.total, source.total_tokens) ||
+    inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens
+  const costSource = source.realCostBreakdown || source.costBreakdown || {}
+  const cost = firstDefinedNumber(source.realCost, source.cost, source.totalCost, costSource.total)
+
+  return {
+    model,
+    requests: firstDefinedNumber(
+      source.requests,
+      source.requestCount,
+      source.callCount,
+      source.calls
+    ),
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreateTokens,
+    totalTokens,
+    cost,
+    costBreakdown: {
+      input: firstDefinedNumber(costSource.input),
+      output: firstDefinedNumber(costSource.output),
+      cacheRead: firstDefinedNumber(costSource.cacheRead, costSource.cache_read_input),
+      cacheCreate: firstDefinedNumber(
+        costSource.cacheCreate,
+        costSource.cacheWrite,
+        costSource.cache_creation_input
+      ),
+      total: cost
+    }
+  }
+}
+
+function toQuotaCycleModelEntries(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeQuotaCycleModelEntry(entry))
+  }
+
+  if (value instanceof Map) {
+    return Array.from(value.entries()).map(([model, entry]) =>
+      normalizeQuotaCycleModelEntry(entry, model)
+    )
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.entries(value).map(([model, entry]) =>
+      normalizeQuotaCycleModelEntry(entry, model)
+    )
+  }
+
+  return []
+}
+
+function addQuotaCycleModelTotals(target, source) {
+  target.requests += source.requests
+  target.inputTokens += source.inputTokens
+  target.outputTokens += source.outputTokens
+  target.cacheReadTokens += source.cacheReadTokens
+  target.cacheCreateTokens += source.cacheCreateTokens
+  target.totalTokens += source.totalTokens
+  target.cost += source.cost
+  target.costBreakdown.input += source.costBreakdown.input
+  target.costBreakdown.output += source.costBreakdown.output
+  target.costBreakdown.cacheRead += source.costBreakdown.cacheRead
+  target.costBreakdown.cacheCreate += source.costBreakdown.cacheCreate
+  target.costBreakdown.total += source.costBreakdown.total
+}
+
+function normalizeQuotaCycleModels(summary = {}) {
+  const candidates = [summary.models, summary.usageSummary?.models, summary.usageSummary?.byModel]
+  let entries = []
+
+  for (const candidate of candidates) {
+    entries = toQuotaCycleModelEntries(candidate)
+    if (entries.length > 0) {
+      break
+    }
+  }
+
+  const models = new Map()
+  for (const entry of entries) {
+    if (!models.has(entry.model)) {
+      models.set(
+        entry.model,
+        normalizeQuotaCycleModelEntry({
+          model: entry.model
+        })
+      )
+    }
+    addQuotaCycleModelTotals(models.get(entry.model), entry)
+  }
+
+  return Array.from(models.values()).sort((left, right) => left.model.localeCompare(right.model))
+}
+
+function buildQuotaCycleUsageDetails(modelUsage = {}) {
+  const input = toFiniteNumber(modelUsage.inputTokens)
+  const output = toFiniteNumber(modelUsage.outputTokens)
+  const cacheRead = toFiniteNumber(modelUsage.cacheReadTokens)
+  const cacheCreate = toFiniteNumber(modelUsage.cacheCreateTokens)
+  const cache = cacheRead + cacheCreate
+  const total = toFiniteNumber(modelUsage.totalTokens) || input + output + cache
+
+  return {
+    input,
+    output,
+    cache,
+    cache_read_input: cacheRead,
+    cache_creation_input: cacheCreate,
+    total,
+    requests: toFiniteNumber(modelUsage.requests)
+  }
+}
+
+function buildQuotaCycleTotals(summary = {}, models = []) {
+  const calculated = normalizeQuotaCycleModelEntry({
+    model: 'all'
+  })
+  for (const model of models) {
+    addQuotaCycleModelTotals(calculated, model)
+  }
+
+  const provided = summary.usageSummary?.totals || summary.usageSummary || summary.totals
+  if (!provided || typeof provided !== 'object') {
+    return calculated
+  }
+
+  const normalizedProvided = normalizeQuotaCycleModelEntry(provided, 'all')
+  return {
+    ...calculated,
+    requests: normalizedProvided.requests || calculated.requests,
+    inputTokens: normalizedProvided.inputTokens || calculated.inputTokens,
+    outputTokens: normalizedProvided.outputTokens || calculated.outputTokens,
+    cacheReadTokens: normalizedProvided.cacheReadTokens || calculated.cacheReadTokens,
+    cacheCreateTokens: normalizedProvided.cacheCreateTokens || calculated.cacheCreateTokens,
+    totalTokens: normalizedProvided.totalTokens || calculated.totalTokens,
+    cost: normalizedProvided.cost || calculated.cost
+  }
+}
+
+function buildQuotaCycleProviderSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return undefined
+  }
+
+  const normalized = cleanObject({
+    windowType: snapshot.windowType,
+    label: snapshot.label,
+    percentage: snapshot.percentage,
+    total: snapshot.total,
+    used: snapshot.used,
+    remaining: snapshot.remaining,
+    resetAt: toIsoString(snapshot.resetAt),
+    unit: snapshot.unit,
+    number: snapshot.number,
+    exhausted: snapshot.exhausted,
+    accountDiscoveryIncomplete: snapshot.accountDiscoveryIncomplete
+  })
+
+  if (Array.isArray(snapshot.buckets)) {
+    normalized.buckets = snapshot.buckets
+      .map((bucket) => buildQuotaCycleProviderSnapshot(bucket))
+      .filter(Boolean)
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined
+}
+
+function buildQuotaCycleAccountRefs(accountRefs) {
+  if (!Array.isArray(accountRefs)) {
+    return undefined
+  }
+
+  return accountRefs.map((account) =>
+    cleanObject({
+      accountId: account?.accountId || account?.id,
+      accountName: account?.accountName || account?.name,
+      accountType: account?.accountType || account?.type
+    })
+  )
+}
+
+function buildQuotaCycleMetadata(summary = {}, runtimeConfig = {}, models = []) {
+  const cycleId = firstNonEmpty(summary.cycleId, summary.id)
+  const provider = firstNonEmpty(summary.provider, 'unknown')
+  const windowType = firstNonEmpty(summary.windowType, summary.window_type, 'unknown')
+  const completeness = firstNonEmpty(
+    summary.completeness,
+    summary.isPartial === true ? 'partial' : 'complete'
+  )
+  const totals = buildQuotaCycleTotals(summary, models)
+
+  return cleanObject({
+    source: 'claude-relay-service',
+    eventType: 'quota-cycle-summary',
+    environment: runtimeConfig.environment,
+    cycleId,
+    quotaGroupId: summary.quotaGroupId,
+    provider,
+    windowType,
+    completeness,
+    status: summary.status,
+    boundarySource: summary.boundarySource,
+    windowStartAt: toIsoString(summary.windowStartAt),
+    firstExceededAt: toIsoString(summary.firstExceededAt),
+    lastExceededAt: toIsoString(summary.lastExceededAt),
+    resetAt: toIsoString(summary.resetAt),
+    recoveredAt: toIsoString(summary.recoveredAt),
+    requests: totals.requests,
+    inputTokens: totals.inputTokens,
+    outputTokens: totals.outputTokens,
+    cacheReadTokens: totals.cacheReadTokens,
+    cacheCreateTokens: totals.cacheCreateTokens,
+    totalTokens: totals.totalTokens,
+    cost: totals.cost,
+    usageSource: summary.usageSummary?.source,
+    usageSemantics: summary.usageSummary?.semantics,
+    observedFromAt: toIsoString(summary.usageSummary?.observedFromAt),
+    observedThroughAt: toIsoString(summary.usageSummary?.observedThroughAt),
+    accountRefs: buildQuotaCycleAccountRefs(summary.accountRefs || summary.accounts),
+    providerSnapshot: buildQuotaCycleProviderSnapshot(
+      summary.providerSnapshot || summary.quotaSnapshot
+    )
+  })
+}
+
+function buildQuotaCycleTags(summary = {}, runtimeConfig = {}) {
+  const cycleId = firstNonEmpty(summary.cycleId, summary.id)
+  const provider = firstNonEmpty(summary.provider, 'unknown')
+  const windowType = firstNonEmpty(summary.windowType, summary.window_type, 'unknown')
+  const completeness = firstNonEmpty(
+    summary.completeness,
+    summary.isPartial === true ? 'partial' : 'complete'
+  )
+
+  return [
+    'crs',
+    'quota-cycle',
+    'quota-cycle-summary',
+    runtimeConfig.environment,
+    buildScopedTag('cycle', cycleId),
+    buildScopedTag('provider', provider),
+    buildScopedTag('quota-window', windowType),
+    buildScopedTag('quota-completeness', completeness)
+  ].filter(Boolean)
+}
+
+function buildQuotaCycleSummaryPayload(summary = {}, runtimeConfig = {}) {
+  const cycleId = firstNonEmpty(summary.cycleId, summary.id)
+  if (!cycleId) {
+    throw new Error('cycleId is required for Langfuse quota cycle summaries')
+  }
+
+  const traceId = buildQuotaCycleTraceId(cycleId)
+  const models = normalizeQuotaCycleModels(summary)
+  const timestamp = toIsoString(
+    summary.firstExceededAt || summary.timestamp,
+    new Date().toISOString()
+  )
+  const startTime = toIsoString(summary.windowStartAt, timestamp)
+  const endTime = toIsoString(summary.firstExceededAt, timestamp)
+  const metadata = buildQuotaCycleMetadata(summary, runtimeConfig, models)
+  const tags = buildQuotaCycleTags(summary, runtimeConfig)
+  const traceEvent = {
+    id: `${traceId}-trace-create`,
+    timestamp,
+    type: 'trace-create',
+    body: cleanObject({
+      id: traceId,
+      name: 'quota-cycle-summary',
+      sessionId: summary.quotaGroupId,
+      metadata,
+      tags
+    })
+  }
+  const generationEvents = models.map((modelUsage) => {
+    const generationId = buildQuotaCycleGenerationId(cycleId, modelUsage.model)
+
+    return {
+      id: `${generationId}-generation-create`,
+      timestamp,
+      type: 'generation-create',
+      body: cleanObject({
+        id: generationId,
+        traceId,
+        name: 'quota-cycle-model-usage',
+        startTime,
+        endTime,
+        model: modelUsage.model,
+        usage: buildUsage(modelUsage),
+        usageDetails: buildQuotaCycleUsageDetails(modelUsage),
+        costDetails: buildCostDetails(modelUsage),
+        metadata: {
+          ...metadata,
+          model: modelUsage.model,
+          requests: modelUsage.requests,
+          inputTokens: modelUsage.inputTokens,
+          outputTokens: modelUsage.outputTokens,
+          cacheReadTokens: modelUsage.cacheReadTokens,
+          cacheCreateTokens: modelUsage.cacheCreateTokens,
+          totalTokens: modelUsage.totalTokens,
+          cost: modelUsage.cost
+        }
+      })
+    }
+  })
+
+  return {
+    traceId,
+    payload: {
+      batch: [traceEvent, ...generationEvents]
+    }
+  }
+}
+
 class LangfuseTraceService {
   isEnabled() {
     const runtimeConfig = getRuntimeConfig()
@@ -323,6 +686,56 @@ class LangfuseTraceService {
 
     return { captured: true, requestId: detail.requestId }
   }
+
+  async captureQuotaCycleSummary(summary = {}) {
+    const runtimeConfig = getRuntimeConfig()
+    const cycleId = firstNonEmpty(summary.cycleId, summary.id)
+    const traceId = cycleId ? buildQuotaCycleTraceId(cycleId) : undefined
+
+    if (
+      !runtimeConfig.enabled ||
+      !runtimeConfig.baseUrl ||
+      !runtimeConfig.publicKey ||
+      !runtimeConfig.secretKey
+    ) {
+      return { captured: false, reason: 'disabled', cycleId, traceId }
+    }
+
+    if (!cycleId) {
+      return { captured: false, reason: 'missing_cycle_id' }
+    }
+
+    const built = buildQuotaCycleSummaryPayload(summary, runtimeConfig)
+    const response = await axios.post(
+      `${runtimeConfig.baseUrl}/api/public/ingestion`,
+      built.payload,
+      {
+        auth: {
+          username: runtimeConfig.publicKey,
+          password: runtimeConfig.secretKey
+        },
+        timeout: runtimeConfig.timeoutMs,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }
+    )
+
+    const errors = Array.isArray(response.data?.errors) ? response.data.errors : []
+    if (errors.length > 0) {
+      logger.warn(
+        `⚠️ Langfuse ingestion returned ${errors.length} error(s) for quota cycle ${cycleId}`
+      )
+      return {
+        captured: false,
+        reason: 'langfuse_errors',
+        cycleId,
+        traceId: built.traceId
+      }
+    }
+
+    return { captured: true, cycleId, traceId: built.traceId }
+  }
 }
 
 module.exports = new LangfuseTraceService()
@@ -330,5 +743,9 @@ module.exports._private = {
   buildTracePayload,
   buildUsageDetails,
   buildCostDetails,
+  buildQuotaCycleSummaryPayload,
+  buildQuotaCycleTraceId,
+  buildQuotaCycleGenerationId,
+  normalizeQuotaCycleModels,
   getRuntimeConfig
 }

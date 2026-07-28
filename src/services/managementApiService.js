@@ -249,7 +249,7 @@ class ManagementApiService {
         }
       }),
       stats: {
-        operations: ['summary', 'api-key', 'account']
+        operations: ['summary', 'api-key', 'account', 'quota-cycles']
       },
       auditLogs: {
         operations: ['list', 'get'],

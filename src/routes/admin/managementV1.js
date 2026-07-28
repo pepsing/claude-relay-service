@@ -2,6 +2,7 @@ const express = require('express')
 const { authenticateAdmin } = require('../../middleware/auth')
 const adminAuditService = require('../../services/adminAuditService')
 const managementApiService = require('../../services/managementApiService')
+const quotaCycleService = require('../../services/quotaCycleService')
 
 const SENSITIVE_RESPONSE_FIELDS = new Set([
   'accesstoken',
@@ -284,6 +285,7 @@ function createManagementV1Router(options = {}) {
   const router = express.Router()
   const service = options.service || managementApiService
   const auditService = options.auditService || adminAuditService
+  const cycles = options.quotaCycleService || quotaCycleService
   const authenticate = options.authenticate || authenticateAdmin
   const legacyRouters = options.legacyRouters || loadDefaultLegacyRouters()
 
@@ -437,6 +439,39 @@ function createManagementV1Router(options = {}) {
       { sanitize: true }
     )
   )
+  router.get('/stats/quota-cycles', authenticate, async (req, res, next) => {
+    try {
+      const data = await cycles.listCycles({
+        quotaGroupId: req.query.quotaGroupId,
+        provider: req.query.provider,
+        windowType: req.query.windowType,
+        status: req.query.status,
+        exportStatus: req.query.exportStatus,
+        accountId: req.query.accountId,
+        from: req.query.from,
+        to: req.query.to,
+        page: req.query.page,
+        pageSize: req.query.pageSize
+      })
+      return res.json(normalizeSuccessPayload({ success: true, data }))
+    } catch (error) {
+      return next(error)
+    }
+  })
+  router.get('/stats/quota-cycles/:cycleId', authenticate, async (req, res, next) => {
+    try {
+      const cycle = await cycles.getCycle(req.params.cycleId)
+      if (!cycle) {
+        throw Object.assign(new Error('Quota cycle not found'), {
+          code: 'QUOTA_CYCLE_NOT_FOUND',
+          status: 404
+        })
+      }
+      return res.json(normalizeSuccessPayload({ success: true, data: cycle }))
+    } catch (error) {
+      return next(error)
+    }
+  })
   router.get('/stats/accounts/:accountType/:accountId', authenticate, (req, res, next) => {
     try {
       const definition = service.getAccountDefinition(req.params.accountType)

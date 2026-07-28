@@ -85,6 +85,7 @@ function createLegacyRouters() {
 describe('management v1 routes', () => {
   let app
   let auditService
+  let quotaCycleService
 
   beforeEach(() => {
     const service = new ManagementApiService({
@@ -120,6 +121,24 @@ describe('management v1 routes', () => {
         .fn()
         .mockResolvedValueOnce({ id: '1', action: 'account.update', result: 'success' })
     }
+    quotaCycleService = {
+      listCycles: jest.fn().mockResolvedValue({
+        items: [
+          {
+            cycleId: 'quota-1',
+            provider: 'zhipu',
+            windowType: 'weekly',
+            usageSummary: { totals: { requests: 12, totalTokens: 3456 } }
+          }
+        ],
+        pagination: { page: 1, pageSize: 20, total: 1, totalPages: 1 }
+      }),
+      getCycle: jest.fn().mockResolvedValue({
+        cycleId: 'quota-1',
+        provider: 'zhipu',
+        windowType: 'weekly'
+      })
+    }
 
     app = express()
     app.use(express.json())
@@ -128,6 +147,7 @@ describe('management v1 routes', () => {
       createManagementV1Router({
         service,
         auditService,
+        quotaCycleService,
         legacyRouters: createLegacyRouters()
       })
     )
@@ -232,6 +252,26 @@ describe('management v1 routes', () => {
     )
     expect(getResponse.status).toBe(200)
     expect(getResponse.body.data.id).toBe('1')
+  })
+
+  test('lists and retrieves quota cycle usage summaries', async () => {
+    const listResponse = await request(app).get(
+      '/admin/management/v1/stats/quota-cycles?provider=zhipu&windowType=weekly&page=1&pageSize=20'
+    )
+    const getResponse = await request(app).get('/admin/management/v1/stats/quota-cycles/quota-1')
+
+    expect(listResponse.status).toBe(200)
+    expect(listResponse.body.data.items[0].usageSummary.totals.totalTokens).toBe(3456)
+    expect(quotaCycleService.listCycles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'zhipu',
+        windowType: 'weekly',
+        page: '1',
+        pageSize: '20'
+      })
+    )
+    expect(getResponse.status).toBe(200)
+    expect(getResponse.body.data.cycleId).toBe('quota-1')
   })
 
   test('returns a stable not-found error for an unknown audit record', async () => {
