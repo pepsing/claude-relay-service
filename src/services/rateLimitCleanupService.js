@@ -75,6 +75,7 @@ class RateLimitCleanupService {
         openaiResponses: { checked: 0, cleared: 0, errors: [] },
         claude: { checked: 0, cleared: 0, errors: [] },
         claudeConsole: { checked: 0, cleared: 0, errors: [] },
+        kimiBillingCycle: { checked: 0, recovered: 0, errors: [] },
         zhipuCodingQuota: { checked: 0, suspended: 0, recovered: 0, errors: [] },
         quotaExceeded: { checked: 0, cleared: 0, errors: [] },
         tokenRefresh: { checked: 0, refreshed: 0, errors: [] }
@@ -92,6 +93,9 @@ class RateLimitCleanupService {
       // 清理 Claude Console 账号
       await this.cleanupClaudeConsoleAccounts(results.claudeConsole)
 
+      // 每小时探测一次 Kimi 账期额度是否恢复
+      await this.cleanupKimiBillingCycleQuota(results.kimiBillingCycle)
+
       // 检查智谱 Coding Plan 窗口配额并处理自动停调度/恢复
       await this.cleanupZhipuCodingQuota(results.zhipuCodingQuota)
 
@@ -106,6 +110,7 @@ class RateLimitCleanupService {
         results.openaiResponses.checked +
         results.claude.checked +
         results.claudeConsole.checked +
+        results.kimiBillingCycle.checked +
         results.zhipuCodingQuota.checked +
         results.quotaExceeded.checked
       const totalCleared =
@@ -113,6 +118,7 @@ class RateLimitCleanupService {
         results.openaiResponses.cleared +
         results.claude.cleared +
         results.claudeConsole.cleared +
+        results.kimiBillingCycle.recovered +
         results.zhipuCodingQuota.recovered +
         results.quotaExceeded.cleared
       const duration = Date.now() - startTime
@@ -132,6 +138,9 @@ class RateLimitCleanupService {
         logger.info(`   Claude: ${results.claude.cleared}/${results.claude.checked}`)
         logger.info(
           `   Claude Console: ${results.claudeConsole.cleared}/${results.claudeConsole.checked}`
+        )
+        logger.info(
+          `   Kimi Billing Cycle: ${results.kimiBillingCycle.recovered}/${results.kimiBillingCycle.checked} recovered`
         )
         logger.info(
           `   Zhipu Coding Quota: ${results.zhipuCodingQuota.recovered}/${results.zhipuCodingQuota.checked} recovered, ${results.zhipuCodingQuota.suspended} suspended`
@@ -161,6 +170,7 @@ class RateLimitCleanupService {
         ...results.openaiResponses.errors,
         ...results.claude.errors,
         ...results.claudeConsole.errors,
+        ...results.kimiBillingCycle.errors,
         ...results.zhipuCodingQuota.errors,
         ...results.quotaExceeded.errors,
         ...results.tokenRefresh.errors
@@ -442,6 +452,81 @@ class RateLimitCleanupService {
     } catch (error) {
       logger.error('Failed to cleanup Claude Console accounts:', error)
       result.errors.push({ error: error.message })
+    }
+  }
+
+  /**
+   * 每小时探测一次 Kimi 账期额度是否恢复
+   */
+  async cleanupKimiBillingCycleQuota(result) {
+    const providers = [
+      {
+        platform: 'Claude Console',
+        getAccounts: () => claudeConsoleAccountService.getAllAccounts(),
+        check: (accountId) =>
+          claudeConsoleAccountService.checkAndRecoverKimiBillingCycleQuota(accountId)
+      },
+      {
+        platform: 'OpenAI Responses',
+        getAccounts: () => openaiResponsesAccountService.getAllAccounts(true),
+        check: (accountId) =>
+          openaiResponsesAccountService.checkAndRecoverKimiBillingCycleQuota(accountId)
+      }
+    ]
+
+    for (const provider of providers) {
+      let accounts
+      try {
+        accounts = await provider.getAccounts()
+      } catch (error) {
+        logger.error(`Failed to load ${provider.platform} accounts for Kimi recovery:`, error)
+        result.errors.push({ platform: provider.platform, error: error.message })
+        continue
+      }
+
+      for (const account of accounts) {
+        if (!account.kimiBillingCycleQuotaStoppedAt) {
+          continue
+        }
+
+        try {
+          const recovery = await provider.check(account.id)
+          if (!recovery.checked) {
+            continue
+          }
+
+          result.checked++
+          if (recovery.error) {
+            result.errors.push({
+              platform: provider.platform,
+              accountId: account.id,
+              accountName: account.name,
+              error: recovery.error
+            })
+            continue
+          }
+
+          if (!recovery.recovered) {
+            continue
+          }
+
+          result.recovered++
+          this.clearedAccounts.push({
+            platform: provider.platform,
+            accountId: account.id,
+            accountName: account.name,
+            previousStatus: 'kimi_billing_cycle_quota_exceeded',
+            currentStatus: 'active'
+          })
+        } catch (error) {
+          result.errors.push({
+            platform: provider.platform,
+            accountId: account.id,
+            accountName: account.name,
+            error: error.message
+          })
+        }
+      }
     }
   }
 

@@ -1009,6 +1009,215 @@ class ClaudeConsoleAccountService {
     }
   }
 
+  _isKimiCodingAccount(accountOrUrl) {
+    const apiUrl =
+      typeof accountOrUrl === 'string' ? accountOrUrl : accountOrUrl?.apiUrl || accountOrUrl?.url
+    if (!apiUrl || typeof apiUrl !== 'string') {
+      return false
+    }
+
+    try {
+      const parsedUrl = new URL(apiUrl)
+      const pathname = parsedUrl.pathname.replace(/\/+$/, '').toLowerCase()
+      return (
+        parsedUrl.protocol === 'https:' &&
+        parsedUrl.hostname.toLowerCase() === 'api.kimi.com' &&
+        (pathname === '/coding' || pathname.startsWith('/coding/'))
+      )
+    } catch {
+      return false
+    }
+  }
+
+  _getKimiRecoveryProbeModel(account) {
+    const supportedModels = account?.supportedModels
+
+    if (Array.isArray(supportedModels)) {
+      for (const model of supportedModels) {
+        if (typeof model === 'string' && model.trim()) {
+          return model.trim()
+        }
+        if (model && typeof model === 'object') {
+          const value = model.value || model.id || model.model
+          if (typeof value === 'string' && value.trim()) {
+            return value.trim()
+          }
+        }
+      }
+    } else if (supportedModels && typeof supportedModels === 'object') {
+      for (const [requestedModel, mappedModel] of Object.entries(supportedModels)) {
+        if (typeof mappedModel === 'string' && mappedModel.trim()) {
+          return mappedModel.trim()
+        }
+        if (requestedModel.trim()) {
+          return requestedModel.trim()
+        }
+      }
+    }
+
+    return 'kimi-for-coding'
+  }
+
+  _getKimiRecoveryNextCheckAt(account, intervalMs) {
+    const referenceAt =
+      account?.kimiBillingCycleQuotaLastCheckedAt || account?.kimiBillingCycleQuotaStoppedAt
+    const referenceTime = referenceAt ? new Date(referenceAt).getTime() : NaN
+    return Number.isFinite(referenceTime) ? referenceTime + intervalMs : 0
+  }
+
+  _containsKimiBillingCycleQuotaError(errorData) {
+    let errorText
+    try {
+      errorText = typeof errorData === 'string' ? errorData : JSON.stringify(errorData || '')
+    } catch {
+      errorText = String(errorData || '')
+    }
+
+    const normalizedText = errorText.toLowerCase()
+    return (
+      normalizedText.includes('billing_cycle_quota') ||
+      normalizedText.includes('usage_limit_reached') ||
+      normalizedText.includes('quota will be refreshed in the next cycle') ||
+      (normalizedText.includes('billing cycle') &&
+        (normalizedText.includes('usage limit') || normalizedText.includes('quota')))
+    )
+  }
+
+  async checkAndRecoverKimiBillingCycleQuota(accountId, options = {}) {
+    const intervalMs =
+      Number.isFinite(options.intervalMs) && options.intervalMs > 0
+        ? options.intervalMs
+        : 60 * 60 * 1000
+    const timeoutMs =
+      Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 30000
+    let account = await this.getAccount(accountId)
+
+    if (
+      !account?.kimiBillingCycleQuotaStoppedAt ||
+      !this._isKimiCodingAccount(account) ||
+      !account.apiKey
+    ) {
+      return { checked: false, recovered: false }
+    }
+
+    let nextCheckAt = this._getKimiRecoveryNextCheckAt(account, intervalMs)
+    if (nextCheckAt > Date.now()) {
+      return {
+        checked: false,
+        recovered: false,
+        nextCheckAt: new Date(nextCheckAt).toISOString()
+      }
+    }
+
+    const lockKey = `lock:kimi-quota-recovery:claude-console:${accountId}`
+    const lockValue = uuidv4()
+    const lockTtlMs = Math.max(60000, timeoutMs + 10000)
+    const lockAcquired = await redis.setAccountLock(lockKey, lockValue, lockTtlMs)
+    if (!lockAcquired) {
+      return { checked: false, recovered: false, reason: 'locked' }
+    }
+
+    try {
+      account = await this.getAccount(accountId)
+      if (
+        !account?.kimiBillingCycleQuotaStoppedAt ||
+        !this._isKimiCodingAccount(account) ||
+        !account.apiKey
+      ) {
+        return { checked: false, recovered: false }
+      }
+
+      nextCheckAt = this._getKimiRecoveryNextCheckAt(account, intervalMs)
+      if (nextCheckAt > Date.now()) {
+        return {
+          checked: false,
+          recovered: false,
+          nextCheckAt: new Date(nextCheckAt).toISOString()
+        }
+      }
+
+      const client = redis.getClientSafe()
+      const accountKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
+      const checkedAt = new Date().toISOString()
+      await client.hset(accountKey, {
+        kimiBillingCycleQuotaLastCheckedAt: checkedAt,
+        updatedAt: checkedAt
+      })
+
+      const cleanUrl = account.apiUrl.replace(/\/+$/, '')
+      const apiUrl = cleanUrl.endsWith('/v1/messages') ? cleanUrl : `${cleanUrl}/v1/messages`
+      const proxyAgent = this._createProxyAgent(account.proxy)
+      const requestConfig = {
+        method: 'POST',
+        url: apiUrl,
+        headers: {
+          'Content-Type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          'User-Agent': account.userAgent || 'claude-cli/2.0.52 (external, cli)'
+        },
+        data: {
+          model: this._getKimiRecoveryProbeModel(account),
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 16,
+          stream: false
+        },
+        timeout: timeoutMs,
+        validateStatus: () => true
+      }
+
+      if (proxyAgent) {
+        requestConfig.httpAgent = proxyAgent
+        requestConfig.httpsAgent = proxyAgent
+        requestConfig.proxy = false
+      }
+
+      if (account.apiKey.startsWith('sk-ant-')) {
+        requestConfig.headers['x-api-key'] = account.apiKey
+      } else {
+        requestConfig.headers.Authorization = `Bearer ${account.apiKey}`
+      }
+
+      const response = await axios(requestConfig)
+      const recovered =
+        response.status >= 200 &&
+        response.status < 300 &&
+        !this._containsKimiBillingCycleQuotaError(response.data)
+
+      if (!recovered) {
+        logger.debug(
+          `⏳ Kimi quota recovery probe still unavailable for Claude Console account ${account.name} (${accountId}), status: ${response.status}`
+        )
+        return { checked: true, recovered: false, status: response.status }
+      }
+
+      const recoveredAt = new Date().toISOString()
+      await client.hset(accountKey, {
+        status: 'active',
+        schedulable: 'true',
+        errorMessage: '',
+        updatedAt: recoveredAt
+      })
+      await client.hdel(
+        accountKey,
+        'kimiBillingCycleQuotaStoppedAt',
+        'kimiBillingCycleQuotaLastCheckedAt'
+      )
+      await upstreamErrorHelper.clearTempUnavailable(accountId, 'claude-console').catch(() => {})
+
+      logger.success(
+        `✅ Kimi quota recovered for Claude Console account: ${account.name} (${accountId})`
+      )
+      return { checked: true, recovered: true, status: response.status }
+    } catch (error) {
+      logger.warn(
+        `⚠️ Kimi quota recovery probe failed for Claude Console account ${accountId}: ${error.message}`
+      )
+      return { checked: true, recovered: false, error: error.message }
+    } finally {
+      await redis.releaseAccountLock(lockKey, lockValue)
+    }
+  }
+
   async markVolcengineArkMonthlyQuotaExceeded(accountId, options = {}) {
     try {
       const client = redis.getClientSafe()

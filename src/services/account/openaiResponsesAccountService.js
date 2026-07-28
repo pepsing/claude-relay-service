@@ -463,6 +463,184 @@ class OpenAIResponsesAccountService {
     return { success: true }
   }
 
+  _getKimiRecoveryProbeModel(account) {
+    const supportedModels = account?.supportedModels
+
+    if (Array.isArray(supportedModels)) {
+      for (const model of supportedModels) {
+        if (typeof model === 'string' && model.trim()) {
+          return model.trim()
+        }
+        if (model && typeof model === 'object') {
+          const value = model.value || model.id || model.model
+          if (typeof value === 'string' && value.trim()) {
+            return value.trim()
+          }
+        }
+      }
+    } else if (supportedModels && typeof supportedModels === 'object') {
+      for (const [requestedModel, mappedModel] of Object.entries(supportedModels)) {
+        if (typeof mappedModel === 'string' && mappedModel.trim()) {
+          return mappedModel.trim()
+        }
+        if (requestedModel.trim()) {
+          return requestedModel.trim()
+        }
+      }
+    }
+
+    return 'kimi-for-coding'
+  }
+
+  _getKimiRecoveryNextCheckAt(account, intervalMs) {
+    const referenceAt =
+      account?.kimiBillingCycleQuotaLastCheckedAt || account?.kimiBillingCycleQuotaStoppedAt
+    const referenceTime = referenceAt ? new Date(referenceAt).getTime() : NaN
+    return Number.isFinite(referenceTime) ? referenceTime + intervalMs : 0
+  }
+
+  _containsKimiBillingCycleQuotaError(errorData) {
+    const errorText = this._stringifyProviderError(errorData).toLowerCase()
+    return (
+      errorText.includes('billing_cycle_quota') ||
+      errorText.includes('usage_limit_reached') ||
+      errorText.includes('quota will be refreshed in the next cycle') ||
+      (errorText.includes('billing cycle') &&
+        (errorText.includes('usage limit') || errorText.includes('quota')))
+    )
+  }
+
+  async checkAndRecoverKimiBillingCycleQuota(accountId, options = {}) {
+    const intervalMs =
+      Number.isFinite(options.intervalMs) && options.intervalMs > 0
+        ? options.intervalMs
+        : 60 * 60 * 1000
+    const timeoutMs =
+      Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 30000
+    let account = await this.getAccount(accountId)
+
+    if (
+      !account?.kimiBillingCycleQuotaStoppedAt ||
+      !this.isKimiCodingAccount(account) ||
+      !account.apiKey
+    ) {
+      return { checked: false, recovered: false }
+    }
+
+    let nextCheckAt = this._getKimiRecoveryNextCheckAt(account, intervalMs)
+    if (nextCheckAt > Date.now()) {
+      return {
+        checked: false,
+        recovered: false,
+        nextCheckAt: new Date(nextCheckAt).toISOString()
+      }
+    }
+
+    const lockKey = `lock:kimi-quota-recovery:openai-responses:${accountId}`
+    const lockValue = uuidv4()
+    const lockTtlMs = Math.max(60000, timeoutMs + 10000)
+    const lockAcquired = await redis.setAccountLock(lockKey, lockValue, lockTtlMs)
+    if (!lockAcquired) {
+      return { checked: false, recovered: false, reason: 'locked' }
+    }
+
+    try {
+      account = await this.getAccount(accountId)
+      if (
+        !account?.kimiBillingCycleQuotaStoppedAt ||
+        !this.isKimiCodingAccount(account) ||
+        !account.apiKey
+      ) {
+        return { checked: false, recovered: false }
+      }
+
+      nextCheckAt = this._getKimiRecoveryNextCheckAt(account, intervalMs)
+      if (nextCheckAt > Date.now()) {
+        return {
+          checked: false,
+          recovered: false,
+          nextCheckAt: new Date(nextCheckAt).toISOString()
+        }
+      }
+
+      const client = redis.getClientSafe()
+      const accountKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
+      const checkedAt = new Date().toISOString()
+      await client.hset(accountKey, {
+        kimiBillingCycleQuotaLastCheckedAt: checkedAt,
+        updatedAt: checkedAt
+      })
+
+      const cleanUrl = this._getProviderBaseUrl(account).replace(/\/+$/, '')
+      const apiUrl = cleanUrl.endsWith('/v1/chat/completions')
+        ? cleanUrl
+        : `${cleanUrl}/v1/chat/completions`
+      const proxyAgent = account.proxy ? ProxyHelper.createProxyAgent(account.proxy) : null
+      const requestConfig = {
+        method: 'POST',
+        url: apiUrl,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${account.apiKey}`,
+          'User-Agent': account.userAgent || 'codex_cli_rs/0.0.0'
+        },
+        data: {
+          model: this._getKimiRecoveryProbeModel(account),
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 16,
+          stream: false
+        },
+        timeout: timeoutMs,
+        validateStatus: () => true
+      }
+
+      if (proxyAgent) {
+        requestConfig.httpAgent = proxyAgent
+        requestConfig.httpsAgent = proxyAgent
+        requestConfig.proxy = false
+      }
+
+      const response = await axios(requestConfig)
+      const recovered =
+        response.status >= 200 &&
+        response.status < 300 &&
+        !this._containsKimiBillingCycleQuotaError(response.data)
+
+      if (!recovered) {
+        logger.debug(
+          `⏳ Kimi quota recovery probe still unavailable for OpenAI Responses account ${account.name} (${accountId}), status: ${response.status}`
+        )
+        return { checked: true, recovered: false, status: response.status }
+      }
+
+      const recoveredAt = new Date().toISOString()
+      await client.hset(accountKey, {
+        status: 'active',
+        schedulable: 'true',
+        errorMessage: '',
+        updatedAt: recoveredAt
+      })
+      await client.hdel(
+        accountKey,
+        'kimiBillingCycleQuotaStoppedAt',
+        'kimiBillingCycleQuotaLastCheckedAt'
+      )
+      await upstreamErrorHelper.clearTempUnavailable(accountId, 'openai-responses').catch(() => {})
+
+      logger.success(
+        `✅ Kimi quota recovered for OpenAI Responses account: ${account.name} (${accountId})`
+      )
+      return { checked: true, recovered: true, status: response.status }
+    } catch (error) {
+      logger.warn(
+        `⚠️ Kimi quota recovery probe failed for OpenAI Responses account ${accountId}: ${error.message}`
+      )
+      return { checked: true, recovered: false, error: error.message }
+    } finally {
+      await redis.releaseAccountLock(lockKey, lockValue)
+    }
+  }
+
   async markVolcengineArkMonthlyQuotaExceeded(accountId, options = {}) {
     const account = await this.getAccount(accountId)
     if (!account) {
