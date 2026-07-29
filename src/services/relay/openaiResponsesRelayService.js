@@ -30,6 +30,32 @@ const ACCOUNT_CONCURRENCY_LEASE_SECONDS = 600
 const ACCOUNT_CONCURRENCY_REFRESH_MS = 5 * 60 * 1000
 const ABORT_CONTROLLER_ERROR_CODES = new Set(['ERR_CANCELED'])
 const CLOSED_SOCKET_ERROR_CODES = new Set(['ECONNRESET', 'EPIPE', 'ERR_STREAM_PREMATURE_CLOSE'])
+const OPENAI_ACCOUNT_FAILOVER_ERROR_CODE = 'OPENAI_ACCOUNT_FAILOVER'
+const RETRYABLE_OPENAI_ACCOUNT_STATUS_CODES = new Set([401, 402, 403, 408, 429, 529])
+const RETRYABLE_OPENAI_NETWORK_ERROR_CODES = new Set([
+  'ECONNABORTED',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'ERR_NETWORK',
+  'ETIMEDOUT'
+])
+
+const isRetryableOpenAIAccountStatus = (status) =>
+  RETRYABLE_OPENAI_ACCOUNT_STATUS_CODES.has(status) || (status >= 500 && status < 600)
+
+const isRetryableOpenAINetworkError = (error) =>
+  RETRYABLE_OPENAI_NETWORK_ERROR_CODES.has(error?.code)
+
+const createOpenAIAccountFailoverError = (accountId, status, responseData) => {
+  const error = new Error(`OpenAI account ${accountId} failed with status ${status}`)
+  error.code = OPENAI_ACCOUNT_FAILOVER_ERROR_CODE
+  error.statusCode = status
+  error.accountId = accountId
+  error.responseData = responseData
+  return error
+}
 
 const isAbortControllerError = (error) => {
   if (!error) {
@@ -300,7 +326,7 @@ class OpenAIResponsesRelayService {
   }
 
   // 处理请求转发
-  async handleRequest(req, res, account, apiKeyData) {
+  async handleRequest(req, res, account, apiKeyData, options = {}) {
     let abortController = null
     let accountConcurrencyLease = null
     let streamDelegated = false
@@ -308,6 +334,19 @@ class OpenAIResponsesRelayService {
     let removeClientListeners = () => {}
     // 获取会话哈希（如果有的话）
     const sessionHash = this._getSessionHash(req)
+    const deferRetryableError = (status, errorData) => {
+      if (
+        options.deferRetryableErrors === true &&
+        isRetryableOpenAIAccountStatus(status) &&
+        !res.headersSent
+      ) {
+        throw createOpenAIAccountFailoverError(
+          account.id,
+          status,
+          upstreamErrorHelper.sanitizeErrorForClient(errorData)
+        )
+      }
+    }
 
     try {
       // 获取完整的账户信息（包含解密的 API Key）
@@ -491,6 +530,7 @@ class OpenAIResponsesRelayService {
         )
         if (providerQuotaResult.handled) {
           removeClientListeners()
+          deferRetryableError(response.status, errorData)
           return res
             .status(response.status)
             .json(upstreamErrorHelper.sanitizeErrorForClient(errorData))
@@ -520,6 +560,7 @@ class OpenAIResponsesRelayService {
           }
 
           removeClientListeners()
+          deferRetryableError(429, errorData)
           return res.status(429).json(errorData)
         }
 
@@ -565,12 +606,13 @@ class OpenAIResponsesRelayService {
 
           // 清理监听器
           removeClientListeners()
+          deferRetryableError(401, unauthorizedResponse)
 
           return res.status(401).json(unauthorizedResponse)
         }
 
-        // 处理 5xx 上游错误
-        if (response.status >= 500 && account?.id) {
+        // 处理其余可恢复的账户级上游错误
+        if (isRetryableOpenAIAccountStatus(response.status) && account?.id) {
           try {
             const oaiAutoProtectionDisabled =
               account?.disableAutoProtection === true || account?.disableAutoProtection === 'true'
@@ -594,6 +636,7 @@ class OpenAIResponsesRelayService {
 
         // 清理监听器
         removeClientListeners()
+        deferRetryableError(response.status, errorData)
 
         return res
           .status(response.status)
@@ -631,6 +674,11 @@ class OpenAIResponsesRelayService {
 
       // 安全地记录错误，避免循环引用和敏感 request/socket 对象
       const errorInfo = summarizeRelayError(error)
+      if (error.code === OPENAI_ACCOUNT_FAILOVER_ERROR_CODE) {
+        removeClientListeners()
+        throw error
+      }
+
       if (
         clientDisconnected ||
         isAbortControllerError(error) ||
@@ -645,6 +693,11 @@ class OpenAIResponsesRelayService {
       logger.error('OpenAI-Responses relay error:', errorInfo)
 
       if (error.statusCode) {
+        deferRetryableError(error.statusCode, {
+          error: {
+            message: error.message
+          }
+        })
         if (!res.headersSent && isResponseWritable(res)) {
           return res.status(error.statusCode).json({
             error: {
@@ -661,7 +714,7 @@ class OpenAIResponsesRelayService {
       }
 
       // 检查是否是网络错误
-      if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      if (isRetryableOpenAINetworkError(error)) {
         if (account?.id) {
           const oaiAutoProtectionDisabled =
             account?.disableAutoProtection === true || account?.disableAutoProtection === 'true'
@@ -671,6 +724,11 @@ class OpenAIResponsesRelayService {
               .catch(() => {})
           }
         }
+        deferRetryableError(503, {
+          error: {
+            message: error.message || 'Upstream network error'
+          }
+        })
       }
 
       // 如果已经发送了响应头，直接结束
@@ -714,6 +772,7 @@ class OpenAIResponsesRelayService {
           sessionHash
         )
         if (providerQuotaResult.handled) {
+          deferRetryableError(status, errorData)
           if (isResponseWritable(res)) {
             return res.status(status).json(upstreamErrorHelper.sanitizeErrorForClient(errorData))
           }
@@ -762,12 +821,14 @@ class OpenAIResponsesRelayService {
             }
           }
 
+          deferRetryableError(401, unauthorizedResponse)
           if (isResponseWritable(res)) {
             return res.status(401).json(unauthorizedResponse)
           }
           return
         }
 
+        deferRetryableError(status, errorData)
         if (isResponseWritable(res)) {
           return res.status(status).json(upstreamErrorHelper.sanitizeErrorForClient(errorData))
         }

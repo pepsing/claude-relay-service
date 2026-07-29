@@ -358,6 +358,8 @@ class UnifiedOpenAIScheduler {
     options = {}
   ) {
     try {
+      const excludedAccountIds = new Set(options.excludedAccountIds || [])
+
       // 如果API Key绑定了专属账户或分组，优先使用
       if (apiKeyData.openaiAccountId) {
         // 检查是否是分组
@@ -391,6 +393,15 @@ class UnifiedOpenAIScheduler {
           boundAccount.status !== 'unauthorized'
 
         if (isActiveBoundAccount) {
+          if (excludedAccountIds.has(boundAccount.id)) {
+            const error = new Error(
+              `Dedicated account ${boundAccount.name} already failed for this request`
+            )
+            error.statusCode = 503
+            error.code = 'OPENAI_ACCOUNT_POOL_EXHAUSTED'
+            throw error
+          }
+
           if (!this._matchesRequiredCapabilities(boundAccount, accountType, options)) {
             const error = new Error(
               `Dedicated account ${boundAccount.name} does not support /v1/images/generations`
@@ -560,6 +571,7 @@ class UnifiedOpenAIScheduler {
                 )
               : true
             const isAvailable =
+              !excludedAccountIds.has(mappedAccount.accountId) &&
               isInStickyGroup &&
               (await this._isAccountAvailable(mappedAccount.accountId, mappedAccount.accountType, {
                 requestedModel,
@@ -596,6 +608,9 @@ class UnifiedOpenAIScheduler {
         ...options,
         ignoreConcurrencyAccountIds: stickyGroupMemberIds
       })
+      availableAccounts = availableAccounts.filter(
+        (availableAccount) => !excludedAccountIds.has(availableAccount.accountId)
+      )
       availableAccounts = await this._restrictAccountsToSessionGroup(
         availableAccounts,
         stickySessionGroupId,
@@ -603,6 +618,13 @@ class UnifiedOpenAIScheduler {
       )
 
       if (availableAccounts.length === 0) {
+        if (excludedAccountIds.size > 0) {
+          const error = new Error('No untried OpenAI accounts remain')
+          error.statusCode = 503
+          error.code = 'OPENAI_ACCOUNT_POOL_EXHAUSTED'
+          throw error
+        }
+
         if (options.requireImagesGenerations) {
           const error = new Error('No available OpenAI accounts support /v1/images/generations')
           error.statusCode = 400
@@ -1251,6 +1273,8 @@ class UnifiedOpenAIScheduler {
   // 👥 从分组中选择账户
   async selectAccountFromGroup(groupId, sessionHash = null, requestedModel = null, options = {}) {
     try {
+      const excludedAccountIds = new Set(options.excludedAccountIds || [])
+
       // 获取分组信息
       const group = await accountGroupService.getGroup(groupId)
       if (!group) {
@@ -1300,16 +1324,18 @@ class UnifiedOpenAIScheduler {
                 )
               : true
             if (isInGroup && isInStickyGroup) {
-              const isAvailable = await this._isAccountAvailable(
-                mappedAccount.accountId,
-                mappedAccount.accountType,
-                {
-                  requestedModel,
-                  requiredProviderEndpoint: options.requiredProviderEndpoint,
-                  requireImagesGenerations: options.requireImagesGenerations,
-                  ignoreConcurrency: true
-                }
-              )
+              const isAvailable =
+                !excludedAccountIds.has(mappedAccount.accountId) &&
+                (await this._isAccountAvailable(
+                  mappedAccount.accountId,
+                  mappedAccount.accountType,
+                  {
+                    requestedModel,
+                    requiredProviderEndpoint: options.requiredProviderEndpoint,
+                    requireImagesGenerations: options.requireImagesGenerations,
+                    ignoreConcurrency: true
+                  }
+                ))
               if (isAvailable) {
                 // 🚀 智能会话续期（续期 unified 映射键，按配置）
                 await this._extendSessionMappingTTL(sessionHash)
@@ -1335,6 +1361,10 @@ class UnifiedOpenAIScheduler {
       // 获取可用的分组成员账户（支持 OpenAI 和 OpenAI-Responses 两种类型）
       let availableAccounts = []
       for (const memberId of memberIds) {
+        if (excludedAccountIds.has(memberId)) {
+          continue
+        }
+
         // 首先尝试从 OpenAI 账户服务获取
         let account = await openaiAccountService.getAccount(memberId)
         let accountType = 'openai'
@@ -1439,6 +1469,13 @@ class UnifiedOpenAIScheduler {
       }
 
       if (availableAccounts.length === 0) {
+        if (excludedAccountIds.size > 0) {
+          const error = new Error(`No untried accounts remain in group ${group.name}`)
+          error.statusCode = 503
+          error.code = 'OPENAI_ACCOUNT_POOL_EXHAUSTED'
+          throw error
+        }
+
         const error = options.requireImagesGenerations
           ? new Error(`No available accounts in group ${group.name} support /v1/images/generations`)
           : new Error(`No available accounts in group ${group.name}`)

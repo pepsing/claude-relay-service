@@ -143,6 +143,48 @@ describe('UnifiedOpenAIScheduler', () => {
   })
 
   describe('selectAccountForApiKey', () => {
+    it('excludes failed accounts and falls back to a lower-priority account', async () => {
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'responses-primary',
+          name: 'Primary Responses provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'responses',
+          supportedModels: { 'gpt-5': 'gpt-5' },
+          priority: 10
+        },
+        {
+          id: 'responses-fallback',
+          name: 'Fallback Responses provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'responses',
+          supportedModels: { 'gpt-5': 'gpt-5' },
+          priority: 90
+        }
+      ])
+
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        null,
+        'gpt-5',
+        {
+          requiredProviderEndpoint: 'responses',
+          excludedAccountIds: ['responses-primary']
+        }
+      )
+
+      expect(result).toEqual({
+        accountId: 'responses-fallback',
+        accountType: 'openai-responses'
+      })
+    })
+
     it('does not create a mapping when the selected account disables sticky sessions', async () => {
       openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
         {

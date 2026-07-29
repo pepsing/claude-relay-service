@@ -43,6 +43,7 @@ const axios = require('axios')
 const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
 const unifiedOpenAIScheduler = require('../src/services/scheduler/unifiedOpenAIScheduler')
 const openaiResponsesRelayService = require('../src/services/relay/openaiResponsesRelayService')
+const upstreamErrorHelper = require('../src/utils/upstreamErrorHelper')
 
 class FakeResponse extends EventEmitter {
   constructor() {
@@ -84,6 +85,8 @@ class FakeResponse extends EventEmitter {
 describe('OpenAI Responses relay provider subscription quota handling', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    axios.mockReset()
+    upstreamErrorHelper.markTempUnavailable.mockResolvedValue(undefined)
   })
 
   it('preserves images generations for accounts configured as Chat Completions providers', async () => {
@@ -188,6 +191,101 @@ describe('OpenAI Responses relay provider subscription quota handling', () => {
     expect(unifiedOpenAIScheduler._deleteSessionMapping).toHaveBeenCalledWith(expect.any(String))
     expect(res.statusCode).toBe(403)
     expect(res.body).toEqual(expect.objectContaining({ error: expect.any(Object) }))
+  })
+
+  it('defers a retryable HTTP error without writing it to the client', async () => {
+    const account = {
+      id: 'responses-primary',
+      name: 'responses-primary',
+      baseApi: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      providerEndpoint: 'responses',
+      supportedModels: {},
+      maxConcurrentTasks: 0
+    }
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    openaiResponsesAccountService.handleProviderQuotaError.mockResolvedValue({
+      handled: false
+    })
+    axios.mockResolvedValue({
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: {},
+      data: {
+        error: {
+          message: 'Provider unavailable'
+        }
+      }
+    })
+
+    const req = new EventEmitter()
+    req.method = 'POST'
+    req.path = '/v1/responses'
+    req.headers = {}
+    req.body = { model: 'gpt-5', stream: false }
+    req.socket = { destroyed: false }
+    const res = new FakeResponse()
+
+    await expect(
+      openaiResponsesRelayService.handleRequest(
+        req,
+        res,
+        { id: account.id, name: account.name },
+        { id: 'api-key-1' },
+        { deferRetryableErrors: true }
+      )
+    ).rejects.toMatchObject({
+      code: 'OPENAI_ACCOUNT_FAILOVER',
+      statusCode: 503,
+      accountId: 'responses-primary',
+      responseData: {
+        error: {
+          message: 'Provider unavailable'
+        }
+      }
+    })
+    expect(res.body).toBeNull()
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('defers an upstream network error without writing it to the client', async () => {
+    const account = {
+      id: 'responses-network-primary',
+      name: 'responses-network-primary',
+      baseApi: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      providerEndpoint: 'responses',
+      supportedModels: {},
+      maxConcurrentTasks: 0
+    }
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    const networkError = new Error('connect ETIMEDOUT')
+    networkError.code = 'ETIMEDOUT'
+    axios.mockRejectedValue(networkError)
+
+    const req = new EventEmitter()
+    req.method = 'POST'
+    req.path = '/v1/responses'
+    req.headers = {}
+    req.body = { model: 'gpt-5', stream: false }
+    req.socket = { destroyed: false }
+    const res = new FakeResponse()
+
+    await expect(
+      openaiResponsesRelayService.handleRequest(
+        req,
+        res,
+        { id: account.id, name: account.name },
+        { id: 'api-key-1' },
+        { deferRetryableErrors: true }
+      )
+    ).rejects.toMatchObject({
+      code: 'OPENAI_ACCOUNT_FAILOVER',
+      statusCode: 503,
+      accountId: 'responses-network-primary'
+    })
+    expect(res.body).toBeNull()
+    expect(res.statusCode).toBe(200)
   })
 
   it('handles a Kimi usage_limit_reached event inside a successful SSE response', async () => {

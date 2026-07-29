@@ -35,7 +35,8 @@ jest.mock('../src/services/scheduler/unifiedOpenAIScheduler', () => ({
   markAccountRateLimited: jest.fn(),
   isAccountRateLimited: jest.fn().mockResolvedValue(false),
   removeAccountRateLimit: jest.fn(),
-  markAccountUnauthorized: jest.fn()
+  markAccountUnauthorized: jest.fn(),
+  _deleteSessionMapping: jest.fn().mockResolvedValue(undefined)
 }))
 
 jest.mock('../src/services/account/openaiAccountService', () => ({
@@ -176,18 +177,20 @@ describe('openai responses payload toggles', () => {
   beforeEach(() => {
     jest.clearAllMocks()
 
-    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValue({
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockReset().mockResolvedValue({
       accountId: 'resp-1',
       accountType: 'openai-responses'
     })
+    axios.post.mockReset()
+    openaiResponsesRelayService.handleRequest.mockReset().mockResolvedValue({ ok: true })
 
-    openaiResponsesAccountService.getAccount.mockResolvedValue({
+    openaiAccountService.getAccount.mockReset()
+    openaiResponsesAccountService.getAccount.mockReset().mockResolvedValue({
       id: 'resp-1',
       name: 'Responses Account',
       apiKey: 'sk-responses'
     })
 
-    openaiResponsesRelayService.handleRequest.mockResolvedValue({ ok: true })
     claudeRelayConfigService.getConfig.mockResolvedValue({
       openaiImagesStickySessionEnabled: false
     })
@@ -254,7 +257,8 @@ describe('openai responses payload toggles', () => {
         req,
         expect.anything(),
         expect.anything(),
-        req.apiKey
+        req.apiKey,
+        { deferRetryableErrors: true }
       )
     }
   )
@@ -617,6 +621,434 @@ describe('openai responses payload toggles', () => {
     )
     const requestId = redis.incrConcurrency.mock.calls[0][1]
     expect(redis.decrConcurrency).toHaveBeenCalledWith('openai_account:openai-1', requestId)
+  })
+
+  test('retries a 429 response on another account before returning to the client', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey
+      .mockResolvedValueOnce({
+        accountId: 'openai-primary',
+        accountType: 'openai'
+      })
+      .mockResolvedValueOnce({
+        accountId: 'openai-fallback',
+        accountType: 'openai'
+      })
+    openaiAccountService.getAccount.mockImplementation(async (accountId) => ({
+      id: accountId,
+      name: accountId,
+      accessToken: `encrypted-${accountId}`,
+      accountId: `chatgpt-${accountId}`,
+      maxConcurrentTasks: 2
+    }))
+    axios.post
+      .mockResolvedValueOnce({
+        status: 429,
+        data: {
+          error: {
+            type: 'usage_limit_reached',
+            message: 'primary account exhausted',
+            resets_in_seconds: 120
+          }
+        },
+        headers: {}
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          id: 'response-success',
+          model: 'gpt-5',
+          usage: {
+            input_tokens: 5,
+            output_tokens: 2,
+            total_tokens: 7
+          }
+        },
+        headers: {}
+      })
+
+    const req = createReq({
+      body: {
+        model: 'gpt-5',
+        prompt_cache_key: 'failover-session',
+        stream: false
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      }
+    })
+    const res = createRes()
+
+    await openaiRoutes.handleResponses(req, res)
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenNthCalledWith(
+      2,
+      req.apiKey,
+      createHash('failover-session'),
+      'gpt-5',
+      {
+        requiredProviderEndpoint: 'responses',
+        excludedAccountIds: ['openai-primary']
+      }
+    )
+    expect(unifiedOpenAIScheduler.markAccountRateLimited).toHaveBeenCalledWith(
+      'openai-primary',
+      'openai',
+      createHash('failover-session'),
+      120
+    )
+    expect(axios.post).toHaveBeenCalledTimes(2)
+    expect(res.status).not.toHaveBeenCalledWith(429)
+    expect(res.payload).toEqual(expect.objectContaining({ id: 'response-success' }))
+  })
+
+  test('returns the last upstream error after all eligible accounts are exhausted', async () => {
+    const poolExhaustedError = new Error('No untried OpenAI accounts remain')
+    poolExhaustedError.code = 'OPENAI_ACCOUNT_POOL_EXHAUSTED'
+    poolExhaustedError.statusCode = 503
+    unifiedOpenAIScheduler.selectAccountForApiKey
+      .mockResolvedValueOnce({
+        accountId: 'openai-only',
+        accountType: 'openai'
+      })
+      .mockRejectedValueOnce(poolExhaustedError)
+    openaiAccountService.getAccount.mockResolvedValueOnce({
+      id: 'openai-only',
+      name: 'OpenAI Only',
+      accessToken: 'encrypted-token',
+      accountId: 'chatgpt-only'
+    })
+    const upstreamError = {
+      error: {
+        type: 'usage_limit_reached',
+        message: 'only account exhausted',
+        resets_in_seconds: 120
+      }
+    }
+    axios.post.mockResolvedValueOnce({
+      status: 429,
+      data: upstreamError,
+      headers: {}
+    })
+
+    const req = createReq({
+      body: {
+        model: 'gpt-5',
+        prompt_cache_key: 'exhausted-session',
+        stream: false
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      }
+    })
+    const res = createRes()
+
+    await openaiRoutes.handleResponses(req, res)
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledTimes(2)
+    expect(axios.post).toHaveBeenCalledTimes(1)
+    expect(res.status).toHaveBeenCalledWith(429)
+    expect(res.payload).toEqual(upstreamError)
+  })
+
+  test('fails over from an OpenAI-Responses account to a regular OpenAI account', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey
+      .mockResolvedValueOnce({
+        accountId: 'responses-primary',
+        accountType: 'openai-responses'
+      })
+      .mockResolvedValueOnce({
+        accountId: 'openai-fallback',
+        accountType: 'openai'
+      })
+    openaiResponsesAccountService.getAccount.mockResolvedValueOnce({
+      id: 'responses-primary',
+      name: 'Responses Primary',
+      apiKey: 'provider-key'
+    })
+    openaiAccountService.getAccount.mockResolvedValueOnce({
+      id: 'openai-fallback',
+      name: 'OpenAI Fallback',
+      accessToken: 'encrypted-token',
+      accountId: 'chatgpt-fallback'
+    })
+    const failoverError = new Error('Responses provider unavailable')
+    failoverError.code = 'OPENAI_ACCOUNT_FAILOVER'
+    failoverError.statusCode = 503
+    failoverError.responseData = {
+      error: {
+        message: 'Responses provider unavailable'
+      }
+    }
+    failoverError.accountId = 'responses-primary'
+    openaiResponsesRelayService.handleRequest.mockRejectedValueOnce(failoverError)
+    axios.post.mockResolvedValueOnce({
+      status: 200,
+      data: {
+        id: 'fallback-success',
+        model: 'gpt-5',
+        usage: {
+          input_tokens: 5,
+          output_tokens: 2,
+          total_tokens: 7
+        }
+      },
+      headers: {}
+    })
+
+    const req = createReq({
+      body: {
+        model: 'gpt-5',
+        prompt_cache_key: 'cross-type-session',
+        stream: false
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      }
+    })
+    const res = createRes()
+
+    await openaiRoutes.handleResponses(req, res)
+
+    expect(openaiResponsesRelayService.handleRequest).toHaveBeenCalledWith(
+      req,
+      res,
+      expect.objectContaining({ id: 'responses-primary' }),
+      req.apiKey,
+      { deferRetryableErrors: true }
+    )
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenNthCalledWith(
+      2,
+      req.apiKey,
+      createHash('cross-type-session'),
+      'gpt-5',
+      {
+        requiredProviderEndpoint: 'responses',
+        excludedAccountIds: ['responses-primary']
+      }
+    )
+    expect(res.payload).toEqual(expect.objectContaining({ id: 'fallback-success' }))
+  })
+
+  test('retries an upstream network failure on another account', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey
+      .mockResolvedValueOnce({
+        accountId: 'openai-primary',
+        accountType: 'openai'
+      })
+      .mockResolvedValueOnce({
+        accountId: 'openai-fallback',
+        accountType: 'openai'
+      })
+    openaiAccountService.getAccount.mockImplementation(async (accountId) => ({
+      id: accountId,
+      name: accountId,
+      accessToken: `encrypted-${accountId}`,
+      accountId: `chatgpt-${accountId}`
+    }))
+    const networkError = new Error('connect ECONNREFUSED')
+    networkError.code = 'ECONNREFUSED'
+    axios.post.mockRejectedValueOnce(networkError).mockResolvedValueOnce({
+      status: 200,
+      data: {
+        id: 'network-fallback-success',
+        model: 'gpt-5',
+        usage: {
+          input_tokens: 5,
+          output_tokens: 2,
+          total_tokens: 7
+        }
+      },
+      headers: {}
+    })
+
+    const req = createReq({
+      body: {
+        model: 'gpt-5',
+        prompt_cache_key: 'network-failover-session',
+        stream: false
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      }
+    })
+    const res = createRes()
+
+    await openaiRoutes.handleResponses(req, res)
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenNthCalledWith(
+      2,
+      req.apiKey,
+      createHash('network-failover-session'),
+      'gpt-5',
+      {
+        requiredProviderEndpoint: 'responses',
+        excludedAccountIds: ['openai-primary']
+      }
+    )
+    expect(res.payload).toEqual(expect.objectContaining({ id: 'network-fallback-success' }))
+  })
+
+  test('retries when the selected account has no usable access token', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey
+      .mockResolvedValueOnce({
+        accountId: 'openai-invalid-token',
+        accountType: 'openai'
+      })
+      .mockResolvedValueOnce({
+        accountId: 'openai-valid-token',
+        accountType: 'openai'
+      })
+    openaiAccountService.getAccount
+      .mockResolvedValueOnce({
+        id: 'openai-invalid-token',
+        name: 'Invalid Token Account'
+      })
+      .mockResolvedValueOnce({
+        id: 'openai-valid-token',
+        name: 'Valid Token Account',
+        accessToken: 'encrypted-token',
+        accountId: 'chatgpt-valid'
+      })
+    axios.post.mockResolvedValueOnce({
+      status: 200,
+      data: {
+        id: 'token-fallback-success',
+        model: 'gpt-5',
+        usage: {
+          input_tokens: 5,
+          output_tokens: 2,
+          total_tokens: 7
+        }
+      },
+      headers: {}
+    })
+
+    const req = createReq({
+      body: {
+        model: 'gpt-5',
+        prompt_cache_key: 'token-failover-session',
+        stream: false
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      }
+    })
+    const res = createRes()
+
+    await openaiRoutes.handleResponses(req, res)
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenNthCalledWith(
+      2,
+      req.apiKey,
+      createHash('token-failover-session'),
+      'gpt-5',
+      {
+        requiredProviderEndpoint: 'responses',
+        excludedAccountIds: ['openai-invalid-token']
+      }
+    )
+    expect(axios.post).toHaveBeenCalledTimes(1)
+    expect(res.payload).toEqual(expect.objectContaining({ id: 'token-fallback-success' }))
+  })
+
+  test('removes error-stream listeners before failing over', async () => {
+    const poolExhaustedError = new Error('No untried OpenAI accounts remain')
+    poolExhaustedError.code = 'OPENAI_ACCOUNT_POOL_EXHAUSTED'
+    poolExhaustedError.statusCode = 503
+    unifiedOpenAIScheduler.selectAccountForApiKey
+      .mockResolvedValueOnce({
+        accountId: 'openai-stream-error',
+        accountType: 'openai'
+      })
+      .mockRejectedValueOnce(poolExhaustedError)
+    openaiAccountService.getAccount.mockResolvedValueOnce({
+      id: 'openai-stream-error',
+      name: 'OpenAI Stream Error',
+      accessToken: 'encrypted-token',
+      accountId: 'chatgpt-stream-error'
+    })
+    const upstream = new PassThrough()
+    axios.post.mockResolvedValueOnce({
+      status: 503,
+      data: upstream,
+      headers: {}
+    })
+
+    const req = createReq({
+      body: {
+        model: 'gpt-5',
+        prompt_cache_key: 'stream-error-session',
+        stream: true
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      }
+    })
+    const res = createRes()
+    res.write = jest.fn()
+    res.end = jest.fn()
+
+    const requestPromise = openaiRoutes.handleResponses(req, res)
+    setImmediate(() => {
+      upstream.end(JSON.stringify({ error: { message: 'Provider unavailable' } }))
+    })
+    await requestPromise
+
+    expect(upstream.listenerCount('data')).toBe(0)
+    expect(upstream.listenerCount('end')).toBe(0)
+    expect(upstream.listenerCount('error')).toBe(0)
+    expect(res.status).toHaveBeenCalledWith(503)
+  })
+
+  test('does not retry a 400 upstream validation error on another account', async () => {
+    unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValueOnce({
+      accountId: 'openai-primary',
+      accountType: 'openai'
+    })
+    openaiAccountService.getAccount.mockResolvedValueOnce({
+      id: 'openai-primary',
+      name: 'OpenAI Primary',
+      accessToken: 'encrypted-token',
+      accountId: 'chatgpt-primary'
+    })
+    axios.post.mockResolvedValueOnce({
+      status: 400,
+      data: {
+        error: {
+          message: 'Invalid request body'
+        }
+      },
+      headers: {}
+    })
+
+    const req = createReq({
+      body: {
+        model: 'gpt-5',
+        stream: false
+      },
+      apiKeyOverrides: {
+        enableOpenAIResponsesCodexAdaptation: false,
+        enableOpenAIResponsesPayloadRules: false
+      }
+    })
+    const res = createRes()
+
+    await openaiRoutes.handleResponses(req, res)
+
+    expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledTimes(1)
+    expect(axios.post).toHaveBeenCalledTimes(1)
+    expect(res.status).toHaveBeenCalledWith(400)
+    expect(res.payload).toEqual({
+      error: {
+        message: 'Invalid request body'
+      }
+    })
   })
 
   test('records null service_tier after Codex adaptation removes it for openai accounts', async () => {
