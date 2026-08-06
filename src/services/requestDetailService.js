@@ -17,6 +17,7 @@ const bedrockAccountService = require('./account/bedrockAccountService')
 const CostCalculator = require('../utils/costCalculator')
 const {
   sanitizeRequestBodySnapshot,
+  extractLatestUserInput,
   getRequestDetailCacheMetrics,
   extractRequestReasoningInfo,
   resolveRequestDetailReasoning,
@@ -879,6 +880,7 @@ class RequestDetailService {
 
   _normalizeRecord(detail, requestId, options = {}) {
     const requestBodySource = detail.requestBodySnapshot ?? detail.requestBody
+    const userInputSource = detail.requestBody ?? detail.requestBodySnapshot
     const timestamp = toIsoString(detail.timestamp) || new Date().toISOString()
     const durationMs = normalizeNumber(detail.durationMs)
     const inputTokens = normalizeNumber(detail.inputTokens)
@@ -901,6 +903,7 @@ class RequestDetailService {
     const sessionHash =
       normalizeOptionalFilterValue(detail.sessionHash) || hashRequestDetailIdentifier(sessionId)
     const responsePayloadFields = this._normalizeResponsePayload(detail)
+    const userInput = extractLatestUserInput(userInputSource)
     const normalized = {
       requestId,
       timestamp,
@@ -946,6 +949,10 @@ class RequestDetailService {
       reasoningSource: detail.reasoningSource || reasoningInfo.reasoningSource || null,
       ...responsePayloadFields,
       metadata: this._buildRecordMetadata(detail)
+    }
+
+    if (userInput !== null) {
+      normalized.userInput = userInput
     }
 
     if (options.bodyPreviewEnabled && requestBodySource !== undefined) {

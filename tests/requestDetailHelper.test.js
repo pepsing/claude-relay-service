@@ -1,5 +1,6 @@
 const {
   sanitizeRequestBodySnapshot,
+  extractLatestUserInput,
   extractRequestReasoningInfo,
   resolveRequestDetailReasoning,
   createRequestDetailMeta,
@@ -101,6 +102,109 @@ describe('requestDetailHelper', () => {
       { type: 'function', name: 'lookup_weather' },
       { name: 'claude_tool' }
     ])
+  })
+
+  test('extractLatestUserInput reads OpenAI Responses string and latest user message input', () => {
+    expect(extractLatestUserInput({ input: '  keep surrounding whitespace  ' })).toBe(
+      '  keep surrounding whitespace  '
+    )
+    expect(
+      extractLatestUserInput({
+        input: [
+          {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'older input' }]
+          },
+          {
+            type: 'message',
+            role: 'user',
+            content: [
+              { type: 'input_text', text: 'first block' },
+              { type: 'input_image', image_url: 'data:image/png;base64,...' },
+              { type: 'input_text', text: 'second block' }
+            ]
+          }
+        ]
+      })
+    ).toBe('first block\nsecond block')
+  })
+
+  test('extractLatestUserInput ignores OpenAI Responses tool output as the latest input item', () => {
+    expect(
+      extractLatestUserInput({
+        input: [
+          {
+            type: 'message',
+            role: 'user',
+            content: 'run the lookup'
+          },
+          {
+            type: 'function_call_output',
+            call_id: 'call_1',
+            output: '{"temperature":24}'
+          }
+        ]
+      })
+    ).toBeNull()
+  })
+
+  test('extractLatestUserInput reads only the latest Chat Completions user message', () => {
+    expect(
+      extractLatestUserInput({
+        messages: [
+          { role: 'user', content: 'older input' },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'describe this image' },
+              { type: 'image_url', image_url: { url: 'data:image/png;base64,...' } }
+            ]
+          }
+        ]
+      })
+    ).toBe('describe this image')
+
+    expect(
+      extractLatestUserInput({
+        messages: [
+          { role: 'user', content: 'run the tool' },
+          { role: 'tool', tool_call_id: 'call_1', content: '{"ok":true}' }
+        ]
+      })
+    ).toBeNull()
+  })
+
+  test('extractLatestUserInput reads Anthropic user text and rejects tool result messages', () => {
+    expect(
+      extractLatestUserInput({
+        messages: [
+          { role: 'assistant', content: [{ type: 'text', text: 'How can I help?' }] },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'first block' },
+              { type: 'text', text: 'second block' }
+            ]
+          }
+        ]
+      })
+    ).toBe('first block\nsecond block')
+
+    expect(
+      extractLatestUserInput({
+        messages: [
+          { role: 'user', content: 'run the tool' },
+          {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 'tool_1', content: 'result' },
+              { type: 'text', text: 'continue' }
+            ]
+          }
+        ]
+      })
+    ).toBeNull()
   })
 
   test('createRequestDetailMeta includes stream timing breakdown from request timing', () => {

@@ -181,6 +181,19 @@
         </div>
 
         <div
+          v-if="detail.userInput"
+          class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900"
+        >
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h4 class="section-title mb-0">User Input</h4>
+            <el-button size="small" @click="copyUserInput">复制文本</el-button>
+          </div>
+          <div class="snapshot-panel snapshot-panel-compact">
+            <pre class="snapshot-plain-text">{{ detail.userInput }}</pre>
+          </div>
+        </div>
+
+        <div
           class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900"
         >
           <h4 class="section-title">费用拆分</h4>
@@ -715,6 +728,7 @@ const copyText = async (text, label) => {
 
 const copySnapshot = () => copyText(formattedSnapshot.value, '请求快照')
 const copyResponseSnapshot = () => copyText(formattedResponseSnapshot.value, '响应快照')
+const copyUserInput = () => copyText(detail.value?.userInput, 'User Input')
 
 const selectManualCopyText = () => {
   const textarea = manualCopyTextareaRef.value

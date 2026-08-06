@@ -462,22 +462,23 @@
             <div class="table-container hidden xl:block">
               <table class="request-table w-full divide-y divide-gray-200 dark:divide-gray-700">
                 <colgroup>
-                  <col style="width: 10%" />
-                  <col style="width: 7%" />
-                  <col style="width: 6%" />
-                  <col style="width: 9%" />
                   <col style="width: 8%" />
                   <col style="width: 5%" />
                   <col style="width: 5%" />
+                  <col style="width: 8%" />
+                  <col style="width: 7%" />
+                  <col style="width: 15%" />
+                  <col style="width: 4%" />
+                  <col style="width: 4%" />
                   <col style="width: 5%" />
-                  <col style="width: 6%" />
-                  <col style="width: 6%" />
-                  <col style="width: 6%" />
                   <col style="width: 5%" />
                   <col style="width: 5%" />
                   <col style="width: 5%" />
-                  <col style="width: 6%" />
-                  <col style="width: 6%" />
+                  <col style="width: 5%" />
+                  <col style="width: 5%" />
+                  <col style="width: 5%" />
+                  <col style="width: 5%" />
+                  <col style="width: 4%" />
                 </colgroup>
                 <thead
                   class="sticky top-0 z-10 bg-gradient-to-b from-gray-50 to-gray-100/90 backdrop-blur-sm dark:from-gray-700 dark:to-gray-800/90"
@@ -514,6 +515,11 @@
                       class="min-w-[110px] px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300"
                     >
                       模型
+                    </th>
+                    <th
+                      class="min-w-[240px] px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300"
+                    >
+                      User Input
                     </th>
                     <th
                       class="min-w-[110px] px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300"
@@ -656,6 +662,15 @@
                       </div>
                     </td>
                     <td class="table-cell">{{ record.model }}</td>
+                    <td class="table-cell">
+                      <p
+                        v-if="record.userInput"
+                        class="line-clamp-2 whitespace-pre-wrap break-words text-xs leading-relaxed"
+                        :title="record.userInput"
+                      >
+                        {{ record.userInput }}
+                      </p>
+                    </td>
                     <td class="table-cell">{{ formatReasoning(record.reasoningDisplay) }}</td>
                     <td class="table-cell text-blue-600 dark:text-blue-400">
                       {{ formatNumber(record.inputTokens) }}
@@ -730,6 +745,20 @@
                   <div>API Key：{{ record.apiKeyName || '-' }}</div>
                   <div>账户：{{ record.accountName || '-' }}</div>
                   <div>推理：{{ formatReasoning(record.reasoningDisplay) }}</div>
+                  <div
+                    v-if="record.userInput"
+                    class="col-span-2 rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/70"
+                  >
+                    <div class="mb-1 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                      User Input
+                    </div>
+                    <p
+                      class="line-clamp-3 whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700 dark:text-slate-200"
+                      :title="record.userInput"
+                    >
+                      {{ record.userInput }}
+                    </p>
+                  </div>
                   <button
                     v-if="getSessionValue(record)"
                     class="col-span-2 break-all text-left text-xs font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-300 dark:hover:text-indigo-200"

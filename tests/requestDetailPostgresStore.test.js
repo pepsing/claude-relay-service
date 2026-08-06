@@ -64,8 +64,37 @@ describe('requestDetailPostgresStore', () => {
     expect(JSON.parse(payloadCall[1][14])).toEqual({ captureMode: 'full' })
   })
 
+  test('upsertRequestDetail stores user input without a request body snapshot', async () => {
+    await requestDetailPostgresStore.upsertRequestDetail({
+      requestId: 'req_user_input',
+      timestamp: '2026-05-27T08:00:00.000Z',
+      model: 'gpt-5.1',
+      userInput: '  explain this code  '
+    })
+
+    const payloadCall = postgres.query.mock.calls.find(([sql]) =>
+      String(sql).includes('INSERT INTO request_detail_payloads')
+    )
+
+    expect(payloadCall).toBeTruthy()
+    expect(payloadCall[0]).toContain('user_input')
+    expect(payloadCall[1][3]).toBeNull()
+    expect(payloadCall[1][15]).toBe('  explain this code  ')
+  })
+
   test('listRecordsPage orders by whitelisted request metric columns', async () => {
-    await requestDetailPostgresStore.listRecordsPage({
+    postgres.query.mockResolvedValueOnce({
+      rows: [
+        {
+          request_id: 'req_list_user_input',
+          timestamp: '2026-05-27T08:00:00.000Z',
+          payload_user_input: 'list this input'
+        }
+      ],
+      rowCount: 1
+    })
+
+    const records = await requestDetailPostgresStore.listRecordsPage({
       startDate: '2026-05-27T00:00:00.000Z',
       endDate: '2026-05-28T00:00:00.000Z',
       sortBy: 'cost',
@@ -75,9 +104,12 @@ describe('requestDetailPostgresStore', () => {
     })
 
     const [sql, values] = postgres.query.mock.calls[0]
+    expect(sql).toContain('p.user_input AS payload_user_input')
+    expect(sql).toContain('LEFT JOIN request_detail_payloads p')
     expect(sql).toContain('ORDER BY d.cost ASC, d.timestamp ASC, d.request_id ASC')
     expect(sql).not.toContain('sortBy')
     expect(values).toHaveLength(4)
+    expect(records[0].userInput).toBe('list this input')
   })
 
   test('cleanupExpiredRequestDetails deletes only expired request detail rows', async () => {

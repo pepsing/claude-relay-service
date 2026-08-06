@@ -87,6 +87,96 @@ function normalizeNonEmptyString(value) {
   return trimmed ? trimmed : null
 }
 
+function preserveNonEmptyString(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return null
+  }
+
+  return value
+}
+
+function extractTextContent(content) {
+  const stringContent = preserveNonEmptyString(content)
+  if (stringContent !== null) {
+    return stringContent
+  }
+
+  if (!Array.isArray(content)) {
+    return null
+  }
+
+  const textParts = content
+    .filter(
+      (block) =>
+        block &&
+        typeof block === 'object' &&
+        !Array.isArray(block) &&
+        (block.type === 'text' || block.type === 'input_text')
+    )
+    .map((block) => preserveNonEmptyString(block.text ?? block.input_text))
+    .filter((text) => text !== null)
+
+  return textParts.length > 0 ? textParts.join('\n') : null
+}
+
+function extractLatestMessageUserInput(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return null
+  }
+
+  const latestMessage = messages[messages.length - 1]
+  if (
+    !latestMessage ||
+    typeof latestMessage !== 'object' ||
+    Array.isArray(latestMessage) ||
+    latestMessage.role !== 'user'
+  ) {
+    return null
+  }
+
+  if (
+    Array.isArray(latestMessage.content) &&
+    latestMessage.content.some(
+      (block) =>
+        block &&
+        typeof block === 'object' &&
+        !Array.isArray(block) &&
+        (block.type === 'tool_result' || block.type === 'tool_use_result')
+    )
+  ) {
+    return null
+  }
+
+  return extractTextContent(latestMessage.content)
+}
+
+function extractLatestUserInput(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null
+  }
+
+  if (typeof payload.input === 'string') {
+    return preserveNonEmptyString(payload.input)
+  }
+
+  if (Array.isArray(payload.input)) {
+    const latestInput = payload.input[payload.input.length - 1]
+    if (
+      !latestInput ||
+      typeof latestInput !== 'object' ||
+      Array.isArray(latestInput) ||
+      latestInput.role !== 'user' ||
+      (latestInput.type !== undefined && latestInput.type !== 'message')
+    ) {
+      return null
+    }
+
+    return extractTextContent(latestInput.content)
+  }
+
+  return extractLatestMessageUserInput(payload.messages)
+}
+
 function normalizeInteger(value) {
   const num = toFiniteNumber(value)
   if (num === null) {
@@ -1033,6 +1123,7 @@ function calculateCacheHitRate(
 
 module.exports = {
   sanitizeRequestBodySnapshot,
+  extractLatestUserInput,
   extractRequestReasoningInfo,
   resolveRequestDetailReasoning,
   createRequestDetailMeta,

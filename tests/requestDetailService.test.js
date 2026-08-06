@@ -132,7 +132,7 @@ describe('requestDetailService', () => {
         reasoning: {
           effort: 'medium'
         },
-        prompt: 'hello'
+        input: 'hello'
       },
       responseBody: {
         id: 'resp_123',
@@ -155,6 +155,7 @@ describe('requestDetailService', () => {
     )
     const storedPayload = JSON.parse(multi.set.mock.calls[0][1])
     expect(storedPayload.requestBodySnapshot.apiKey).toContain('***')
+    expect(storedPayload.userInput).toBe('hello')
     expect(storedPayload.endpoint).toBe('/openai/v1/responses')
     expect(storedPayload.reasoningDisplay).toBe('medium')
     expect(storedPayload.reasoningSource).toBe('reasoning.effort')
@@ -679,6 +680,7 @@ describe('requestDetailService', () => {
 
     const storedPayload = JSON.parse(multi.set.mock.calls[0][1])
     expect(storedPayload.requestBodySnapshot).toBeUndefined()
+    expect(storedPayload.userInput).toBe('hello world')
     expect(storedPayload.reasoningDisplay).toBe('high')
     expect(storedPayload.reasoningSource).toBe('reasoning.effort')
   })
@@ -2097,6 +2099,7 @@ describe('requestDetailService', () => {
         cost: 0.4,
         durationMs: 800,
         conversationId: 'conv-1',
+        userInput: 'show this in the list',
         requestBodySnapshot: { model: 'gpt-5.4' }
       }
     ])
@@ -2114,6 +2117,7 @@ describe('requestDetailService', () => {
     expect(result.snapshotId).toBeNull()
     expect(result.records).toHaveLength(1)
     expect(result.records[0].requestBodySnapshot).toBeUndefined()
+    expect(result.records[0].userInput).toBe('show this in the list')
     expect(result.records[0].apiKeyName).toBe('PG Key')
     expect(result.summary.totalRequests).toBe(1)
     expect(result.summary.cacheHitRate).toBe(33.33)
@@ -2155,6 +2159,7 @@ describe('requestDetailService', () => {
       accountType: 'openai',
       model: 'gpt-5.4',
       requestBodySnapshot: { model: 'gpt-5.4' },
+      userInput: 'show this in the detail',
       metadataUserId: 'user-1'
     })
 
@@ -2163,6 +2168,7 @@ describe('requestDetailService', () => {
     expect(result.readMode).toBe('postgres')
     expect(result.record.requestId).toBe('req_pg_detail')
     expect(result.record.requestBodySnapshot).toEqual({ model: 'gpt-5.4' })
+    expect(result.record.userInput).toBe('show this in the detail')
     expect(result.record.metadataUserId).toBe('user-1')
     expect(requestDetailPostgresStore.getRequestDetail).toHaveBeenCalledWith('req_pg_detail')
   })

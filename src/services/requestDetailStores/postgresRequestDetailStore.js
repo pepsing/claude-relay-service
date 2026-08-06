@@ -78,9 +78,12 @@ CREATE TABLE IF NOT EXISTS request_detail_payloads (
   finish_reason TEXT,
   error_body JSONB,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  user_input TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE request_detail_payloads ADD COLUMN IF NOT EXISTS user_input TEXT;
 
 CREATE TABLE IF NOT EXISTS request_detail_costs (
   request_id TEXT PRIMARY KEY REFERENCES request_details(request_id) ON DELETE CASCADE,
@@ -207,7 +210,8 @@ const PAYLOAD_COLUMNS = [
   'upstream_response_id',
   'finish_reason',
   'error_body',
-  'metadata'
+  'metadata',
+  'user_input'
 ]
 
 const COST_COLUMNS = [
@@ -268,6 +272,15 @@ function normalizeText(value) {
 
   const normalized = sanitizeStringForPostgres(value).trim()
   return normalized ? normalized : null
+}
+
+function normalizePreservedText(value) {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const normalized = sanitizeStringForPostgres(value)
+  return normalized.trim() ? normalized : null
 }
 
 function sanitizeStringForPostgres(value) {
@@ -410,7 +423,8 @@ function hasRequestPayload(record = {}) {
     record.requestHeaders !== undefined ||
     getRequestPayload(record) !== undefined ||
     record.requestBodySizeBytes !== undefined ||
-    record.requestBodyTruncated !== undefined
+    record.requestBodyTruncated !== undefined ||
+    record.userInput !== undefined
   )
 }
 
@@ -537,6 +551,8 @@ function getPayloadColumnValue(record, column) {
       return jsonValue(record.errorBody)
     case 'metadata':
       return jsonValue(isPlainObject(record.responseMetadata) ? record.responseMetadata : {}, '{}')
+    case 'user_input':
+      return normalizePreservedText(record.userInput)
     default:
       return null
   }
@@ -849,6 +865,9 @@ function rowToRecord(row = {}) {
   if (row.payload_request_body_truncated !== undefined) {
     record.requestBodyTruncated = row.payload_request_body_truncated === true
   }
+  if (row.payload_user_input !== undefined && row.payload_user_input !== null) {
+    record.userInput = row.payload_user_input
+  }
   if (row.payload_response_headers !== undefined && row.payload_response_headers !== null) {
     record.responseHeaders = row.payload_response_headers
   }
@@ -964,8 +983,9 @@ async function listRecordsInRange({ startDate, endDate, sortOrder = 'desc' } = {
   const order = sortOrder === 'asc' ? 'ASC' : 'DESC'
   const result = await postgres.query(
     `
-      SELECT d.*
+      SELECT d.*, p.user_input AS payload_user_input
       FROM request_details d
+      LEFT JOIN request_detail_payloads p ON p.request_id = d.request_id
       WHERE d.timestamp >= $1 AND d.timestamp <= $2
       ORDER BY d.timestamp ${order}, d.request_id ${order}
     `,
@@ -997,8 +1017,9 @@ async function listRecordsPage({
 
   const result = await postgres.query(
     `
-      SELECT d.*
+      SELECT d.*, p.user_input AS payload_user_input
       FROM request_details d
+      LEFT JOIN request_detail_payloads p ON p.request_id = d.request_id
       WHERE ${where.whereSql}
       ORDER BY ${orderBy}
       LIMIT $${values.length - 1}
@@ -1280,6 +1301,7 @@ async function getRequestDetail(requestId) {
         p.finish_reason AS payload_finish_reason,
         p.error_body AS payload_error_body,
         p.metadata AS payload_metadata,
+        p.user_input AS payload_user_input,
         c.cost_breakdown,
         c.real_cost_breakdown,
         c.pricing_source,
@@ -1341,7 +1363,7 @@ async function purgeRequestBodySnapshots() {
           SELECT 1
           FROM request_detail_payloads p
           WHERE p.request_id = d.request_id
-            AND p.request_headers IS NOT NULL
+            AND (p.request_headers IS NOT NULL OR p.user_input IS NOT NULL)
         ),
         updated_at = now()
     WHERE d.has_request_payload = true
