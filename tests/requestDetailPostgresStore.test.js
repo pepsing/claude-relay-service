@@ -129,6 +129,22 @@ describe('requestDetailPostgresStore', () => {
     expect(records[0].userInput).toBe('list this input')
   })
 
+  test('listRecordsPage filters for non-empty stored user input', async () => {
+    await requestDetailPostgresStore.listRecordsPage({
+      startDate: '2026-05-27T00:00:00.000Z',
+      endDate: '2026-05-28T00:00:00.000Z',
+      filters: { hasUserInput: true },
+      page: 1,
+      pageSize: 20
+    })
+
+    const [sql, values] = postgres.query.mock.calls[0]
+    expect(sql).toContain('FROM request_detail_payloads p_user_input')
+    expect(sql).toContain('p_user_input.request_id = d.request_id')
+    expect(sql).toContain("p_user_input.user_input ~ '[^[:space:]]'")
+    expect(values).toHaveLength(4)
+  })
+
   test('cleanupExpiredRequestDetails deletes only expired request detail rows', async () => {
     postgres.query.mockResolvedValueOnce({ rows: [], rowCount: 3 })
 

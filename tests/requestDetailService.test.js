@@ -685,6 +685,48 @@ describe('requestDetailService', () => {
     expect(storedPayload.reasoningSource).toBe('reasoning.effort')
   })
 
+  test('captureRequestDetail extracts Anthropic input before a trailing system hook', async () => {
+    const multi = {
+      set: jest.fn().mockReturnThis(),
+      zadd: jest.fn().mockReturnThis(),
+      expire: jest.fn().mockReturnThis(),
+      exec: jest.fn().mockResolvedValue([])
+    }
+
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      requestDetailCaptureEnabled: true,
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: false
+    })
+    redis.getClient.mockReturnValue({ multi: jest.fn(() => multi) })
+
+    await requestDetailService.captureRequestDetail({
+      requestId: 'req_anthropic_trailing_system',
+      endpoint: '/api/v1/messages',
+      method: 'POST',
+      model: 'claude-sonnet-5',
+      requestBody: {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: '<system-reminder>injected context</system-reminder>\n\n'
+              },
+              { type: 'text', text: 'hi' }
+            ]
+          },
+          { role: 'system', content: 'SessionStart hook additional context' }
+        ]
+      }
+    })
+
+    const storedPayload = JSON.parse(multi.set.mock.calls[0][1])
+    expect(storedPayload.userInput).toBe('hi')
+    expect(storedPayload.requestBodySnapshot).toBeUndefined()
+  })
+
   test('getRequestBodyPreviewStats counts stored snapshots', async () => {
     claudeRelayConfigService.getConfig.mockResolvedValue({
       requestDetailCaptureEnabled: true,
@@ -1546,6 +1588,71 @@ describe('requestDetailService', () => {
     expect(result.records).toHaveLength(1)
     expect(result.filters.apiKeyId).toBe('key_1')
     expect(result.filters.session).toBe('session_1')
+  })
+
+  test('listRequestDetails filters stored records by user input and invalidates snapshots', async () => {
+    claudeRelayConfigService.getConfig.mockResolvedValue({
+      requestDetailCaptureEnabled: true,
+      requestDetailRetentionHours: 6,
+      requestDetailBodyPreviewEnabled: false
+    })
+    redis.getApiKey.mockResolvedValue({ name: 'Key' })
+    openaiAccountService.getAccount.mockResolvedValue({ name: 'Account' })
+
+    const withInputTimestamp = Date.now() - 3600000
+    const withoutInputTimestamp = withInputTimestamp - 1000
+    const recordsByKey = {
+      'request_detail:item:req_with_input': JSON.stringify({
+        requestId: 'req_with_input',
+        timestamp: new Date(withInputTimestamp).toISOString(),
+        apiKeyId: 'key_1',
+        accountId: 'acct_1',
+        accountType: 'openai',
+        model: 'gpt-5.4',
+        userInput: 'explain this code'
+      }),
+      'request_detail:item:req_without_input': JSON.stringify({
+        requestId: 'req_without_input',
+        timestamp: new Date(withoutInputTimestamp).toISOString(),
+        apiKeyId: 'key_1',
+        accountId: 'acct_1',
+        accountType: 'openai',
+        model: 'gpt-5.4'
+      })
+    }
+    const snapshots = new Map()
+    const client = {
+      zrangebyscore: jest
+        .fn()
+        .mockResolvedValue([
+          'req_without_input',
+          String(withoutInputTimestamp),
+          'req_with_input',
+          String(withInputTimestamp)
+        ]),
+      mget: jest.fn(async (keys) => keys.map((key) => recordsByKey[key] || null)),
+      set: jest.fn(async (key, value) => {
+        snapshots.set(key, value)
+        return 'OK'
+      }),
+      get: jest.fn(async (key) => snapshots.get(key) || null),
+      expire: jest.fn().mockResolvedValue(1)
+    }
+    redis.getClient.mockReturnValue(client)
+
+    const unfiltered = await requestDetailService.listRequestDetails({ pageSize: 20 })
+    expect(unfiltered.pagination.totalRecords).toBe(2)
+
+    const filtered = await requestDetailService.listRequestDetails({
+      pageSize: 20,
+      hasUserInput: 'true',
+      snapshotId: unfiltered.snapshotId
+    })
+
+    expect(filtered.pagination.totalRecords).toBe(1)
+    expect(filtered.records[0].requestId).toBe('req_with_input')
+    expect(filtered.filters.hasUserInput).toBe(true)
+    expect(client.zrangebyscore).toHaveBeenCalledTimes(2)
   })
 
   test('listRequestDetails skips snapshot creation when result count exceeds the limit', async () => {

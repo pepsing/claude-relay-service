@@ -95,10 +95,35 @@ function preserveNonEmptyString(value) {
   return value
 }
 
-function extractTextContent(content) {
+function stripLeadingSystemReminder(value) {
+  const original = preserveNonEmptyString(value)
+  if (original === null) {
+    return null
+  }
+
+  const openingTag = '<system-reminder>'
+  const closingTag = '</system-reminder>'
+  let remaining = original
+  let stripped = false
+
+  while (remaining.trimStart().startsWith(openingTag)) {
+    const normalizedStart = remaining.trimStart()
+    const closingIndex = normalizedStart.indexOf(closingTag)
+    if (closingIndex < 0) {
+      return original
+    }
+
+    remaining = normalizedStart.slice(closingIndex + closingTag.length).trimStart()
+    stripped = true
+  }
+
+  return stripped ? preserveNonEmptyString(remaining) : original
+}
+
+function extractTextContent(content, options = {}) {
   const stringContent = preserveNonEmptyString(content)
   if (stringContent !== null) {
-    return stringContent
+    return options.stripSystemReminders ? stripLeadingSystemReminder(stringContent) : stringContent
   }
 
   if (!Array.isArray(content)) {
@@ -113,18 +138,30 @@ function extractTextContent(content) {
         !Array.isArray(block) &&
         (block.type === 'text' || block.type === 'input_text')
     )
-    .map((block) => preserveNonEmptyString(block.text ?? block.input_text))
+    .map((block) => {
+      const text = block.text ?? block.input_text
+      return options.stripSystemReminders
+        ? stripLeadingSystemReminder(text)
+        : preserveNonEmptyString(text)
+    })
     .filter((text) => text !== null)
 
   return textParts.length > 0 ? textParts.join('\n') : null
 }
 
-function extractLatestMessageUserInput(messages) {
+function extractLatestMessageUserInput(messages, options = {}) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return null
   }
 
-  const latestMessage = messages[messages.length - 1]
+  let latestMessageIndex = messages.length - 1
+  if (options.anthropicMessages) {
+    while (latestMessageIndex >= 0 && messages[latestMessageIndex]?.role === 'system') {
+      latestMessageIndex -= 1
+    }
+  }
+
+  const latestMessage = messages[latestMessageIndex]
   if (
     !latestMessage ||
     typeof latestMessage !== 'object' ||
@@ -147,13 +184,26 @@ function extractLatestMessageUserInput(messages) {
     return null
   }
 
-  return extractTextContent(latestMessage.content)
+  return extractTextContent(latestMessage.content, {
+    stripSystemReminders: options.anthropicMessages === true
+  })
 }
 
-function extractLatestUserInput(payload) {
+function isAnthropicMessagesEndpoint(endpoint) {
+  if (typeof endpoint !== 'string') {
+    return false
+  }
+
+  const normalizedEndpoint = endpoint.split('?')[0].replace(/\/+$/, '')
+  return /(?:^|\/)(?:v1\/)?messages$/.test(normalizedEndpoint)
+}
+
+function extractLatestUserInput(payload, options = {}) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return null
   }
+
+  const anthropicMessages = isAnthropicMessagesEndpoint(options.endpoint)
 
   if (typeof payload.input === 'string') {
     return preserveNonEmptyString(payload.input)
@@ -174,7 +224,7 @@ function extractLatestUserInput(payload) {
     return extractTextContent(latestInput.content)
   }
 
-  return extractLatestMessageUserInput(payload.messages)
+  return extractLatestMessageUserInput(payload.messages, { anthropicMessages })
 }
 
 function normalizeInteger(value) {

@@ -747,6 +747,16 @@ function buildListWhereClause({ startDate, endDate, filters = {} } = {}) {
     }
   }
 
+  if ([true, 'true', 1, '1'].includes(filters.hasUserInput)) {
+    clauses.push(`EXISTS (
+      SELECT 1
+      FROM request_detail_payloads p_user_input
+      WHERE p_user_input.request_id = d.request_id
+        AND p_user_input.user_input IS NOT NULL
+        AND p_user_input.user_input ~ '[^[:space:]]'
+    )`)
+  }
+
   const session = normalizeText(filters.session)
   if (session) {
     const placeholder = addValue(session)

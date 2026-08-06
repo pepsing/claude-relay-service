@@ -318,6 +318,10 @@ function normalizeOptionalFilterValue(value) {
   return normalized ? normalized : null
 }
 
+function normalizeBooleanFilter(value) {
+  return value === true || value === 'true' || value === 1 || value === '1'
+}
+
 function normalizeRequestDetailFilters(filters = {}) {
   return {
     ...filters,
@@ -326,6 +330,7 @@ function normalizeRequestDetailFilters(filters = {}) {
     model: normalizeOptionalFilterValue(filters.model),
     endpoint: normalizeOptionalFilterValue(filters.endpoint),
     session: normalizeOptionalFilterValue(filters.session),
+    hasUserInput: normalizeBooleanFilter(filters.hasUserInput),
     sortBy: normalizeRequestDetailSortBy(filters.sortBy)
   }
 }
@@ -396,6 +401,7 @@ function createRequestDetailFilterSignature(
     model: normalizeOptionalFilterValue(filters.model),
     endpoint: normalizeOptionalFilterValue(filters.endpoint),
     session: normalizeOptionalFilterValue(filters.session),
+    hasUserInput: normalizeBooleanFilter(filters.hasUserInput),
     sortBy: normalizeRequestDetailSortBy(filters.sortBy),
     sortOrder: filters.sortOrder === 'asc' ? 'asc' : 'desc',
     retentionHours:
@@ -455,6 +461,7 @@ function requestDetailFilterSignaturesMatch(snapshotSignature, currentSignature)
     normalizedSnapshot.model === normalizedCurrent.model &&
     normalizedSnapshot.endpoint === normalizedCurrent.endpoint &&
     normalizedSnapshot.session === normalizedCurrent.session &&
+    normalizedSnapshot.hasUserInput === normalizedCurrent.hasUserInput &&
     normalizedSnapshot.sortBy === normalizedCurrent.sortBy &&
     normalizedSnapshot.sortOrder === normalizedCurrent.sortOrder &&
     normalizedSnapshot.retentionHours === normalizedCurrent.retentionHours &&
@@ -785,6 +792,7 @@ class RequestDetailService {
         model: filters.model || null,
         endpoint: filters.endpoint || null,
         session: filters.session || null,
+        hasUserInput: filters.hasUserInput === true,
         hasCustomDateRange: Boolean(filters.startDate || filters.endDate),
         sortBy: normalizeRequestDetailSortBy(filters.sortBy),
         sortOrder: filters.sortOrder === 'asc' ? 'asc' : 'desc'
@@ -903,7 +911,7 @@ class RequestDetailService {
     const sessionHash =
       normalizeOptionalFilterValue(detail.sessionHash) || hashRequestDetailIdentifier(sessionId)
     const responsePayloadFields = this._normalizeResponsePayload(detail)
-    const userInput = extractLatestUserInput(userInputSource)
+    const userInput = extractLatestUserInput(userInputSource, { endpoint: detail.endpoint })
     const normalized = {
       requestId,
       timestamp,
@@ -1489,6 +1497,12 @@ class RequestDetailService {
     if (filters.endpoint && record.endpoint !== filters.endpoint) {
       return false
     }
+    if (
+      filters.hasUserInput &&
+      (typeof record.userInput !== 'string' || !record.userInput.trim())
+    ) {
+      return false
+    }
     if (filters.session) {
       const sessionMatches = [
         record.sessionId,
@@ -1514,6 +1528,7 @@ class RequestDetailService {
       model: filters.model || null,
       endpoint: filters.endpoint || null,
       session: filters.session || null,
+      hasUserInput: filters.hasUserInput === true,
       hasCustomDateRange: Boolean(filters.startDate || filters.endDate),
       sortBy,
       sortOrder

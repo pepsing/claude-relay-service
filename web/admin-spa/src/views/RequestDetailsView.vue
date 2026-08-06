@@ -311,6 +311,18 @@
 
                   <div v-if="activeTab === 'history'" class="toolbar-control group">
                     <div
+                      class="toolbar-control-glow bg-gradient-to-r from-cyan-500 to-blue-500"
+                    ></div>
+                    <el-checkbox
+                      v-model="filters.hasUserInput"
+                      class="user-input-filter toolbar-element w-full"
+                    >
+                      仅有 User Input
+                    </el-checkbox>
+                  </div>
+
+                  <div v-if="activeTab === 'history'" class="toolbar-control group">
+                    <div
                       class="toolbar-control-glow bg-gradient-to-r from-slate-500 to-gray-500"
                     ></div>
                     <el-select
@@ -981,6 +993,7 @@ const filters = reactive({
   model: '',
   endpoint: '',
   session: '',
+  hasUserInput: false,
   sortBy: 'timestamp',
   sortOrder: 'desc'
 })
@@ -999,7 +1012,11 @@ const hasActiveFilters = computed(() => {
     return hasSharedFilters
   }
 
-  return !!(hasSharedFilters || (filters.dateRange && filters.dateRange.length === 2))
+  return !!(
+    hasSharedFilters ||
+    filters.hasUserInput ||
+    (filters.dateRange && filters.dateRange.length === 2)
+  )
 })
 
 const summary = reactive({
@@ -1047,7 +1064,8 @@ const emptyHint = computed(() => {
     filters.accountId ||
     filters.model ||
     filters.endpoint ||
-    filters.session
+    filters.session ||
+    filters.hasUserInput
   ) {
     return '当前筛选条件下没有结果，请尝试放宽搜索条件。'
   }
@@ -1092,6 +1110,7 @@ const buildParams = (page, snapshotId = activeSnapshotId.value) => {
   if (filters.model) params.model = filters.model
   if (filters.endpoint) params.endpoint = filters.endpoint
   if (filters.session) params.session = filters.session
+  if (filters.hasUserInput) params.hasUserInput = true
   if (filters.dateRange && filters.dateRange.length === 2) {
     const [startDate, endDate] = filters.dateRange
     const parsedStart = dayjs(startDate)
@@ -1161,6 +1180,7 @@ const syncResponseState = (data) => {
   filters.model = filterEcho.model || ''
   filters.endpoint = filterEcho.endpoint || ''
   filters.session = filterEcho.session || ''
+  filters.hasUserInput = filterEcho.hasUserInput === true
   filters.sortBy = filterEcho.sortBy || 'timestamp'
   filters.sortOrder = filterEcho.sortOrder || 'desc'
   if (filterEcho.startDate && filterEcho.endDate) {
@@ -1325,6 +1345,7 @@ const resetFilters = () => {
   filters.model = ''
   filters.endpoint = ''
   filters.session = ''
+  filters.hasUserInput = false
   filters.sortBy = 'timestamp'
   filters.sortOrder = 'desc'
   pagination.currentPage = 1
@@ -1644,6 +1665,7 @@ watch(
     filters.model,
     filters.endpoint,
     filters.session,
+    filters.hasUserInput,
     filters.sortBy,
     filters.sortOrder
   ],
@@ -1853,6 +1875,20 @@ onMounted(() => {
 
 .toolbar-control :deep(.el-date-editor) {
   width: 100%;
+}
+
+.user-input-filter {
+  min-height: 40px;
+  border: 1px solid rgb(229 231 235);
+  border-radius: 10px;
+  background: rgb(255 255 255);
+  padding: 0 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.dark .user-input-filter {
+  border-color: rgb(75 85 99);
+  background: rgb(31 41 55);
 }
 
 .request-toolbar-actions {

@@ -207,6 +207,45 @@ describe('requestDetailHelper', () => {
     ).toBeNull()
   })
 
+  test('extractLatestUserInput skips Anthropic trailing system hooks and injected reminders', () => {
+    const payload = {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: '<system-reminder>injected context</system-reminder>\n\n'
+            },
+            { type: 'text', text: 'hi' }
+          ]
+        },
+        {
+          role: 'system',
+          content: 'SessionStart hook additional context'
+        }
+      ]
+    }
+
+    expect(extractLatestUserInput(payload, { endpoint: '/api/v1/messages' })).toBe('hi')
+    expect(extractLatestUserInput(payload, { endpoint: '/openai/v1/chat/completions' })).toBeNull()
+
+    expect(
+      extractLatestUserInput(
+        {
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'tool_result', tool_use_id: 'tool_1', content: 'result' }]
+            },
+            { role: 'system', content: 'hook context' }
+          ]
+        },
+        { endpoint: '/v1/messages' }
+      )
+    ).toBeNull()
+  })
+
   test('createRequestDetailMeta includes stream timing breakdown from request timing', () => {
     jest.useFakeTimers().setSystemTime(Date.parse('2026-04-07T12:00:03.500Z'))
 
