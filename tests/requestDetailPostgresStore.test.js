@@ -11,6 +11,23 @@ describe('requestDetailPostgresStore', () => {
     postgres.query.mockResolvedValue({ rows: [], rowCount: 0 })
   })
 
+  test('ensureSchema retries after failure and deduplicates concurrent attempts', async () => {
+    postgres.query
+      .mockRejectedValueOnce(new Error('schema unavailable'))
+      .mockResolvedValue({ rows: [], rowCount: 0 })
+
+    await expect(requestDetailPostgresStore.ensureSchema()).rejects.toThrow('schema unavailable')
+    await Promise.all([
+      requestDetailPostgresStore.ensureSchema(),
+      requestDetailPostgresStore.ensureSchema()
+    ])
+
+    const schemaCalls = postgres.query.mock.calls.filter(([sql]) =>
+      String(sql).includes('CREATE TABLE IF NOT EXISTS request_details')
+    )
+    expect(schemaCalls).toHaveLength(2)
+  })
+
   test('upsertRequestDetail writes payload booleans when only request body is present', async () => {
     await requestDetailPostgresStore.upsertRequestDetail({
       requestId: 'req_payload_only',

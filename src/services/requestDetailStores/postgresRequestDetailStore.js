@@ -2,6 +2,7 @@ const postgres = require('../../models/postgres')
 
 const DEFAULT_CLEANUP_BATCH_SIZE = 5000
 const MAX_CLEANUP_BATCH_SIZE = 50000
+let schemaPromise = null
 
 const REQUEST_DETAILS_RESET_SCHEMA_SQL = `
 DROP TABLE IF EXISTS request_detail_timings CASCADE;
@@ -937,11 +938,19 @@ function rowToSessionSummary(row = {}) {
 }
 
 async function ensureSchema() {
-  await postgres.query(REQUEST_DETAILS_SCHEMA_SQL)
+  if (!schemaPromise) {
+    schemaPromise = postgres.query(REQUEST_DETAILS_SCHEMA_SQL).catch((error) => {
+      schemaPromise = null
+      throw error
+    })
+  }
+
+  await schemaPromise
 }
 
 async function resetSchema() {
   await postgres.query(REQUEST_DETAILS_RESET_SCHEMA_SQL)
+  schemaPromise = null
   await ensureSchema()
 }
 
@@ -951,6 +960,7 @@ async function upsertRequestDetails(records = []) {
     return { upserted: 0 }
   }
 
+  await ensureSchema()
   await upsertRows(validRecords, MAIN_COLUMNS, getMainColumnValue, buildMainUpsertSql)
 
   const payloadRecords = validRecords.filter(
@@ -980,6 +990,7 @@ async function listRecordsInRange({ startDate, endDate, sortOrder = 'desc' } = {
     return []
   }
 
+  await ensureSchema()
   const order = sortOrder === 'asc' ? 'ASC' : 'DESC'
   const result = await postgres.query(
     `
@@ -1009,6 +1020,7 @@ async function listRecordsPage({
     return []
   }
 
+  await ensureSchema()
   const currentPage = Math.max(normalizeInteger(page, 1), 1)
   const limit = Math.min(Math.max(normalizeInteger(pageSize, 50), 1), 200)
   const offset = (currentPage - 1) * limit
@@ -1047,6 +1059,7 @@ async function listSessionSummaries({
     }
   }
 
+  await ensureSchema()
   const currentPage = Math.max(normalizeInteger(page, 1), 1)
   const limit = Math.min(Math.max(normalizeInteger(pageSize, 50), 1), 200)
   const offset = (currentPage - 1) * limit
@@ -1142,6 +1155,7 @@ async function getListSummary({ startDate, endDate, filters = {} } = {}) {
     }
   }
 
+  await ensureSchema()
   const result = await postgres.query(
     `
       SELECT
@@ -1205,6 +1219,7 @@ async function getAvailableFilters({ startDate, endDate } = {}) {
     }
   }
 
+  await ensureSchema()
   const values = [start, end]
   const rangeWhere = 'd.timestamp >= $1 AND d.timestamp <= $2'
   const [apiKeysResult, accountsResult, modelsResult, endpointsResult, dateRangeResult] =
@@ -1284,6 +1299,7 @@ async function getRequestDetail(requestId) {
     return null
   }
 
+  await ensureSchema()
   const result = await postgres.query(
     `
       SELECT
@@ -1334,6 +1350,7 @@ async function getRequestDetail(requestId) {
 }
 
 async function countRequestBodySnapshots() {
+  await ensureSchema()
   const result = await postgres.query(
     `
       SELECT COUNT(*)::int AS snapshot_count
@@ -1346,6 +1363,7 @@ async function countRequestBodySnapshots() {
 }
 
 async function purgeRequestBodySnapshots() {
+  await ensureSchema()
   const result = await postgres.query(
     `
       UPDATE request_detail_payloads
@@ -1385,6 +1403,7 @@ async function cleanupExpiredRequestDetails({ retentionHours, batchSize } = {}) 
     }
   }
 
+  await ensureSchema()
   const normalizedBatchSize = Math.min(
     Math.max(normalizeInteger(batchSize, DEFAULT_CLEANUP_BATCH_SIZE), 1),
     MAX_CLEANUP_BATCH_SIZE
