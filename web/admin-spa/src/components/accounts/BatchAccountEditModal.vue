@@ -66,7 +66,12 @@
         </div>
 
         <div class="grid gap-4 md:grid-cols-2">
-          <div v-for="field in group.fields" :key="field.key" class="space-y-2">
+          <div
+            v-for="field in group.fields"
+            :key="field.key"
+            class="space-y-2"
+            :class="{ 'md:col-span-2': field.key === 'supportedModelsText' }"
+          >
             <div class="flex items-center justify-between gap-3">
               <label class="text-sm font-semibold text-gray-700 dark:text-gray-200">
                 {{ field.label }}
@@ -130,6 +135,56 @@
               />
               {{ form[field.key] ? '启用' : '关闭' }}
             </label>
+
+            <div
+              v-else-if="field.key === 'supportedModelsText' && modelMode === 'mapping'"
+              class="space-y-3"
+            >
+              <div class="space-y-2">
+                <div
+                  v-for="(mapping, index) in modelMappingRows"
+                  :key="index"
+                  class="flex flex-col gap-2 sm:flex-row sm:items-center"
+                >
+                  <input
+                    v-model="mapping.from"
+                    class="batch-input min-w-0 sm:flex-1"
+                    :disabled="!fieldEnabled[field.key]"
+                    placeholder="原始模型名称"
+                    type="text"
+                  />
+                  <i
+                    class="fas fa-arrow-right rotate-90 self-center text-gray-400 dark:text-gray-500 sm:rotate-0"
+                  />
+                  <input
+                    v-model="mapping.to"
+                    class="batch-input min-w-0 sm:flex-1"
+                    :disabled="!fieldEnabled[field.key]"
+                    placeholder="映射后的模型名称"
+                    type="text"
+                  />
+                  <button
+                    :aria-label="`删除模型映射 ${index + 1}`"
+                    class="flex h-10 w-10 flex-none items-center justify-center self-end rounded-lg text-red-500 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-300 dark:hover:bg-red-900/20 dark:disabled:text-gray-600 sm:self-auto"
+                    :disabled="!fieldEnabled[field.key]"
+                    type="button"
+                    @click="removeModelMappingRow(index)"
+                  >
+                    <i class="fas fa-trash" />
+                  </button>
+                </div>
+              </div>
+
+              <button
+                class="w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-sm text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-300 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-300 dark:disabled:border-gray-700 dark:disabled:text-gray-600"
+                :disabled="!fieldEnabled[field.key]"
+                type="button"
+                @click="addModelMappingRow"
+              >
+                <i class="fas fa-plus mr-2" />
+                添加模型映射
+              </button>
+            </div>
 
             <textarea
               v-else-if="field.type === 'textarea'"
@@ -317,6 +372,7 @@ const form = reactive({
   supportedModelsText: '',
   proxyText: ''
 })
+const modelMappingRows = ref([])
 
 const selectedPlatform = computed(() => props.accounts[0]?.platform || '')
 const platformLabel = computed(
@@ -444,7 +500,7 @@ const visibleFieldGroups = computed(() => {
       type: 'textarea',
       hint:
         modelMode.value === 'mapping'
-          ? '每行一个映射：from => to；单独写模型名表示映射到自身。'
+          ? '左侧是客户端请求的模型，右侧是实际发送给 API 的模型。'
           : '每行一个模型名；留空表示不限制。'
     })
   }
@@ -690,6 +746,22 @@ function formatSupportedModels(models) {
   return ''
 }
 
+function toModelMappingRows(models) {
+  if (Array.isArray(models)) {
+    return models.map((model) => ({
+      from: String(model),
+      to: String(model)
+    }))
+  }
+  if (models && typeof models === 'object') {
+    return Object.entries(models).map(([from, to]) => ({
+      from,
+      to: String(to || from)
+    }))
+  }
+  return []
+}
+
 function seedFormFromAccount(account) {
   if (!account) {
     return
@@ -712,6 +784,8 @@ function seedFormFromAccount(account) {
   form.disableAutoProtection = toBoolean(account.disableAutoProtection)
   form.interceptWarmup = toBoolean(account.interceptWarmup)
   form.supportedModelsText = formatSupportedModels(account.supportedModels)
+  modelMappingRows.value =
+    modelMode.value === 'mapping' ? toModelMappingRows(account.supportedModels) : []
   form.proxyText = formatProxy(account.proxy)
 }
 
@@ -733,6 +807,18 @@ function parseProxyText(value) {
 
 function parseModelMappingText(value) {
   const mapping = {}
+
+  if (Array.isArray(value)) {
+    for (const row of value) {
+      const from = String(row?.from || '').trim()
+      const to = String(row?.to || '').trim()
+      if (from && to) {
+        mapping[from] = to
+      }
+    }
+    return mapping
+  }
+
   const lines = String(value || '')
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -747,6 +833,14 @@ function parseModelMappingText(value) {
     }
   }
   return mapping
+}
+
+function addModelMappingRow() {
+  modelMappingRows.value.push({ from: '', to: '' })
+}
+
+function removeModelMappingRow(index) {
+  modelMappingRows.value.splice(index, 1)
 }
 
 function parseModelListText(value) {
@@ -826,7 +920,7 @@ function buildPatch() {
   if (fieldEnabled.supportedModelsText) {
     patch.supportedModels =
       modelMode.value === 'mapping'
-        ? parseModelMappingText(form.supportedModelsText)
+        ? parseModelMappingText(modelMappingRows.value)
         : parseModelListText(form.supportedModelsText)
   }
   if (fieldEnabled.proxyText) {
