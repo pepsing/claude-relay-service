@@ -347,6 +347,87 @@ describe('UnifiedOpenAIScheduler', () => {
       expect(result).toEqual({ accountId: 'responses-1', accountType: 'openai-responses' })
     })
 
+    it('falls back to a compatible chat-completions account when responses accounts cannot serve the model', async () => {
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'responses-1',
+          name: 'Responses provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'responses',
+          supportedModels: { 'gpt-5': 'gpt-5' },
+          priority: 10
+        },
+        {
+          id: 'chat-fallback',
+          name: 'Chat fallback provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'chat-completions',
+          supportedModels: { 'gpt-5.6-sol': 'provider-gpt-5.6-sol' },
+          priority: 90
+        }
+      ])
+
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        null,
+        'gpt-5.6-sol',
+        { requiredProviderEndpoint: 'responses' }
+      )
+
+      expect(result).toEqual({
+        accountId: 'chat-fallback',
+        accountType: 'openai-responses'
+      })
+    })
+
+    it('falls back across provider endpoints after the responses account has failed', async () => {
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([
+        {
+          id: 'responses-primary',
+          name: 'Responses provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'responses',
+          supportedModels: { 'gpt-5.6-sol': 'gpt-5.6-sol' },
+          priority: 10
+        },
+        {
+          id: 'chat-fallback',
+          name: 'Chat fallback provider',
+          isActive: true,
+          status: 'active',
+          accountType: 'shared',
+          schedulable: true,
+          providerEndpoint: 'chat-completions',
+          supportedModels: { 'gpt-5.6-sol': 'provider-gpt-5.6-sol' },
+          priority: 90
+        }
+      ])
+
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { name: 'test-key' },
+        null,
+        'gpt-5.6-sol',
+        {
+          requiredProviderEndpoint: 'responses',
+          excludedAccountIds: ['responses-primary']
+        }
+      )
+
+      expect(result).toEqual({
+        accountId: 'chat-fallback',
+        accountType: 'openai-responses'
+      })
+    })
+
     it('uses only chat-completions OpenAI-Responses accounts when the endpoint requires it', async () => {
       openaiAccountService.getAllAccounts.mockResolvedValue([
         {

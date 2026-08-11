@@ -86,6 +86,43 @@ describe('OpenAI Responses provider subscription quota protection', () => {
     )
   })
 
+  it('suspends accounts whose provider has disabled balance billing', async () => {
+    const account = {
+      id: 'balance-disabled-1',
+      name: 'balance-disabled',
+      baseApi: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      disableAutoProtection: 'true'
+    }
+    jest.spyOn(openaiResponsesAccountService, 'getAccount').mockResolvedValue(account)
+    jest.spyOn(openaiResponsesAccountService, 'updateAccount').mockResolvedValue({ success: true })
+
+    const result = await openaiResponsesAccountService.handleProviderQuotaError(account.id, {
+      account,
+      status: 403,
+      errorData: {
+        error: {
+          type: 'forbidden_error',
+          message: 'balance billing is disabled for this key; redeem or upgrade a plan to continue'
+        }
+      }
+    })
+
+    expect(result).toEqual({
+      handled: true,
+      provider: 'generic',
+      quotaType: 'balance_billing_disabled'
+    })
+    expect(openaiResponsesAccountService.updateAccount).toHaveBeenCalledWith(
+      account.id,
+      expect.objectContaining({
+        status: 'quota_exceeded',
+        schedulable: 'false',
+        errorMessage: expect.stringContaining('balance billing is disabled')
+      })
+    )
+  })
+
   it('suspends Volcengine Chat Completions accounts until the monthly reset time', async () => {
     const account = {
       id: 'ark-chat-1',

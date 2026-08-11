@@ -617,6 +617,39 @@ class UnifiedOpenAIScheduler {
         sessionHash
       )
 
+      if (
+        availableAccounts.length === 0 &&
+        options.requiredProviderEndpoint === PROVIDER_ENDPOINT_RESPONSES &&
+        options.allowProviderEndpointFallback !== false &&
+        !options.requireImagesGenerations
+      ) {
+        const fallbackOptions = {
+          ...options,
+          requiredProviderEndpoint: null
+        }
+        let fallbackAccounts = await this._getAllAvailableAccounts(
+          apiKeyData,
+          requestedModel,
+          fallbackOptions
+        )
+        fallbackAccounts = fallbackAccounts.filter(
+          (fallbackAccount) => !excludedAccountIds.has(fallbackAccount.accountId)
+        )
+        fallbackAccounts = await this._restrictAccountsToSessionGroup(
+          fallbackAccounts,
+          stickySessionGroupId,
+          sessionHash
+        )
+        if (fallbackAccounts.length > 0) {
+          logger.warn('Falling back from Responses to a compatible provider endpoint', {
+            requestedModel,
+            excludedAccountCount: excludedAccountIds.size,
+            candidateCount: fallbackAccounts.length
+          })
+          availableAccounts = fallbackAccounts
+        }
+      }
+
       if (availableAccounts.length === 0) {
         if (excludedAccountIds.size > 0) {
           const error = new Error('No untried OpenAI accounts remain')

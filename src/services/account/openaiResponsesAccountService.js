@@ -936,6 +936,31 @@ class OpenAIResponsesAccountService {
 
     const { status: rawStatus, errorData } = options
     const status = Number(rawStatus)
+    const errorText = this._stringifyProviderError(errorData).toLowerCase()
+    if (status === 403 && errorText.includes('balance billing is disabled for this key')) {
+      const now = new Date().toISOString()
+      const errorMessage =
+        'Provider balance billing is disabled for this key; redeem or upgrade a plan to continue'
+      await this.updateAccount(accountId, {
+        status: 'quota_exceeded',
+        schedulable: 'false',
+        errorMessage,
+        updatedAt: now
+      })
+      upstreamErrorHelper
+        .recordErrorHistory(accountId, 'openai-responses', 403, 'balance_billing_disabled')
+        .catch(() => {})
+      logger.warn('OpenAI-compatible account balance billing is disabled', {
+        accountId,
+        accountName: account.name
+      })
+      return {
+        handled: true,
+        provider: 'generic',
+        quotaType: 'balance_billing_disabled'
+      }
+    }
+
     if (this.isKimiBillingCycleQuotaError(status, errorData, account)) {
       await this.markKimiBillingCycleQuotaExceeded(accountId, errorData)
       return { handled: true, provider: 'kimi', quotaType: 'billing_cycle' }
