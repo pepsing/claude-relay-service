@@ -82,6 +82,70 @@ const summarizeRelayError = (error) => ({
 
 const isResponseWritable = (res) => !res.destroyed && !res.writableEnded && !res.closed
 
+function ensureRequestTiming(req) {
+  if (!req.requestTiming || typeof req.requestTiming !== 'object') {
+    req.requestTiming = {}
+  }
+  return req.requestTiming
+}
+
+function startUpstreamAttemptTiming(req) {
+  const timing = ensureRequestTiming(req)
+  timing.upstreamAttemptCount = Number(timing.upstreamAttemptCount || 0) + 1
+  timing.upstreamAttemptStartedAt = Date.now()
+  timing.upstreamFirstByteAt = null
+  timing.upstreamFirstTokenAt = null
+  timing.upstreamResponseCompletedAt = null
+}
+
+function recordUpstreamFirstByte(req, receivedAt = Date.now()) {
+  const timing = ensureRequestTiming(req)
+  if (!timing.upstreamFirstByteAt) {
+    timing.upstreamFirstByteAt = receivedAt
+  }
+}
+
+function recordUpstreamFirstToken(req, receivedAt = Date.now()) {
+  const timing = ensureRequestTiming(req)
+  if (!timing.upstreamFirstTokenAt) {
+    timing.upstreamFirstTokenAt = receivedAt
+  }
+}
+
+function completeUpstreamAttemptTiming(req) {
+  const timing = ensureRequestTiming(req)
+  if (timing.upstreamAttemptStartedAt && !timing.upstreamResponseCompletedAt) {
+    timing.upstreamResponseCompletedAt = Date.now()
+  }
+}
+
+function hasUpstreamContentToken(eventData) {
+  if (!eventData || typeof eventData !== 'object') {
+    return false
+  }
+
+  if (
+    (eventData.type === 'response.output_text.delta' ||
+      eventData.type === 'response.reasoning_text.delta') &&
+    typeof eventData.delta === 'string' &&
+    eventData.delta.length > 0
+  ) {
+    return true
+  }
+
+  if (Array.isArray(eventData.choices)) {
+    return eventData.choices.some((choice) =>
+      Boolean(
+        choice?.delta?.content ||
+          choice?.delta?.reasoning_content ||
+          choice?.delta?.tool_calls?.length
+      )
+    )
+  }
+
+  return false
+}
+
 // 抽取缓存写入 token，兼容多种字段命名
 function extractCacheCreationTokens(usageData) {
   if (!usageData || typeof usageData !== 'object') {
@@ -510,11 +574,18 @@ class OpenAIResponsesRelayService {
         userAgent: headers['User-Agent'] || 'not set'
       })
 
-      // 发送请求
+      // 排队已结束，从真正发起本次上游请求开始计时；重试会覆盖为最后一次尝试。
+      startUpstreamAttemptTiming(req)
       const response = await axios(requestOptions)
+
+      // 非流式响应在 axios 返回时已完整读取响应体。
+      if (!response.data || typeof response.data.pipe !== 'function') {
+        completeUpstreamAttemptTiming(req)
+      }
 
       if (response.status >= 400) {
         const errorData = await this._readErrorResponseData(response)
+        completeUpstreamAttemptTiming(req)
 
         logger.error('OpenAI-Responses API error', {
           status: response.status,
@@ -667,6 +738,8 @@ class OpenAIResponsesRelayService {
       removeClientListeners()
       return this._handleNormalResponse(response, res, account, apiKeyData, req.body?.model, req)
     } catch (error) {
+      completeUpstreamAttemptTiming(req)
+
       // 清理 AbortController
       if (abortController && !abortController.signal.aborted) {
         abortController.abort()
@@ -915,7 +988,7 @@ class OpenAIResponsesRelayService {
     }
 
     // 解析 SSE 事件以捕获 usage 数据和 model
-    const parseSSEForUsage = (data) => {
+    const parseSSEForUsage = (data, receivedAt = Date.now()) => {
       const lines = data.split('\n')
 
       for (const line of lines) {
@@ -927,6 +1000,10 @@ class OpenAIResponsesRelayService {
             }
 
             const eventData = JSON.parse(jsonStr)
+
+            if (hasUpstreamContentToken(eventData)) {
+              recordUpstreamFirstToken(req, receivedAt)
+            }
 
             // 检查是否是 response.completed 事件（OpenAI-Responses 格式）
             if (eventData.type === 'response.completed' && eventData.response) {
@@ -1003,7 +1080,11 @@ class OpenAIResponsesRelayService {
     // 监听数据流
     response.data.on('data', (chunk) => {
       try {
+        const receivedAt = Date.now()
         const chunkStr = chunk.toString()
+        if (chunkStr) {
+          recordUpstreamFirstByte(req, receivedAt)
+        }
 
         // 转发数据给客户端
         if (isResponseWritable(res) && !streamEnded) {
@@ -1020,7 +1101,7 @@ class OpenAIResponsesRelayService {
 
           for (const event of events) {
             if (event.trim()) {
-              parseSSEForUsage(event)
+              parseSSEForUsage(event, receivedAt)
             }
           }
         }
@@ -1045,6 +1126,7 @@ class OpenAIResponsesRelayService {
 
     response.data.on('end', async () => {
       streamEnded = true
+      completeUpstreamAttemptTiming(req)
 
       // 处理剩余的 buffer
       if (buffer.trim()) {
@@ -1148,6 +1230,7 @@ class OpenAIResponsesRelayService {
 
     response.data.on('error', async (error) => {
       streamEnded = true
+      completeUpstreamAttemptTiming(req)
       const clientClosed = isClientDisconnected()
       const aborted =
         isAbortControllerError(error) ||

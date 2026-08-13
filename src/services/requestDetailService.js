@@ -907,6 +907,10 @@ class RequestDetailService {
     const contentGenerationMs =
       normalizeNullableInteger(detail.contentGenerationMs) ??
       (timeToFirstTokenMs !== null ? Math.max(0, durationMs - timeToFirstTokenMs) : null)
+    const upstreamDurationMs = normalizeNullableInteger(detail.upstreamDurationMs)
+    const upstreamTimeToFirstByteMs = normalizeNullableInteger(detail.upstreamTimeToFirstByteMs)
+    const upstreamTimeToFirstTokenMs = normalizeNullableInteger(detail.upstreamTimeToFirstTokenMs)
+    const upstreamAttemptCount = normalizeNullableInteger(detail.upstreamAttemptCount)
     const sessionId = normalizeOptionalFilterValue(detail.sessionId)
     const sessionHash =
       normalizeOptionalFilterValue(detail.sessionHash) || hashRequestDetailIdentifier(sessionId)
@@ -919,6 +923,10 @@ class RequestDetailService {
       firstByteAt: toIsoString(detail.firstByteAt),
       firstTokenAt: toIsoString(detail.firstTokenAt),
       responseCompletedAt: toIsoString(detail.responseCompletedAt),
+      upstreamAttemptStartedAt: toIsoString(detail.upstreamAttemptStartedAt),
+      upstreamFirstByteAt: toIsoString(detail.upstreamFirstByteAt),
+      upstreamFirstTokenAt: toIsoString(detail.upstreamFirstTokenAt),
+      upstreamResponseCompletedAt: toIsoString(detail.upstreamResponseCompletedAt),
       endpoint: detail.endpoint || null,
       method: detail.method || null,
       statusCode,
@@ -943,6 +951,10 @@ class RequestDetailService {
       timeToFirstByteMs,
       timeToFirstTokenMs,
       contentGenerationMs,
+      upstreamDurationMs,
+      upstreamTimeToFirstByteMs,
+      upstreamTimeToFirstTokenMs,
+      upstreamAttemptCount,
       isLongContextRequest: detail.isLongContextRequest === true,
       sessionId,
       sessionHash,

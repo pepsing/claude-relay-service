@@ -57,11 +57,20 @@
             <p class="info-sub">{{ detail.stream ? '流式请求' : '非流式请求' }}</p>
           </div>
           <div class="info-card">
-            <p class="info-label">首词</p>
+            <p class="info-label">端到端首词</p>
             <p class="info-value">{{ formatNullableDuration(detail.timeToFirstTokenMs) }}</p>
             <p class="info-sub">
               首包 {{ formatNullableDuration(detail.timeToFirstByteMs) }} · 生成
               {{ formatNullableDuration(detail.contentGenerationMs) }}
+            </p>
+          </div>
+          <div class="info-card">
+            <p class="info-label">上游整体耗时</p>
+            <p class="info-value">{{ formatNullableDuration(detail.upstreamDurationMs) }}</p>
+            <p class="info-sub">
+              首词 {{ formatNullableDuration(detail.upstreamTimeToFirstTokenMs) }} · 首包
+              {{ formatNullableDuration(detail.upstreamTimeToFirstByteMs) }} · 尝试
+              {{ detail.upstreamAttemptCount ?? '-' }} 次
             </p>
           </div>
           <div class="info-card">

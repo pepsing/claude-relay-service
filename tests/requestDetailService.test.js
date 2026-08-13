@@ -123,9 +123,17 @@ describe('requestDetailService', () => {
       timeToFirstByteMs: 300,
       timeToFirstTokenMs: 900,
       contentGenerationMs: 1600,
+      upstreamDurationMs: 2100,
+      upstreamTimeToFirstByteMs: 200,
+      upstreamTimeToFirstTokenMs: 700,
+      upstreamAttemptCount: 2,
       firstByteAt: '2026-04-07T12:00:00.300Z',
       firstTokenAt: '2026-04-07T12:00:00.900Z',
       responseCompletedAt: '2026-04-07T12:00:02.500Z',
+      upstreamAttemptStartedAt: '2026-04-07T12:00:00.400Z',
+      upstreamFirstByteAt: '2026-04-07T12:00:00.600Z',
+      upstreamFirstTokenAt: '2026-04-07T12:00:01.100Z',
+      upstreamResponseCompletedAt: '2026-04-07T12:00:02.500Z',
       requestBody: {
         apiKey: 'super-secret',
         model: 'gpt-5.4',
@@ -163,6 +171,11 @@ describe('requestDetailService', () => {
     expect(storedPayload.timeToFirstTokenMs).toBe(900)
     expect(storedPayload.contentGenerationMs).toBe(1600)
     expect(storedPayload.firstTokenAt).toBe('2026-04-07T12:00:00.900Z')
+    expect(storedPayload.upstreamDurationMs).toBe(2100)
+    expect(storedPayload.upstreamTimeToFirstByteMs).toBe(200)
+    expect(storedPayload.upstreamTimeToFirstTokenMs).toBe(700)
+    expect(storedPayload.upstreamAttemptCount).toBe(2)
+    expect(storedPayload.upstreamAttemptStartedAt).toBe('2026-04-07T12:00:00.400Z')
     expect(storedPayload.responseBodySnapshot.id).toBe('resp_123')
     expect(storedPayload.responseBodyTruncated).toBe(false)
     expect(storedPayload.responseTextPreview).toBe('{"id":"resp_123"')

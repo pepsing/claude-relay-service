@@ -1008,6 +1008,30 @@ function createRequestDetailMeta(req, overrides = {}) {
     (effectiveDurationMs !== null && timeToFirstTokenMs !== null
       ? Math.max(0, effectiveDurationMs - timeToFirstTokenMs)
       : null)
+  const upstreamAttemptStartedAt =
+    toTimestampMs(overrides.upstreamAttemptStartedAt) ??
+    toTimestampMs(req?.requestTiming?.upstreamAttemptStartedAt)
+  const upstreamFirstByteAt =
+    toTimestampMs(overrides.upstreamFirstByteAt) ??
+    toTimestampMs(req?.requestTiming?.upstreamFirstByteAt)
+  const upstreamFirstTokenAt =
+    toTimestampMs(overrides.upstreamFirstTokenAt) ??
+    toTimestampMs(req?.requestTiming?.upstreamFirstTokenAt)
+  const upstreamResponseCompletedAt =
+    toTimestampMs(overrides.upstreamResponseCompletedAt) ??
+    toTimestampMs(req?.requestTiming?.upstreamResponseCompletedAt)
+  const upstreamDurationMs =
+    normalizeTimingMs(overrides.upstreamDurationMs) ??
+    computeElapsedMs(upstreamAttemptStartedAt, upstreamResponseCompletedAt)
+  const upstreamTimeToFirstByteMs =
+    normalizeTimingMs(overrides.upstreamTimeToFirstByteMs) ??
+    computeElapsedMs(upstreamAttemptStartedAt, upstreamFirstByteAt)
+  const upstreamTimeToFirstTokenMs =
+    normalizeTimingMs(overrides.upstreamTimeToFirstTokenMs) ??
+    computeElapsedMs(upstreamAttemptStartedAt, upstreamFirstTokenAt)
+  const upstreamAttemptCount =
+    normalizeTimingMs(overrides.upstreamAttemptCount) ??
+    normalizeTimingMs(req?.requestTiming?.upstreamAttemptCount)
   const requestBody = overrides.requestBody !== undefined ? overrides.requestBody : req?.body
   const endpoint = overrides.endpoint || getRequestEndpoint(req)
   const analysisFields = extractRequestAnalysisFields(req, requestBody, endpoint, overrides)
@@ -1030,6 +1054,14 @@ function createRequestDetailMeta(req, overrides = {}) {
     timeToFirstByteMs,
     timeToFirstTokenMs,
     contentGenerationMs,
+    upstreamAttemptStartedAt: toIsoStringFromTimestamp(upstreamAttemptStartedAt),
+    upstreamFirstByteAt: toIsoStringFromTimestamp(upstreamFirstByteAt),
+    upstreamFirstTokenAt: toIsoStringFromTimestamp(upstreamFirstTokenAt),
+    upstreamResponseCompletedAt: toIsoStringFromTimestamp(upstreamResponseCompletedAt),
+    upstreamDurationMs,
+    upstreamTimeToFirstByteMs,
+    upstreamTimeToFirstTokenMs,
+    upstreamAttemptCount,
     requestBody,
     ...responsePayloadFields,
     ...analysisFields,
@@ -1061,6 +1093,19 @@ function finalizeRequestDetailMeta(requestMeta = null) {
     (durationMs !== null && timeToFirstTokenMs !== null
       ? Math.max(0, durationMs - timeToFirstTokenMs)
       : null)
+  const upstreamAttemptStartedAt = toTimestampMs(requestMeta.upstreamAttemptStartedAt)
+  const upstreamFirstByteAt = toTimestampMs(requestMeta.upstreamFirstByteAt)
+  const upstreamFirstTokenAt = toTimestampMs(requestMeta.upstreamFirstTokenAt)
+  const upstreamResponseCompletedAt = toTimestampMs(requestMeta.upstreamResponseCompletedAt)
+  const upstreamDurationMs =
+    normalizeTimingMs(requestMeta.upstreamDurationMs) ??
+    computeElapsedMs(upstreamAttemptStartedAt, upstreamResponseCompletedAt)
+  const upstreamTimeToFirstByteMs =
+    normalizeTimingMs(requestMeta.upstreamTimeToFirstByteMs) ??
+    computeElapsedMs(upstreamAttemptStartedAt, upstreamFirstByteAt)
+  const upstreamTimeToFirstTokenMs =
+    normalizeTimingMs(requestMeta.upstreamTimeToFirstTokenMs) ??
+    computeElapsedMs(upstreamAttemptStartedAt, upstreamFirstTokenAt)
 
   return {
     ...requestMeta,
@@ -1068,6 +1113,10 @@ function finalizeRequestDetailMeta(requestMeta = null) {
     timeToFirstByteMs,
     timeToFirstTokenMs,
     contentGenerationMs,
+    upstreamDurationMs,
+    upstreamTimeToFirstByteMs,
+    upstreamTimeToFirstTokenMs,
+    upstreamAttemptCount: normalizeTimingMs(requestMeta.upstreamAttemptCount),
     durationMs
   }
 }

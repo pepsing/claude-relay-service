@@ -44,6 +44,14 @@ describeIntegration('request detail PostgreSQL store integration', () => {
       timeToFirstByteMs: 100,
       timeToFirstTokenMs: 200,
       contentGenerationMs: 300,
+      upstreamAttemptStartedAt: '2026-04-07T12:00:00.050Z',
+      upstreamFirstByteAt: '2026-04-07T12:00:00.100Z',
+      upstreamFirstTokenAt: '2026-04-07T12:00:00.200Z',
+      upstreamResponseCompletedAt: '2026-04-07T12:00:00.450Z',
+      upstreamDurationMs: 400,
+      upstreamTimeToFirstByteMs: 50,
+      upstreamTimeToFirstTokenMs: 150,
+      upstreamAttemptCount: 2,
       sessionId: 'session-smoke',
       sessionHash: 'session-smoke-hash',
       conversationId: 'conv-smoke',
@@ -66,6 +74,11 @@ describeIntegration('request detail PostgreSQL store integration', () => {
     expect(detail.conversationId).toBe('conv-smoke')
     expect(detail.timeToFirstTokenMs).toBe(200)
     expect(detail.contentGenerationMs).toBe(300)
+    expect(detail.upstreamDurationMs).toBe(400)
+    expect(detail.upstreamTimeToFirstByteMs).toBe(50)
+    expect(detail.upstreamTimeToFirstTokenMs).toBe(150)
+    expect(detail.upstreamAttemptCount).toBe(2)
+    expect(detail.upstreamAttemptStartedAt).toBe('2026-04-07T12:00:00.050Z')
     expect(detail.requestBodySnapshot).toEqual({ model: 'gpt-5.4' })
     expect(beforePurge).toBeGreaterThan(0)
     expect(purge.updatedRecords).toBeGreaterThan(0)

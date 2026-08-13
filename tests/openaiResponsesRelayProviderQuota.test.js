@@ -336,4 +336,126 @@ describe('OpenAI Responses relay provider subscription quota handling', () => {
     )
     expect(unifiedOpenAIScheduler.markAccountRateLimited).not.toHaveBeenCalled()
   })
+
+  it('records upstream first byte, first token, and total duration from the actual attempt', async () => {
+    jest.useFakeTimers().setSystemTime(Date.parse('2026-08-13T10:00:00.000Z'))
+
+    try {
+      const account = {
+        id: 'responses-timing',
+        name: 'responses-timing',
+        baseApi: 'https://api.example.com/v1',
+        apiKey: 'test-key',
+        providerEndpoint: 'responses',
+        supportedModels: {},
+        maxConcurrentTasks: 0
+      }
+      const upstream = new PassThrough()
+      openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+      axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+      const req = new EventEmitter()
+      req.method = 'POST'
+      req.path = '/v1/responses'
+      req.headers = {}
+      req.body = { model: 'gpt-5', input: 'hi', stream: true }
+      req.socket = { destroyed: false }
+      const res = new FakeResponse()
+
+      await openaiResponsesRelayService.handleRequest(
+        req,
+        res,
+        { id: account.id, name: account.name },
+        { id: 'api-key-1' }
+      )
+
+      const attemptStartedAt = req.requestTiming.upstreamAttemptStartedAt
+      jest.advanceTimersByTime(200)
+      upstream.write(
+        `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'hello' })}\n\n`
+      )
+      jest.advanceTimersByTime(1000)
+
+      const finished = new Promise((resolve) => res.once('finished', resolve))
+      upstream.end()
+      await finished
+
+      expect(req.requestTiming).toEqual(
+        expect.objectContaining({
+          upstreamAttemptCount: 1,
+          upstreamAttemptStartedAt: attemptStartedAt,
+          upstreamFirstByteAt: attemptStartedAt + 200,
+          upstreamFirstTokenAt: attemptStartedAt + 200,
+          upstreamResponseCompletedAt: attemptStartedAt + 1200
+        })
+      )
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('resets upstream timing to the retried account attempt while preserving attempt count', async () => {
+    jest.useFakeTimers().setSystemTime(Date.parse('2026-08-13T11:00:00.000Z'))
+
+    try {
+      const account = {
+        id: 'responses-retry-timing',
+        name: 'responses-retry-timing',
+        baseApi: 'https://api.example.com/v1',
+        apiKey: 'test-key',
+        providerEndpoint: 'responses',
+        supportedModels: {},
+        maxConcurrentTasks: 0,
+        disableAutoProtection: true
+      }
+      openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+      openaiResponsesAccountService.handleProviderQuotaError.mockResolvedValue({ handled: false })
+      axios
+        .mockResolvedValueOnce({
+          status: 503,
+          statusText: 'Service Unavailable',
+          headers: {},
+          data: { error: { message: 'retry me' } }
+        })
+        .mockResolvedValueOnce({
+          status: 200,
+          headers: {},
+          data: { id: 'resp_retry_success', status: 'completed' }
+        })
+
+      const req = new EventEmitter()
+      req.method = 'POST'
+      req.path = '/v1/responses'
+      req.headers = {}
+      req.body = { model: 'gpt-5', input: 'hi', stream: false }
+      req.socket = { destroyed: false }
+
+      await expect(
+        openaiResponsesRelayService.handleRequest(
+          req,
+          new FakeResponse(),
+          { id: account.id, name: account.name },
+          { id: 'api-key-1' },
+          { deferRetryableErrors: true }
+        )
+      ).rejects.toMatchObject({ code: 'OPENAI_ACCOUNT_FAILOVER' })
+      const failedAttemptStartedAt = req.requestTiming.upstreamAttemptStartedAt
+
+      jest.advanceTimersByTime(500)
+      await openaiResponsesRelayService.handleRequest(
+        req,
+        new FakeResponse(),
+        { id: account.id, name: account.name },
+        { id: 'api-key-1' }
+      )
+
+      expect(req.requestTiming.upstreamAttemptCount).toBe(2)
+      expect(req.requestTiming.upstreamAttemptStartedAt).toBe(failedAttemptStartedAt + 500)
+      expect(req.requestTiming.upstreamFirstByteAt).toBeNull()
+      expect(req.requestTiming.upstreamFirstTokenAt).toBeNull()
+      expect(req.requestTiming.upstreamResponseCompletedAt).toBe(failedAttemptStartedAt + 500)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
 })

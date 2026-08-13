@@ -257,7 +257,12 @@ describe('requestDetailHelper', () => {
         requestStartedAt: Date.parse('2026-04-07T12:00:00.000Z'),
         requestTiming: {
           firstByteAt: Date.parse('2026-04-07T12:00:00.400Z'),
-          firstTokenAt: Date.parse('2026-04-07T12:00:01.200Z')
+          firstTokenAt: Date.parse('2026-04-07T12:00:01.200Z'),
+          upstreamAttemptStartedAt: Date.parse('2026-04-07T12:00:00.500Z'),
+          upstreamFirstByteAt: Date.parse('2026-04-07T12:00:00.700Z'),
+          upstreamFirstTokenAt: Date.parse('2026-04-07T12:00:01.500Z'),
+          upstreamResponseCompletedAt: Date.parse('2026-04-07T12:00:03.000Z'),
+          upstreamAttemptCount: 2
         },
         body: {
           stream: true,
@@ -275,6 +280,11 @@ describe('requestDetailHelper', () => {
     expect(meta.timeToFirstTokenMs).toBe(1200)
     expect(meta.contentGenerationMs).toBe(2300)
     expect(meta.firstTokenAt).toBe('2026-04-07T12:00:01.200Z')
+    expect(meta.upstreamDurationMs).toBe(2500)
+    expect(meta.upstreamTimeToFirstByteMs).toBe(200)
+    expect(meta.upstreamTimeToFirstTokenMs).toBe(1000)
+    expect(meta.upstreamAttemptCount).toBe(2)
+    expect(meta.upstreamAttemptStartedAt).toBe('2026-04-07T12:00:00.500Z')
   })
 
   test('createRequestDetailMeta includes captured response payload metadata', () => {
@@ -495,10 +505,17 @@ describe('requestDetailHelper', () => {
     const meta = finalizeRequestDetailMeta({
       requestId: 'req_123',
       requestStartedAt: '2026-04-09T05:00:00.000Z',
-      durationMs: 25
+      durationMs: 25,
+      upstreamAttemptStartedAt: '2026-04-09T05:00:00.100Z',
+      upstreamFirstTokenAt: '2026-04-09T05:00:00.250Z',
+      upstreamResponseCompletedAt: '2026-04-09T05:00:00.450Z',
+      upstreamAttemptCount: 2
     })
 
     expect(meta.durationMs).toBe(500)
+    expect(meta.upstreamDurationMs).toBe(350)
+    expect(meta.upstreamTimeToFirstTokenMs).toBe(150)
+    expect(meta.upstreamAttemptCount).toBe(2)
   })
 
   test('identifies openai-style request detail endpoints', () => {

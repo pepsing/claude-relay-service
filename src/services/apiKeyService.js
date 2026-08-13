@@ -2217,6 +2217,21 @@ class ApiKeyService {
       timeToFirstTokenMs: requestMeta?.timeToFirstTokenMs ?? usageRecord.timeToFirstTokenMs ?? null,
       contentGenerationMs:
         requestMeta?.contentGenerationMs ?? usageRecord.contentGenerationMs ?? null,
+      upstreamAttemptStartedAt:
+        requestMeta?.upstreamAttemptStartedAt || usageRecord.upstreamAttemptStartedAt || null,
+      upstreamFirstByteAt:
+        requestMeta?.upstreamFirstByteAt || usageRecord.upstreamFirstByteAt || null,
+      upstreamFirstTokenAt:
+        requestMeta?.upstreamFirstTokenAt || usageRecord.upstreamFirstTokenAt || null,
+      upstreamResponseCompletedAt:
+        requestMeta?.upstreamResponseCompletedAt || usageRecord.upstreamResponseCompletedAt || null,
+      upstreamDurationMs: requestMeta?.upstreamDurationMs ?? usageRecord.upstreamDurationMs ?? null,
+      upstreamTimeToFirstByteMs:
+        requestMeta?.upstreamTimeToFirstByteMs ?? usageRecord.upstreamTimeToFirstByteMs ?? null,
+      upstreamTimeToFirstTokenMs:
+        requestMeta?.upstreamTimeToFirstTokenMs ?? usageRecord.upstreamTimeToFirstTokenMs ?? null,
+      upstreamAttemptCount:
+        requestMeta?.upstreamAttemptCount ?? usageRecord.upstreamAttemptCount ?? null,
       requestBody: requestMeta?.requestBody,
       responseHeaders: requestMeta?.responseHeaders ?? usageRecord.responseHeaders,
       responseBody: requestMeta?.responseBody ?? usageRecord.responseBody,

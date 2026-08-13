@@ -490,6 +490,8 @@
                   <col style="width: 5%" />
                   <col style="width: 5%" />
                   <col style="width: 5%" />
+                  <col style="width: 5%" />
+                  <col style="width: 5%" />
                   <col style="width: 4%" />
                 </colgroup>
                 <thead
@@ -607,7 +609,7 @@
                         type="button"
                         @click="setSort('durationMs')"
                       >
-                        <span>耗时</span>
+                        <span>端到端耗时</span>
                         <i :class="getSortIcon('durationMs')" />
                       </button>
                     </th>
@@ -619,9 +621,19 @@
                         type="button"
                         @click="setSort('timeToFirstTokenMs')"
                       >
-                        <span>首词</span>
+                        <span>端到端首词</span>
                         <i :class="getSortIcon('timeToFirstTokenMs')" />
                       </button>
+                    </th>
+                    <th
+                      class="min-w-[110px] px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300"
+                    >
+                      上游耗时
+                    </th>
+                    <th
+                      class="min-w-[110px] px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300"
+                    >
+                      上游首词
                     </th>
                     <th
                       class="min-w-[110px] px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300"
@@ -706,6 +718,12 @@
                     <td class="table-cell">
                       {{ formatNullableDuration(record.timeToFirstTokenMs) }}
                     </td>
+                    <td class="table-cell">
+                      {{ formatNullableDuration(record.upstreamDurationMs) }}
+                    </td>
+                    <td class="table-cell">
+                      {{ formatNullableDuration(record.upstreamTimeToFirstTokenMs) }}
+                    </td>
                     <td class="table-cell">{{ formatGenerationSpeed(record) }}</td>
                     <td class="table-cell text-right">
                       <button
@@ -788,8 +806,12 @@
                     }}
                   </div>
                   <div>命中率：{{ formatPercent(record.cacheHitRate) }}</div>
-                  <div>耗时：{{ formatDuration(record.durationMs) }}</div>
-                  <div>首词：{{ formatNullableDuration(record.timeToFirstTokenMs) }}</div>
+                  <div>端到端耗时：{{ formatDuration(record.durationMs) }}</div>
+                  <div>端到端首词：{{ formatNullableDuration(record.timeToFirstTokenMs) }}</div>
+                  <div>上游耗时：{{ formatNullableDuration(record.upstreamDurationMs) }}</div>
+                  <div>
+                    上游首词：{{ formatNullableDuration(record.upstreamTimeToFirstTokenMs) }}
+                  </div>
                   <div>速度：{{ formatGenerationSpeed(record) }}</div>
                   <div class="text-amber-600 dark:text-amber-400">
                     费用：{{ formatCost(record.cost) }}

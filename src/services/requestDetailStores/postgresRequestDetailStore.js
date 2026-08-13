@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS request_details (
   time_to_first_byte_ms INTEGER,
   time_to_first_token_ms INTEGER,
   content_generation_ms INTEGER,
+  upstream_duration_ms INTEGER,
+  upstream_time_to_first_byte_ms INTEGER,
+  upstream_time_to_first_token_ms INTEGER,
+  upstream_attempt_count INTEGER,
   error_type TEXT,
   session_id TEXT,
   session_hash TEXT,
@@ -54,6 +58,10 @@ ALTER TABLE request_details ADD COLUMN IF NOT EXISTS error_type TEXT;
 ALTER TABLE request_details ADD COLUMN IF NOT EXISTS time_to_first_byte_ms INTEGER;
 ALTER TABLE request_details ADD COLUMN IF NOT EXISTS time_to_first_token_ms INTEGER;
 ALTER TABLE request_details ADD COLUMN IF NOT EXISTS content_generation_ms INTEGER;
+ALTER TABLE request_details ADD COLUMN IF NOT EXISTS upstream_duration_ms INTEGER;
+ALTER TABLE request_details ADD COLUMN IF NOT EXISTS upstream_time_to_first_byte_ms INTEGER;
+ALTER TABLE request_details ADD COLUMN IF NOT EXISTS upstream_time_to_first_token_ms INTEGER;
+ALTER TABLE request_details ADD COLUMN IF NOT EXISTS upstream_attempt_count INTEGER;
 ALTER TABLE request_details ADD COLUMN IF NOT EXISTS session_id TEXT;
 ALTER TABLE request_details ADD COLUMN IF NOT EXISTS session_hash TEXT;
 ALTER TABLE request_details ADD COLUMN IF NOT EXISTS conversation_id TEXT;
@@ -120,9 +128,18 @@ CREATE TABLE IF NOT EXISTS request_detail_timings (
   first_byte_at TIMESTAMPTZ,
   first_token_at TIMESTAMPTZ,
   response_completed_at TIMESTAMPTZ,
+  upstream_attempt_started_at TIMESTAMPTZ,
+  upstream_first_byte_at TIMESTAMPTZ,
+  upstream_first_token_at TIMESTAMPTZ,
+  upstream_response_completed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE request_detail_timings ADD COLUMN IF NOT EXISTS upstream_attempt_started_at TIMESTAMPTZ;
+ALTER TABLE request_detail_timings ADD COLUMN IF NOT EXISTS upstream_first_byte_at TIMESTAMPTZ;
+ALTER TABLE request_detail_timings ADD COLUMN IF NOT EXISTS upstream_first_token_at TIMESTAMPTZ;
+ALTER TABLE request_detail_timings ADD COLUMN IF NOT EXISTS upstream_response_completed_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_request_details_timestamp ON request_details (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_request_details_api_key_timestamp ON request_details (api_key_id, timestamp DESC);
@@ -185,6 +202,10 @@ const MAIN_COLUMNS = [
   'time_to_first_byte_ms',
   'time_to_first_token_ms',
   'content_generation_ms',
+  'upstream_duration_ms',
+  'upstream_time_to_first_byte_ms',
+  'upstream_time_to_first_token_ms',
+  'upstream_attempt_count',
   'error_type',
   'session_id',
   'session_hash',
@@ -244,7 +265,11 @@ const TIMING_COLUMNS = [
   'request_started_at',
   'first_byte_at',
   'first_token_at',
-  'response_completed_at'
+  'response_completed_at',
+  'upstream_attempt_started_at',
+  'upstream_first_byte_at',
+  'upstream_first_token_at',
+  'upstream_response_completed_at'
 ]
 
 const OPENAI_RELATED_SQL = `
@@ -489,6 +514,14 @@ function getMainColumnValue(record, column) {
       return normalizeNullableInteger(record.timeToFirstTokenMs)
     case 'content_generation_ms':
       return normalizeNullableInteger(record.contentGenerationMs)
+    case 'upstream_duration_ms':
+      return normalizeNullableInteger(record.upstreamDurationMs)
+    case 'upstream_time_to_first_byte_ms':
+      return normalizeNullableInteger(record.upstreamTimeToFirstByteMs)
+    case 'upstream_time_to_first_token_ms':
+      return normalizeNullableInteger(record.upstreamTimeToFirstTokenMs)
+    case 'upstream_attempt_count':
+      return normalizeNullableInteger(record.upstreamAttemptCount)
     case 'error_type':
       return normalizeText(record.errorType)
     case 'session_id':
@@ -621,6 +654,14 @@ function getTimingColumnValue(record, column) {
       return normalizeDate(record.firstTokenAt)
     case 'response_completed_at':
       return normalizeDate(record.responseCompletedAt)
+    case 'upstream_attempt_started_at':
+      return normalizeDate(record.upstreamAttemptStartedAt)
+    case 'upstream_first_byte_at':
+      return normalizeDate(record.upstreamFirstByteAt)
+    case 'upstream_first_token_at':
+      return normalizeDate(record.upstreamFirstTokenAt)
+    case 'upstream_response_completed_at':
+      return normalizeDate(record.upstreamResponseCompletedAt)
     default:
       return null
   }
@@ -631,9 +672,16 @@ function buildValues(record = {}, columns = [], getter) {
 }
 
 function hasTimingData(record = {}) {
-  return ['requestStartedAt', 'firstByteAt', 'firstTokenAt', 'responseCompletedAt'].some(
-    (key) => record[key] !== undefined && record[key] !== null
-  )
+  return [
+    'requestStartedAt',
+    'firstByteAt',
+    'firstTokenAt',
+    'responseCompletedAt',
+    'upstreamAttemptStartedAt',
+    'upstreamFirstByteAt',
+    'upstreamFirstTokenAt',
+    'upstreamResponseCompletedAt'
+  ].some((key) => record[key] !== undefined && record[key] !== null)
 }
 
 function buildUpsertSql(tableName, columns) {
@@ -835,11 +883,19 @@ function rowToRecord(row = {}) {
     timeToFirstByteMs: normalizeNullableInteger(row.time_to_first_byte_ms),
     timeToFirstTokenMs: normalizeNullableInteger(row.time_to_first_token_ms),
     contentGenerationMs: normalizeNullableInteger(row.content_generation_ms),
+    upstreamDurationMs: normalizeNullableInteger(row.upstream_duration_ms),
+    upstreamTimeToFirstByteMs: normalizeNullableInteger(row.upstream_time_to_first_byte_ms),
+    upstreamTimeToFirstTokenMs: normalizeNullableInteger(row.upstream_time_to_first_token_ms),
+    upstreamAttemptCount: normalizeNullableInteger(row.upstream_attempt_count),
     errorType: row.error_type || null,
     metadata,
     firstByteAt: toIsoString(row.timing_first_byte_at),
     firstTokenAt: toIsoString(row.timing_first_token_at),
     responseCompletedAt: toIsoString(row.timing_response_completed_at),
+    upstreamAttemptStartedAt: toIsoString(row.timing_upstream_attempt_started_at),
+    upstreamFirstByteAt: toIsoString(row.timing_upstream_first_byte_at),
+    upstreamFirstTokenAt: toIsoString(row.timing_upstream_first_token_at),
+    upstreamResponseCompletedAt: toIsoString(row.timing_upstream_response_completed_at),
     sessionId: row.session_id || null,
     sessionHash: row.session_hash || null,
     conversationId: row.conversation_id || null,
@@ -1344,7 +1400,11 @@ async function getRequestDetail(requestId) {
         t.request_started_at AS timing_request_started_at,
         t.first_byte_at AS timing_first_byte_at,
         t.first_token_at AS timing_first_token_at,
-        t.response_completed_at AS timing_response_completed_at
+        t.response_completed_at AS timing_response_completed_at,
+        t.upstream_attempt_started_at AS timing_upstream_attempt_started_at,
+        t.upstream_first_byte_at AS timing_upstream_first_byte_at,
+        t.upstream_first_token_at AS timing_upstream_first_token_at,
+        t.upstream_response_completed_at AS timing_upstream_response_completed_at
       FROM request_details d
       LEFT JOIN request_detail_payloads p ON p.request_id = d.request_id
       LEFT JOIN request_detail_costs c ON c.request_id = d.request_id

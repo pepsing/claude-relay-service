@@ -245,7 +245,15 @@ describe('apiKeyService openai responses config', () => {
         requestId: 'req-1',
         endpoint: '/api/v1/messages',
         method: 'POST',
-        statusCode: 200
+        statusCode: 200,
+        upstreamAttemptStartedAt: '2026-08-13T10:00:00.000Z',
+        upstreamFirstByteAt: '2026-08-13T10:00:00.200Z',
+        upstreamFirstTokenAt: '2026-08-13T10:00:00.500Z',
+        upstreamResponseCompletedAt: '2026-08-13T10:00:01.600Z',
+        upstreamDurationMs: 1600,
+        upstreamTimeToFirstByteMs: 200,
+        upstreamTimeToFirstTokenMs: 500,
+        upstreamAttemptCount: 2
       }
     )
 
@@ -286,7 +294,12 @@ describe('apiKeyService openai responses config', () => {
         cost: 0.052997,
         realCost: 0.052997,
         usedFallbackPricing: true,
-        pricingSource: 'unknown-fallback'
+        pricingSource: 'unknown-fallback',
+        upstreamDurationMs: 1600,
+        upstreamTimeToFirstByteMs: 200,
+        upstreamTimeToFirstTokenMs: 500,
+        upstreamAttemptCount: 2,
+        upstreamAttemptStartedAt: '2026-08-13T10:00:00.000Z'
       })
     )
   })

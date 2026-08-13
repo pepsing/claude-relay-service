@@ -53,6 +53,14 @@ describe('langfuseTraceService', () => {
       timestamp: '2026-06-04T07:00:00.000Z',
       requestStartedAt: '2026-06-04T07:00:00.000Z',
       responseCompletedAt: '2026-06-04T07:00:02.000Z',
+      upstreamAttemptStartedAt: '2026-06-04T07:00:00.300Z',
+      upstreamFirstByteAt: '2026-06-04T07:00:00.500Z',
+      upstreamFirstTokenAt: '2026-06-04T07:00:00.800Z',
+      upstreamResponseCompletedAt: '2026-06-04T07:00:01.900Z',
+      upstreamDurationMs: 1600,
+      upstreamTimeToFirstByteMs: 200,
+      upstreamTimeToFirstTokenMs: 500,
+      upstreamAttemptCount: 2,
       endpoint: '/api/v1/messages',
       method: 'POST',
       statusCode: 200,
@@ -137,6 +145,10 @@ describe('langfuseTraceService', () => {
     expect(traceEvent.body.metadata.accountTypeName).toBe('Claude Console')
     expect(traceEvent.body.metadata.metadataDeviceId).toBe('device_123')
     expect(traceEvent.body.metadata.metadataSessionId).toBe('session_from_metadata')
+    expect(traceEvent.body.metadata.upstreamDurationMs).toBe(1600)
+    expect(traceEvent.body.metadata.upstreamTimeToFirstByteMs).toBe(200)
+    expect(traceEvent.body.metadata.upstreamTimeToFirstTokenMs).toBe(500)
+    expect(traceEvent.body.metadata.upstreamAttemptCount).toBe(2)
     expect(generationEvent.body).toEqual(
       expect.objectContaining({
         id: 'req_1-generation',
