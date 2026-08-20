@@ -183,7 +183,7 @@
               <div class="truncate text-xs text-gray-500">{{ record.endpoint || '-' }}</div>
             </td>
             <td v-if="isAdmin" class="max-w-40 truncate px-3 py-3 text-gray-600 dark:text-gray-300">
-              {{ record.accountId || '-' }}
+              {{ formatAccount(record) }}
             </td>
             <td class="max-w-md px-3 py-3 text-gray-600 dark:text-gray-300">
               <p class="line-clamp-2">{{ record.errorSummary || '-' }}</p>
@@ -251,7 +251,7 @@
             </div>
             <div v-if="isAdmin">
               <span class="detail-label">上游账户</span>
-              <p class="break-all">{{ detailRecord.accountId || '-' }}</p>
+              <p class="break-all">{{ formatAccount(detailRecord) }}</p>
             </div>
             <div>
               <span class="detail-label">是否可重试</span>
@@ -503,6 +503,12 @@ const handleSizeChange = () => loadRecords(1)
 const shortId = (value) => {
   const text = String(value || '')
   return text.length > 12 ? `${text.slice(0, 8)}…${text.slice(-4)}` : text
+}
+const formatAccount = (record) => {
+  const accountId = record?.accountId
+  const accountName = record?.accountName
+  if (!accountId) return '-'
+  return accountName && accountName !== accountId ? `${accountName} (${accountId})` : accountId
 }
 const formatDate = (value) => (value ? new Date(value).toLocaleString('zh-CN') : '-')
 const formatDuration = (value) => {

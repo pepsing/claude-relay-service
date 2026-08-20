@@ -1,5 +1,6 @@
 const claudeRelayConfigService = require('./claudeRelayConfigService')
 const postgresRequestFailureStore = require('./requestFailureStores/postgresRequestFailureStore')
+const accountBalanceService = require('./account/accountBalanceService')
 const logger = require('../utils/logger')
 const { buildRequestFailureRecord } = require('../utils/requestFailureHelper')
 
@@ -233,6 +234,43 @@ class RequestFailureDetailService {
     }
   }
 
+  async _resolveAccountName(accountId, accountType, cache) {
+    if (!accountId) {
+      return null
+    }
+
+    const cacheKey = `${accountType || 'unknown'}:${accountId}`
+    if (cache.has(cacheKey)) {
+      return await cache.get(cacheKey)
+    }
+
+    const accountNamePromise = accountBalanceService
+      .getAccount(accountId, accountType)
+      .then((account) => account?.name || account?.email || null)
+      .catch((error) => {
+        logger.debug(
+          `⚠️ Failed to resolve failed-request account ${accountType || 'unknown'}:${accountId}: ${error.message}`
+        )
+        return null
+      })
+    cache.set(cacheKey, accountNamePromise)
+    return await accountNamePromise
+  }
+
+  async _enrichAccountNames(records = []) {
+    const accountCache = new Map()
+    return await Promise.all(
+      records.map(async (record) => {
+        const accountName = await this._resolveAccountName(
+          record.accountId,
+          record.accountType,
+          accountCache
+        )
+        return accountName ? { ...record, accountName } : record
+      })
+    )
+  }
+
   async listRequestFailures(filters = {}) {
     const settings = await this.getSettings()
     const normalizedFilters = sanitizeListFilters(filters, settings.retentionHours)
@@ -246,6 +284,7 @@ class RequestFailureDetailService {
       captureEnabled: settings.captureEnabled,
       retentionHours: settings.retentionHours,
       ...list,
+      records: await this._enrichAccountNames(list.records),
       summary,
       availableFilters,
       filters: {
@@ -265,10 +304,11 @@ class RequestFailureDetailService {
   async getRequestFailure(requestId, filters = {}) {
     const settings = await this.getSettings()
     const record = await postgresRequestFailureStore.getRequestFailure(requestId, filters)
+    const [enrichedRecord] = await this._enrichAccountNames(record ? [record] : [])
     return {
       captureEnabled: settings.captureEnabled,
       retentionHours: settings.retentionHours,
-      record
+      record: enrichedRecord || null
     }
   }
 
