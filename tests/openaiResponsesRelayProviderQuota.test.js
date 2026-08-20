@@ -40,6 +40,7 @@ jest.mock('../src/utils/upstreamErrorHelper', () => ({
 }))
 
 const axios = require('axios')
+const redis = require('../src/models/redis')
 const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
 const unifiedOpenAIScheduler = require('../src/services/scheduler/unifiedOpenAIScheduler')
 const openaiResponsesRelayService = require('../src/services/relay/openaiResponsesRelayService')
@@ -55,6 +56,9 @@ class FakeResponse extends EventEmitter {
     this.statusCode = 200
     this.body = null
     this.headers = {}
+    this.flushHeaders = jest.fn(() => {
+      this.headersSent = true
+    })
   }
 
   status(code) {
@@ -77,9 +81,51 @@ class FakeResponse extends EventEmitter {
   }
 
   end() {
+    this.headersSent = true
     this.writableEnded = true
     this.emit('finished')
   }
+}
+
+class FakeUpstream extends EventEmitter {
+  constructor() {
+    super()
+    this.destroyed = false
+    this.unpipe = jest.fn()
+    this.pipe = jest.fn(() => this)
+    this.pause = jest.fn(() => this)
+    this.resume = jest.fn(() => this)
+    this.destroy = jest.fn(() => {
+      this.destroyed = true
+      this.emit('close')
+      return this
+    })
+  }
+}
+
+function createStreamingAccount(overrides = {}) {
+  return {
+    id: 'responses-streaming',
+    name: 'responses-streaming',
+    baseApi: 'https://api.example.com/v1',
+    apiKey: 'test-key',
+    providerEndpoint: 'responses',
+    supportedModels: {},
+    maxConcurrentTasks: 0,
+    ...overrides
+  }
+}
+
+function createStreamingRequest(overrides = {}) {
+  const req = new EventEmitter()
+  req.method = 'POST'
+  req.path = '/v1/responses'
+  req.headers = {}
+  req.body = { model: 'gpt-5', input: 'hi', stream: true }
+  req.complete = true
+  req.socket = { destroyed: false }
+  Object.assign(req, overrides)
+  return req
 }
 
 describe('OpenAI Responses relay provider subscription quota handling', () => {
@@ -451,11 +497,327 @@ describe('OpenAI Responses relay provider subscription quota handling', () => {
 
       expect(req.requestTiming.upstreamAttemptCount).toBe(2)
       expect(req.requestTiming.upstreamAttemptStartedAt).toBe(failedAttemptStartedAt + 500)
+      expect(req.requestTiming.upstreamResponseHeadersAt).toBe(failedAttemptStartedAt + 500)
       expect(req.requestTiming.upstreamFirstByteAt).toBeNull()
       expect(req.requestTiming.upstreamFirstTokenAt).toBeNull()
       expect(req.requestTiming.upstreamResponseCompletedAt).toBe(failedAttemptStartedAt + 500)
     } finally {
       jest.useRealTimers()
     }
+  })
+
+  it('does not abort an established stream when a completed request emits close', async () => {
+    const account = createStreamingAccount({ id: 'completed-request-close' })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+
+    expect(res.flushHeaders).toHaveBeenCalledTimes(1)
+
+    req.destroyed = true
+    req.socket.destroyed = true
+    req.emit('close')
+
+    expect(axios.mock.calls[0][0].signal.aborted).toBe(false)
+    expect(upstream.destroy).not.toHaveBeenCalled()
+
+    upstream.emit(
+      'data',
+      Buffer.from('data: {"type":"response.output_text.delta","delta":"hi"}\n\n')
+    )
+    expect(res.body).toContain('response.output_text.delta')
+
+    const finished = new Promise((resolve) => res.once('finished', resolve))
+    upstream.emit('end')
+    await finished
+  })
+
+  it('aborts and records the source when the response closes before it ends', async () => {
+    const account = createStreamingAccount({ id: 'response-close' })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+    res.emit('close')
+
+    expect(axios.mock.calls[0][0].signal.aborted).toBe(true)
+    expect(upstream.destroy).toHaveBeenCalledTimes(1)
+    expect(req.requestFailureContext).toEqual(
+      expect.objectContaining({
+        accountId: account.id,
+        accountType: 'openai-responses',
+        failed: true,
+        adminDiagnostics: expect.objectContaining({
+          openaiResponsesLifecycle: expect.objectContaining({
+            disconnectSource: 'response_close_before_end'
+          })
+        })
+      })
+    )
+  })
+
+  it('does not abort when response close follows res.end()', async () => {
+    const account = createStreamingAccount({ id: 'response-ended' })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+    res.end()
+    res.emit('close')
+
+    expect(axios.mock.calls[0][0].signal.aborted).toBe(false)
+    expect(upstream.destroy).not.toHaveBeenCalled()
+
+    upstream.emit('end')
+  })
+
+  it('ignores a response error emitted after the response has ended', async () => {
+    const account = createStreamingAccount({ id: 'response-error-after-end' })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+    res.end()
+    res.emit('error', Object.assign(new Error('late socket error'), { code: 'EPIPE' }))
+
+    expect(axios.mock.calls[0][0].signal.aborted).toBe(false)
+    expect(req.requestFailureContext.failed).toBeUndefined()
+    expect(upstream.destroy).not.toHaveBeenCalled()
+
+    upstream.emit('end')
+  })
+
+  it('aborts an incomplete request close while the stream is active', async () => {
+    const account = createStreamingAccount({ id: 'incomplete-request-close' })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest({ complete: false })
+    const res = new FakeResponse()
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+    req.emit('close')
+
+    expect(axios.mock.calls[0][0].signal.aborted).toBe(true)
+    expect(upstream.destroy).toHaveBeenCalledTimes(1)
+    expect(
+      req.requestFailureContext.adminDiagnostics.openaiResponsesLifecycle.disconnectSource
+    ).toBe('request_close_incomplete')
+  })
+
+  it('pauses the upstream stream for backpressure and resumes it on drain', async () => {
+    const account = createStreamingAccount({ id: 'backpressure-resume' })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    const originalWrite = res.write.bind(res)
+    res.write = jest.fn((chunk) => {
+      originalWrite(chunk)
+      return false
+    })
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+    upstream.emit(
+      'data',
+      Buffer.from('data: {"type":"response.output_text.delta","delta":"hi"}\n\n')
+    )
+
+    expect(upstream.pause).toHaveBeenCalledTimes(1)
+    expect(res.listenerCount('drain')).toBe(1)
+
+    res.emit('drain')
+
+    expect(upstream.resume).toHaveBeenCalledTimes(1)
+    expect(res.listenerCount('drain')).toBe(0)
+  })
+
+  it('does not resume a paused upstream stream after the client aborts', async () => {
+    const account = createStreamingAccount({ id: 'backpressure-abort' })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    const originalWrite = res.write.bind(res)
+    res.write = jest.fn((chunk) => {
+      originalWrite(chunk)
+      return false
+    })
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+    upstream.emit(
+      'data',
+      Buffer.from('data: {"type":"response.output_text.delta","delta":"hi"}\n\n')
+    )
+    expect(upstream.pause).toHaveBeenCalledTimes(1)
+
+    req.aborted = true
+    req.emit('aborted')
+    res.emit('drain')
+
+    expect(axios.mock.calls[0][0].signal.aborted).toBe(true)
+    expect(upstream.destroy).toHaveBeenCalledTimes(1)
+    expect(upstream.resume).not.toHaveBeenCalled()
+    expect(res.listenerCount('drain')).toBe(0)
+    expect(
+      req.requestFailureContext.adminDiagnostics.openaiResponsesLifecycle.disconnectSource
+    ).toBe('request_aborted')
+  })
+
+  it('ends a flushed SSE response rather than attempting a JSON error on upstream failure', async () => {
+    const account = createStreamingAccount({ id: 'flushed-stream-error' })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    const statusSpy = jest.spyOn(res, 'status')
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+    expect(res.headersSent).toBe(true)
+
+    const finished = new Promise((resolve) => res.once('finished', resolve))
+    upstream.emit('error', new Error('upstream stream failed before first chunk'))
+    await finished
+
+    expect(statusSpy).not.toHaveBeenCalled()
+    expect(res.writableEnded).toBe(true)
+  })
+
+  it('finalizes the account lease when an upstream stream closes without end', async () => {
+    const account = createStreamingAccount({
+      id: 'upstream-close',
+      maxConcurrentTasks: 1
+    })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    redis.incrConcurrency.mockResolvedValue(1)
+    redis.decrConcurrency.mockResolvedValue(0)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+
+    const finished = new Promise((resolve) => res.once('finished', resolve))
+    upstream.emit('close')
+    await finished
+    await Promise.resolve()
+
+    expect(redis.decrConcurrency).toHaveBeenCalledTimes(1)
+    expect(res.writableEnded).toBe(true)
+  })
+
+  it('releases a leased stream exactly once when the response and upstream close together', async () => {
+    const account = createStreamingAccount({
+      id: 'response-close-single-release',
+      maxConcurrentTasks: 1
+    })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    redis.incrConcurrency.mockResolvedValue(1)
+    redis.decrConcurrency.mockResolvedValue(0)
+    axios.mockResolvedValue({ status: 200, headers: {}, data: upstream })
+
+    await openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+    res.emit('close')
+    upstream.emit('close')
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(upstream.destroy).toHaveBeenCalledTimes(1)
+    expect(redis.decrConcurrency).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start an upstream request after the client leaves during account lookup', async () => {
+    const account = createStreamingAccount({ id: 'disconnect-before-account' })
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    let resolveAccount
+    openaiResponsesAccountService.getAccount.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAccount = resolve
+        })
+    )
+
+    const pendingRequest = openaiResponsesRelayService.handleRequest(
+      req,
+      res,
+      { id: account.id, name: account.name },
+      { id: 'api-key-1' }
+    )
+
+    res.emit('close')
+    resolveAccount(account)
+    await pendingRequest
+
+    expect(axios).not.toHaveBeenCalled()
   })
 })
