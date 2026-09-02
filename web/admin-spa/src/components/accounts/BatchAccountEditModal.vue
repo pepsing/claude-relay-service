@@ -344,6 +344,7 @@ const URL_FIELD_BY_PLATFORM = {
 const MODEL_MODE_BY_PLATFORM = {
   'claude-console': 'mapping',
   ccr: 'mapping',
+  'openai-responses': 'mapping',
   'gemini-api': 'list',
   azure_openai: 'list'
 }
@@ -922,6 +923,9 @@ function buildPatch() {
       modelMode.value === 'mapping'
         ? parseModelMappingText(modelMappingRows.value)
         : parseModelListText(form.supportedModelsText)
+    if (modelMode.value === 'mapping') {
+      patch.modelRestrictionMode = 'mapping'
+    }
   }
   if (fieldEnabled.proxyText) {
     patch.proxy = parseProxyText(form.proxyText)
