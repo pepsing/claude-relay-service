@@ -116,6 +116,7 @@ const GEMINI_MODELS = [
 ]
 
 const OPENAI_MODELS = [
+  { value: 'gpt-6-astra', label: 'gpt-6-astra' },
   { value: 'gpt-5.6-sol', label: 'gpt-5.6-sol' },
   { value: 'gpt-5.6-terra', label: 'gpt-5.6-terra' },
   { value: 'gpt-5.6-luna', label: 'gpt-5.6-luna' },
@@ -197,6 +198,7 @@ const CLAUDE_MAPPING_PRESETS = [
 ]
 
 const OPENAI_MAPPING_PRESETS = [
+  { label: '+ gpt-6-astra', from: 'gpt-6-astra', to: 'gpt-6-astra' },
   { label: '+ gpt-5.6-sol', from: 'gpt-5.6-sol', to: 'gpt-5.6-sol' },
   { label: '+ gpt-5.6-terra', from: 'gpt-5.6-terra', to: 'gpt-5.6-terra' },
   { label: '+ gpt-5.6-luna', from: 'gpt-5.6-luna', to: 'gpt-5.6-luna' },

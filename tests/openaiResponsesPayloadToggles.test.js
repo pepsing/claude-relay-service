@@ -230,8 +230,8 @@ describe('openai responses payload toggles', () => {
     )
   })
 
-  test.each(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])(
-    'keeps GPT-5.6 model %s unchanged for scheduling and relay',
+  test.each(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'])(
+    'keeps model %s unchanged for scheduling and relay',
     async (model) => {
       const req = createReq({
         body: {
@@ -260,6 +260,52 @@ describe('openai responses payload toggles', () => {
         req.apiKey,
         { deferRetryableErrors: true }
       )
+    }
+  )
+
+  test.each([false, true])(
+    'preserves gpt-6-astra for OpenAI accounts with Codex adaptation %s',
+    async (enableOpenAIResponsesCodexAdaptation) => {
+      unifiedOpenAIScheduler.selectAccountForApiKey.mockResolvedValue({
+        accountId: 'openai-1',
+        accountType: 'openai'
+      })
+      openaiAccountService.getAccount.mockResolvedValue({
+        id: 'openai-1',
+        name: 'OpenAI Account',
+        accessToken: 'encrypted-token',
+        accountId: 'chatgpt-account-1'
+      })
+      axios.post.mockResolvedValue({
+        status: 200,
+        data: { model: 'gpt-6-astra', output: [] },
+        headers: {}
+      })
+
+      const req = createReq({
+        body: {
+          model: 'gpt-6-astra',
+          prompt_cache_key: 'astra-session',
+          reasoning: { effort: 'max' },
+          stream: false
+        },
+        apiKeyOverrides: { enableOpenAIResponsesCodexAdaptation }
+      })
+
+      await openaiRoutes.handleResponses(req, createRes())
+
+      expect(unifiedOpenAIScheduler.selectAccountForApiKey).toHaveBeenCalledWith(
+        req.apiKey,
+        createHash('astra-session'),
+        'gpt-6-astra',
+        { requiredProviderEndpoint: 'responses' }
+      )
+      expect(req.body.model).toBe('gpt-6-astra')
+      expect(axios.post).toHaveBeenCalled()
+      expect(axios.post.mock.calls[0][1]).toMatchObject({
+        model: 'gpt-6-astra',
+        reasoning: { effort: 'max' }
+      })
     }
   )
 

@@ -182,6 +182,7 @@ describe('OpenAI models route', () => {
     const ids = modelIds(models)
 
     expect(ids).toContain('gpt-5')
+    expect(ids).toContain('gpt-6-astra')
     expect(ids).toEqual(expect.arrayContaining(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']))
     expect(ids).not.toContain('gpt-5.6')
     expect(ids).toContain('kimi-k2.6')

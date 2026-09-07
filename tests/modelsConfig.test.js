@@ -31,18 +31,19 @@ describe('models config', () => {
   it('includes configurable endpoint defaults for current model ids', () => {
     const endpointConfigs = getDefaultModelEndpointConfigs()
 
-    expect(OPENAI_MODELS.slice(0, 3)).toEqual([
+    expect(OPENAI_MODELS.slice(0, 4)).toEqual([
+      { value: 'gpt-6-astra', label: 'gpt-6-astra' },
       { value: 'gpt-5.6-sol', label: 'gpt-5.6-sol' },
       { value: 'gpt-5.6-terra', label: 'gpt-5.6-terra' },
       { value: 'gpt-5.6-luna', label: 'gpt-5.6-luna' }
     ])
     for (const endpoint of ['openai', 'openai-responses', 'azure-openai']) {
       expect(endpointConfigs[endpoint].whitelistModels).toEqual(
-        expect.arrayContaining(OPENAI_MODELS.slice(0, 3))
+        expect.arrayContaining(OPENAI_MODELS.slice(0, 4))
       )
       expect(endpointConfigs[endpoint].mappingPresets).toEqual(
         expect.arrayContaining(
-          OPENAI_MODELS.slice(0, 3).map(({ value }) => ({
+          OPENAI_MODELS.slice(0, 4).map(({ value }) => ({
             label: `+ ${value}`,
             from: value,
             to: value
