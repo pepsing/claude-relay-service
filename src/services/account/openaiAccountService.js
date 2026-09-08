@@ -1,3 +1,4 @@
+const { getImageCapabilities } = require('../../utils/imageCapabilities')
 const redisClient = require('../../models/redis')
 const { v4: uuidv4 } = require('uuid')
 const axios = require('axios')
@@ -519,6 +520,8 @@ async function createAccount(accountData) {
     isActive: accountData.isActive !== false ? 'true' : 'false',
     status: 'active',
     schedulable: accountData.schedulable !== false ? 'true' : 'false',
+    supportsImagesSync: getImageCapabilities(accountData).supportsImagesSync.toString(),
+    supportsImagesAsync: getImageCapabilities(accountData).supportsImagesAsync.toString(),
     supportsImagesGenerations:
       accountData.supportsImagesGenerations === true ||
       accountData.supportsImagesGenerations === 'true'
@@ -646,6 +649,12 @@ async function updateAccount(accountId, updates) {
       updates.disableAutoProtection === true || updates.disableAutoProtection === 'true'
         ? 'true'
         : 'false'
+  }
+
+  for (const field of ['supportsImagesSync', 'supportsImagesAsync']) {
+    if (updates[field] !== undefined) {
+      updates[field] = getImageCapabilities(updates)[field].toString()
+    }
   }
 
   if (updates.supportsImagesGenerations !== undefined) {
@@ -787,6 +796,7 @@ async function getAllAccounts() {
         isActive: accountData.isActive === 'true',
         schedulable: accountData.schedulable !== 'false',
         supportsImagesGenerations: accountData.supportsImagesGenerations === 'true',
+        ...getImageCapabilities(accountData),
         openaiOauth: maskedOauth,
         accessToken: maskedAccessToken,
         refreshToken: maskedRefreshToken,

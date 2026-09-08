@@ -19,7 +19,11 @@ jest.mock('../src/services/account/openaiResponsesAccountService', () => ({
   updateAccount: jest.fn()
 }))
 
-jest.mock('../src/services/accountGroupService', () => ({}))
+jest.mock('../src/services/accountGroupService', () => ({
+  getGroup: jest.fn(),
+  getGroupMembers: jest.fn(),
+  isAccountInGroup: jest.fn()
+}))
 jest.mock('../src/services/stickySessionGroupService', () => ({
   filterAccountsByGroup: jest.fn(),
   getGroup: jest.fn(),
@@ -97,6 +101,108 @@ describe('UnifiedOpenAIScheduler', () => {
     stickySessionGroupService.filterAccountsByGroup.mockImplementation(async (accounts) => accounts)
     stickySessionGroupService.isAccountInGroup.mockResolvedValue(true)
     upstreamErrorHelper.isTempUnavailable.mockResolvedValue(false)
+  })
+
+  describe('image request modes', () => {
+    const syncAccount = {
+      id: 'sync',
+      name: 'Sync',
+      isActive: true,
+      status: 'active',
+      schedulable: true,
+      accountType: 'shared',
+      supportsImagesGenerations: true,
+      supportsImagesSync: true,
+      supportsImagesAsync: false,
+      supportedModels: {}
+    }
+    const asyncAccount = {
+      ...syncAccount,
+      id: 'async',
+      name: 'Async',
+      supportsImagesSync: false,
+      supportsImagesAsync: true
+    }
+
+    beforeEach(() => {
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([syncAccount, asyncAccount])
+      openaiResponsesAccountService.getAccount.mockImplementation(
+        async (id) => ({ sync: syncAccount, async: asyncAccount })[id]
+      )
+      openaiAccountService.getAccount.mockResolvedValue(null)
+    })
+
+    it.each([false, true])('filters the shared pool for async=%s', async (imageAsync) => {
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey({}, null, 'gpt-image-2', {
+        requireImagesGenerations: true,
+        imageAsync
+      })
+      expect(result.accountId).toBe(imageAsync ? 'async' : 'sync')
+    })
+
+    it('defaults legacy accounts to sync only and reports unavailable async capability', async () => {
+      const legacy = { ...syncAccount }
+      delete legacy.supportsImagesSync
+      delete legacy.supportsImagesAsync
+      openaiResponsesAccountService.getAllAccounts.mockResolvedValue([legacy])
+      await expect(
+        unifiedOpenAIScheduler.selectAccountForApiKey({}, null, 'gpt-image-2', {
+          requireImagesGenerations: true,
+          imageAsync: false
+        })
+      ).resolves.toMatchObject({ accountId: 'sync' })
+      await expect(
+        unifiedOpenAIScheduler.selectAccountForApiKey({}, null, 'gpt-image-2', {
+          requireImagesGenerations: true,
+          imageAsync: true
+        })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining('asynchronous image')
+      })
+    })
+
+    it.each([false, true])(
+      'rejects a dedicated account with the wrong mode: async=%s',
+      async (imageAsync) => {
+        await expect(
+          unifiedOpenAIScheduler.selectAccountForApiKey(
+            { openaiAccountId: `responses:${imageAsync ? 'sync' : 'async'}` },
+            null,
+            'gpt-image-2',
+            { requireImagesGenerations: true, imageAsync }
+          )
+        ).rejects.toMatchObject({ statusCode: 400 })
+      }
+    )
+
+    it('reselects an incompatible sticky account when changing request mode', async () => {
+      mockRedisClient.get.mockImplementation(async (key) =>
+        key === 'unified_openai_session_mapping:session'
+          ? JSON.stringify({ accountId: 'sync', accountType: 'openai-responses' })
+          : null
+      )
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        {},
+        'session',
+        'gpt-image-2',
+        { requireImagesGenerations: true, imageAsync: true }
+      )
+      expect(result.accountId).toBe('async')
+    })
+
+    it.each([false, true])('filters group members for async=%s', async (imageAsync) => {
+      const groups = require('../src/services/accountGroupService')
+      groups.getGroup.mockResolvedValue({ id: 'group', name: 'Images', platform: 'openai' })
+      groups.getGroupMembers.mockResolvedValue(['sync', 'async'])
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
+        { openaiAccountId: 'group:group' },
+        null,
+        'gpt-image-2',
+        { requireImagesGenerations: true, imageAsync }
+      )
+      expect(result.accountId).toBe(imageAsync ? 'async' : 'sync')
+    })
   })
 
   describe('markAccountRateLimited', () => {

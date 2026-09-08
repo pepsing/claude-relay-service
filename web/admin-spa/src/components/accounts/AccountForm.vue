@@ -2077,12 +2077,54 @@
                   type="checkbox"
                 />
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  支持 /v1/images/generations
+                  支持图片生成与编辑
                 </span>
               </label>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                开启后，该账户才会参与 OpenAI 兼容图片生成接口的负载调度
+                生成与编辑按下方能力调度；异步任务查询和下载始终使用创建任务的账户
               </p>
+              <div
+                v-if="form.supportsImagesGenerations"
+                class="mt-3 space-y-2 rounded-lg bg-gray-50 p-3 dark:bg-gray-800"
+              >
+                <label
+                  class="flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+                >
+                  <input
+                    v-model="form.supportsImagesSync"
+                    class="rounded border-gray-300 text-blue-600 dark:border-gray-600 dark:bg-gray-700"
+                    type="checkbox"
+                  />
+                  支持同步请求（async=false 或未传）
+                </label>
+                <label
+                  class="flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+                >
+                  <input
+                    v-model="form.supportsImagesAsync"
+                    class="rounded border-gray-300 text-blue-600 dark:border-gray-600 dark:bg-gray-700"
+                    type="checkbox"
+                  />
+                  {{
+                    form.platform === 'openai'
+                      ? '启用本地异步任务（async=true）'
+                      : '支持上游原生异步（async=true）'
+                  }}
+                </label>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{
+                    form.platform === 'openai'
+                      ? '由中转在后台执行图片任务，并提供状态查询和下载。'
+                      : '仅在上游支持异步任务创建、状态查询和结果下载时开启；未开启的账户不会接收异步请求。'
+                  }}
+                </p>
+                <p
+                  v-if="!form.supportsImagesSync && !form.supportsImagesAsync"
+                  class="text-xs text-amber-600 dark:text-amber-400"
+                >
+                  未选择请求方式，此账户不会接收新的图片生成或编辑请求。
+                </p>
+              </div>
             </div>
 
             <!-- 手动输入 Token 字段 -->
@@ -3179,12 +3221,54 @@
                 type="checkbox"
               />
               <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                支持 /v1/images/generations
+                支持图片生成与编辑
               </span>
             </label>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              开启后，该账户才会参与 OpenAI 兼容图片生成接口的负载调度
+              生成与编辑按下方能力调度；异步任务查询和下载始终使用创建任务的账户
             </p>
+            <div
+              v-if="form.supportsImagesGenerations"
+              class="mt-3 space-y-2 rounded-lg bg-gray-50 p-3 dark:bg-gray-800"
+            >
+              <label
+                class="flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+              >
+                <input
+                  v-model="form.supportsImagesSync"
+                  class="rounded border-gray-300 text-blue-600 dark:border-gray-600 dark:bg-gray-700"
+                  type="checkbox"
+                />
+                支持同步请求（async=false 或未传）
+              </label>
+              <label
+                class="flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300"
+              >
+                <input
+                  v-model="form.supportsImagesAsync"
+                  class="rounded border-gray-300 text-blue-600 dark:border-gray-600 dark:bg-gray-700"
+                  type="checkbox"
+                />
+                {{
+                  form.platform === 'openai'
+                    ? '启用本地异步任务（async=true）'
+                    : '支持上游原生异步（async=true）'
+                }}
+              </label>
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{
+                  form.platform === 'openai'
+                    ? '由中转在后台执行图片任务，并提供状态查询和下载。'
+                    : '仅在上游支持异步任务创建、状态查询和结果下载时开启；未开启的账户不会接收异步请求。'
+                }}
+              </p>
+              <p
+                v-if="!form.supportsImagesSync && !form.supportsImagesAsync"
+                class="text-xs text-amber-600 dark:text-amber-400"
+              >
+                未选择请求方式，此账户不会接收新的图片生成或编辑请求。
+              </p>
+            </div>
           </div>
 
           <!-- Claude Console 和 CCR 特定字段（编辑模式）-->
@@ -4589,6 +4673,8 @@ const form = ref({
   // 并发控制字段
   maxConcurrentTasks: props.account?.maxConcurrentTasks || 0,
   supportsImagesGenerations: toFormBoolean(props.account?.supportsImagesGenerations),
+  supportsImagesSync: toFormBoolean(props.account?.supportsImagesSync ?? true),
+  supportsImagesAsync: toFormBoolean(props.account?.supportsImagesAsync),
   // Bedrock 特定字段
   credentialType: props.account?.credentialType || 'access_key', // 'access_key' 或 'bearer_token'
   accessKeyId: props.account?.accessKeyId || '',
@@ -5437,6 +5523,8 @@ const handleOAuthSuccess = async (tokenInfoOrList) => {
       data.priority = form.value.priority || 50
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
+      data.supportsImagesSync = !!form.value.supportsImagesSync
+      data.supportsImagesAsync = !!form.value.supportsImagesAsync
     } else if (currentPlatform === 'droid') {
       const rawTokens = tokenInfo.tokens || tokenInfo || {}
 
@@ -5813,6 +5901,8 @@ const createAccount = async () => {
       data.priority = form.value.priority || 50
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
+      data.supportsImagesSync = !!form.value.supportsImagesSync
+      data.supportsImagesAsync = !!form.value.supportsImagesAsync
     } else if (form.value.platform === 'droid') {
       data.priority = form.value.priority || 50
       data.endpointType = form.value.endpointType || 'anthropic'
@@ -5870,6 +5960,8 @@ const createAccount = async () => {
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
+      data.supportsImagesSync = !!form.value.supportsImagesSync
+      data.supportsImagesAsync = !!form.value.supportsImagesAsync
       data.stickySessionMode = form.value.stickySessionMode || 'inherit'
       data.stickySessionGroupId = form.value.stickySessionGroupId || ''
     } else if (form.value.platform === 'gemini-antigravity') {
@@ -6192,6 +6284,8 @@ const updateAccount = async () => {
       data.priority = form.value.priority || 50
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
+      data.supportsImagesSync = !!form.value.supportsImagesSync
+      data.supportsImagesAsync = !!form.value.supportsImagesAsync
     }
 
     // Gemini 账号优先级更新
@@ -6238,6 +6332,8 @@ const updateAccount = async () => {
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
       data.maxConcurrentTasks = form.value.maxConcurrentTasks || 0
       data.supportsImagesGenerations = !!form.value.supportsImagesGenerations
+      data.supportsImagesSync = !!form.value.supportsImagesSync
+      data.supportsImagesAsync = !!form.value.supportsImagesAsync
       data.stickySessionMode = form.value.stickySessionMode || 'inherit'
       data.stickySessionGroupId = form.value.stickySessionGroupId || ''
     }
@@ -6880,6 +6976,8 @@ watch(
         // 并发控制字段
         maxConcurrentTasks: newAccount.maxConcurrentTasks || 0,
         supportsImagesGenerations: toFormBoolean(newAccount.supportsImagesGenerations),
+        supportsImagesSync: toFormBoolean(newAccount.supportsImagesSync ?? true),
+        supportsImagesAsync: toFormBoolean(newAccount.supportsImagesAsync),
         stickySessionMode: newAccount.stickySessionMode || 'inherit',
         stickySessionGroupId:
           newAccount.stickySessionGroupId || newAccount.stickySessionGroup?.id || '',

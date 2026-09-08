@@ -1,3 +1,4 @@
+const { supportsImageRequest, imageCapabilityDescription } = require('../utils/imageCapabilities')
 const express = require('express')
 const axios = require('axios')
 const router = express.Router()
@@ -6,6 +7,8 @@ const config = require('../../config/config')
 const modelsConfig = require('../../config/models')
 const redis = require('../models/redis')
 const { authenticateApiKey } = require('../middleware/auth')
+const { parseImageUpload } = require('../middleware/imageUpload')
+const imageTaskService = require('../services/openaiImageTaskService')
 const unifiedOpenAIScheduler = require('../services/scheduler/unifiedOpenAIScheduler')
 const openaiAccountService = require('../services/account/openaiAccountService')
 const openaiResponsesAccountService = require('../services/account/openaiResponsesAccountService')
@@ -1624,13 +1627,15 @@ const handleResponses = async (req, res) => {
   }
 }
 
-async function handleImages(req, res) {
+async function handleImages(req, res, imageContext = {}) {
   const apiKeyData = req.apiKey || {}
   let accountId = null
   let accountType = 'openai'
   let sessionHash = null
   let accountConcurrencyLease = null
   let streamDelegated = false
+  const abortController = new AbortController()
+  let cleanupImageListeners = () => {}
 
   try {
     if (!checkOpenAIPermissions(apiKeyData)) {
@@ -1655,6 +1660,19 @@ async function handleImages(req, res) {
     }
 
     const imageModel = String(body.model || 'gpt-image-2').trim()
+    req._imageRequestedModel = imageModel
+    imageTaskService.checkPermission(apiKeyData, imageModel)
+    const isEdit = req.path.endsWith('/images/edits')
+    if (isEdit && !req.imageFiles?.some((file) => file.fieldname !== 'mask')) {
+      return res.status(400).json({
+        error: { message: 'At least one image is required', type: 'invalid_request_error' }
+      })
+    }
+    if (body.async !== undefined && typeof body.async !== 'boolean') {
+      return res.status(400).json({
+        error: { message: 'async must be a boolean', type: 'invalid_request_error' }
+      })
+    }
     if (body.n !== undefined && (!Number.isInteger(body.n) || body.n < 1 || body.n > 10)) {
       return res.status(400).json({
         error: { message: 'n must be an integer between 1 and 10', type: 'invalid_request_error' }
@@ -1662,6 +1680,14 @@ async function handleImages(req, res) {
     }
 
     const n = body.n || 1
+    if (body.async && (n !== 1 || body.stream === true)) {
+      return res.status(400).json({
+        error: {
+          message: 'Async images require n=1 and stream=false',
+          type: 'invalid_request_error'
+        }
+      })
+    }
     const sessionId =
       req.headers['session_id'] ||
       req.headers['x-session-id'] ||
@@ -1678,16 +1704,37 @@ async function handleImages(req, res) {
       ? crypto.createHash('sha256').update(imagesSchedulerSessionId).digest('hex')
       : null
 
-    const authResult = await getOpenAIAuthToken(apiKeyData, imagesSchedulerSessionId, imageModel, {
-      requireImagesGenerations: true
-    })
+    const authResult =
+      imageContext.authResult ||
+      (await getOpenAIAuthToken(apiKeyData, imagesSchedulerSessionId, imageModel, {
+        requireImagesGenerations: true,
+        imageAsync: body.async === true
+      }))
     const { accessToken, proxy, account } = authResult
     ;({ accountId, accountType } = authResult)
+
+    if (!imageContext.authResult && !supportsImageRequest(account, body.async === true)) {
+      throw Object.assign(
+        new Error(
+          `Selected account does not support ${imageCapabilityDescription(body.async === true)}`
+        ),
+        { statusCode: 400 }
+      )
+    }
 
     if (accountType === 'openai-responses') {
       req.body = { ...body, model: imageModel }
       logger.info(`🔀 Using OpenAI-Responses relay service for images account: ${account.name}`)
-      return await openaiResponsesRelayService.handleRequest(req, res, account, apiKeyData)
+      const options = body.async
+        ? {
+            transformResponse: (data, fullAccount) =>
+              imageTaskService.bindUpstreamTask(req, fullAccount, data)
+          }
+        : undefined
+      if (!options) {
+        return await openaiResponsesRelayService.handleRequest(req, res, account, apiKeyData)
+      }
+      return await openaiResponsesRelayService.handleRequest(req, res, account, apiKeyData, options)
     }
 
     if (accountType !== 'openai' || !accessToken) {
@@ -1708,14 +1755,67 @@ async function handleImages(req, res) {
       })
     }
 
+    if (body.async) {
+      req.body = { ...body, model: imageModel }
+      const task = await imageTaskService.startLocalTask(req, account, (jobReq, jobRes) =>
+        handleImages(jobReq, jobRes, { authResult })
+      )
+      return res.status(200).json(task)
+    }
+
+    const handleDisconnect = () => abortController.abort()
+    const handleResponseClose = () => {
+      if (!res.writableEnded) {
+        handleDisconnect()
+      }
+    }
+    req.on('aborted', handleDisconnect)
+    res.on?.('close', handleResponseClose)
+    cleanupImageListeners = () => {
+      req.removeListener?.('aborted', handleDisconnect)
+      res.removeListener?.('close', handleResponseClose)
+    }
+
     accountConcurrencyLease = await acquireOpenAIAccountConcurrency(
       account,
       accountType,
       sessionHash,
-      () => req.socket?.destroyed || res.destroyed
+      () => abortController.signal.aborted || req.socket?.destroyed || res.destroyed
     )
 
-    const tool = { type: 'image_generation', action: 'generate', model: imageModel }
+    const tool = {
+      type: 'image_generation',
+      action: isEdit ? 'edit' : 'generate',
+      model: imageModel
+    }
+    const content = [{ type: 'input_text', text: prompt }]
+    if (isEdit) {
+      for (const file of req.imageFiles) {
+        const mimeType =
+          file.mimeType === 'application/octet-stream'
+            ? { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' }[
+                file.filename.split('.').pop().toLowerCase()
+              ]
+            : file.mimeType
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(mimeType)) {
+          return res.status(400).json({
+            error: {
+              message: 'OAuth image edits require PNG, JPEG or WebP files',
+              type: 'invalid_request_error'
+            }
+          })
+        }
+        const imageUrl = `data:${mimeType};base64,${file.buffer.toString('base64')}`
+        if (file.fieldname === 'mask') {
+          tool.input_image_mask = { image_url: imageUrl }
+        } else {
+          content.push({ type: 'input_image', image_url: imageUrl })
+        }
+      }
+      if (body.input_fidelity) {
+        tool.input_fidelity = body.input_fidelity
+      }
+    }
     if (body.size) {
       tool.size = String(body.size)
     }
@@ -1747,7 +1847,7 @@ async function handleImages(req, res) {
       model: 'gpt-5.4-mini',
       store: false,
       tool_choice: { type: 'image_generation' },
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
+      input: [{ type: 'message', role: 'user', content }],
       tools: [tool]
     }
 
@@ -1766,7 +1866,8 @@ async function handleImages(req, res) {
       headers,
       timeout: config.requestTimeout || 600000,
       validateStatus: () => true,
-      responseType: 'stream'
+      responseType: 'stream',
+      signal: abortController.signal
     }
     if (proxyAgent) {
       axiosConfig.httpAgent = proxyAgent
@@ -1886,6 +1987,7 @@ async function handleImages(req, res) {
     let buffer = ''
     let imageMeta = {}
     let usageData = null
+    let imageFailure = null
 
     streamDelegated = true
 
@@ -1911,6 +2013,11 @@ async function handleImages(req, res) {
           continue
         }
 
+        if (['response.failed', 'response.incomplete', 'error'].includes(event.type)) {
+          imageFailure =
+            event.response?.error?.message || event.error?.message || 'Image generation failed'
+        }
+
         if (typeof event?.partial_image_b64 === 'string') {
           const imageIndex = Number.isInteger(event.partial_image_index)
             ? event.partial_image_index
@@ -1924,6 +2031,12 @@ async function handleImages(req, res) {
         }
 
         if (event?.type === 'response.completed' && event.response) {
+          const finalImages = (event.response.output || []).filter(
+            (item) => item.type === 'image_generation_call' && typeof item.result === 'string'
+          )
+          finalImages.forEach((item, index) => {
+            bestImages[index] = item.result
+          })
           if (Array.isArray(event.response.tools) && event.response.tools[0]) {
             imageMeta = event.response.tools[0]
           }
@@ -1937,11 +2050,16 @@ async function handleImages(req, res) {
     upstream.data.on('end', async () => {
       try {
         const imageIndexes = Object.keys(bestImages).sort((a, b) => Number(a) - Number(b))
-        if (!imageIndexes.length) {
+        if (imageFailure || !imageIndexes.length) {
           if (!res.headersSent) {
-            res
-              .status(502)
-              .json({ error: { message: 'no image produced by upstream', type: 'upstream_error' } })
+            res.status(502).json({
+              error: {
+                message: imageFailure
+                  ? getSafeMessage(imageFailure)
+                  : 'no image produced by upstream',
+                type: 'upstream_error'
+              }
+            })
           }
         } else if (!res.headersSent) {
           res.status(200).json({
@@ -2007,11 +2125,13 @@ async function handleImages(req, res) {
           })
         }
       } finally {
+        cleanupImageListeners()
         await releaseOpenAIAccountConcurrency(accountConcurrencyLease, 'images stream end')
       }
     })
 
     upstream.data.on('error', async (error) => {
+      cleanupImageListeners()
       logger.error('Images upstream stream error:', error)
       if (!res.headersSent) {
         res.status(502).json({
@@ -2033,8 +2153,18 @@ async function handleImages(req, res) {
         }
       )
     }
-    req.on('close', cleanup)
-    req.on('aborted', cleanup)
+    abortController.signal.addEventListener('abort', cleanup, { once: true })
+    upstream.data.once('close', () => {
+      cleanupImageListeners()
+      if (!upstream.data.readableEnded && !res.headersSent) {
+        res.status(502).json({
+          error: { message: 'Image upstream closed before completion', type: 'upstream_error' }
+        })
+      }
+      releaseOpenAIAccountConcurrency(accountConcurrencyLease, 'images upstream closed').catch(
+        (error) => logger.error('Failed to release image concurrency', error)
+      )
+    })
   } catch (error) {
     logger.error('handleImages error:', error)
     const status = error.statusCode || error.response?.status || 500
@@ -2065,7 +2195,44 @@ async function handleImages(req, res) {
     }
   } finally {
     if (!streamDelegated) {
+      cleanupImageListeners()
       await releaseOpenAIAccountConcurrency(accountConcurrencyLease, 'images request completed')
+    }
+  }
+}
+
+async function handleImageTask(req, res) {
+  try {
+    const task = await imageTaskService.getTask(req)
+    const account = await imageTaskService.getTaskAccount(task, req.apiKey)
+    const isContent = req.path.endsWith('/content')
+    if (isContent && task.status !== 'completed') {
+      return res
+        .status(409)
+        .json({ error: { message: 'Image task is not completed', type: 'invalid_request_error' } })
+    }
+    if (task.accountType === 'openai') {
+      return isContent
+        ? await imageTaskService.sendLocalContent(task, res)
+        : res.json(imageTaskService.publicTask(task, req))
+    }
+    req.body = { model: task.model }
+    return await openaiResponsesRelayService.handleRequest(req, res, account, req.apiKey, {
+      requestPath: `/v1/images/${task.upstreamId}${isContent ? '/content' : ''}`,
+      imageTask: task,
+      imageContent: isContent,
+      transformResponse: isContent
+        ? undefined
+        : (data) => imageTaskService.updateUpstreamTask(task, req, data)
+    })
+  } catch (error) {
+    if (!res.headersSent) {
+      return res.status(error.statusCode || 500).json({
+        error: {
+          message: error.code === 'image_task_error' ? error.message : getSafeMessage(error),
+          type: 'image_task_error'
+        }
+      })
     }
   }
 }
@@ -2076,6 +2243,12 @@ router.get('/v1/models', authenticateApiKey, handleModels)
 // 注册两个路由路径，都使用相同的处理函数
 router.post('/images/generations', authenticateApiKey, handleImages)
 router.post('/v1/images/generations', authenticateApiKey, handleImages)
+router.post('/images/edits', authenticateApiKey, parseImageUpload, handleImages)
+router.post('/v1/images/edits', authenticateApiKey, parseImageUpload, handleImages)
+router.get('/images/:imageId/content', authenticateApiKey, handleImageTask)
+router.get('/v1/images/:imageId/content', authenticateApiKey, handleImageTask)
+router.get('/images/:imageId', authenticateApiKey, handleImageTask)
+router.get('/v1/images/:imageId', authenticateApiKey, handleImageTask)
 router.post('/responses', authenticateApiKey, handleResponses)
 router.post('/v1/responses', authenticateApiKey, handleResponses)
 router.post('/responses/compact', authenticateApiKey, handleResponses)
@@ -2148,6 +2321,7 @@ router.get('/key-info', authenticateApiKey, async (req, res) => {
 module.exports = router
 module.exports.handleResponses = handleResponses
 module.exports.handleImages = handleImages
+module.exports.handleImageTask = handleImageTask
 module.exports.buildOpenAIModelsList = buildOpenAIModelsList
 module.exports.handleModels = handleModels
 module.exports.CODEX_CLI_INSTRUCTIONS = CODEX_CLI_INSTRUCTIONS

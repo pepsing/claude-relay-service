@@ -1,3 +1,7 @@
+const {
+  supportsImageRequest,
+  imageCapabilityDescription
+} = require('../../utils/imageCapabilities')
 const axios = require('axios')
 const ProxyHelper = require('../../utils/proxyHelper')
 const logger = require('../../utils/logger')
@@ -20,7 +24,7 @@ const {
   PROVIDER_ENDPOINT_CHAT_COMPLETIONS,
   buildChatCompletionsPayloadFromResponsesPayload,
   isChatCompletionsPath,
-  isImagesGenerationsPath,
+  isImagesPath,
   resolveOpenAIProviderTargetPath
 } = require('../../utils/openaiProviderEndpoint')
 
@@ -573,6 +577,35 @@ class OpenAIResponsesRelayService {
       if (!fullAccount) {
         throw new Error('Account not found')
       }
+      if (
+        options.imageTask &&
+        (fullAccount.baseApi !== options.imageTask.baseApi ||
+          ![true, 'true'].includes(fullAccount.supportsImagesGenerations) ||
+          fullAccount.isActive === false ||
+          fullAccount.isActive === 'false')
+      ) {
+        throw Object.assign(
+          new Error('The original image task account configuration has changed'),
+          {
+            statusCode: 409,
+            code: 'image_task_error'
+          }
+        )
+      }
+
+      if (
+        !options.imageTask &&
+        req.method === 'POST' &&
+        isImagesPath(options.requestPath || req.path) &&
+        !supportsImageRequest(fullAccount, req.body?.async === true)
+      ) {
+        throw Object.assign(
+          new Error(
+            `Selected account does not support ${imageCapabilityDescription(req.body?.async === true)}`
+          ),
+          { statusCode: 400 }
+        )
+      }
 
       accountConcurrencyLease = await this._acquireAccountConcurrency(
         fullAccount,
@@ -587,13 +620,13 @@ class OpenAIResponsesRelayService {
       const baseApi = fullAccount.baseApi || ''
       const { providerEndpoint, targetPath } = resolveOpenAIProviderTargetPath({
         providerEndpoint: fullAccount.providerEndpoint || 'responses',
-        requestPath: req.path,
-        originalPath: req._openaiOriginalChatCompletionsPath,
+        requestPath: options.requestPath || req.path,
+        originalPath: options.requestPath || req._openaiOriginalChatCompletionsPath,
         baseApi
       })
 
       const shouldSendChatCompletions =
-        !isImagesGenerationsPath(targetPath) &&
+        !isImagesPath(targetPath) &&
         (providerEndpoint === PROVIDER_ENDPOINT_CHAT_COMPLETIONS ||
           isChatCompletionsPath(targetPath))
 
@@ -642,6 +675,31 @@ class OpenAIResponsesRelayService {
         'Content-Type': 'application/json'
       }
 
+      let requestData = req.method === 'GET' ? undefined : req.body
+      if (req.imageFiles?.length && targetPath.endsWith('/images/edits')) {
+        const FormData = require('form-data')
+        const form = new FormData()
+        for (const [name, value] of Object.entries(req.body || {})) {
+          if (value !== undefined && value !== null) {
+            form.append(name, String(value))
+          }
+        }
+        for (const file of req.imageFiles) {
+          form.append(file.fieldname, file.buffer, {
+            filename: file.filename,
+            contentType: file.mimeType
+          })
+        }
+        // The incoming boundary and length describe a different multipart body.
+        for (const name of Object.keys(headers)) {
+          if (['content-type', 'content-length'].includes(name.toLowerCase())) {
+            delete headers[name]
+          }
+        }
+        Object.assign(headers, form.getHeaders())
+        requestData = form
+      }
+
       // 处理 User-Agent
       if (fullAccount.userAgent) {
         // 使用自定义 User-Agent
@@ -658,11 +716,27 @@ class OpenAIResponsesRelayService {
         method: req.method,
         url: targetUrl,
         headers,
-        data: req.body,
+        data: requestData,
         timeout: this.defaultTimeout,
-        responseType: req.body?.stream ? 'stream' : 'json',
+        responseType: options.imageContent || req.body?.stream ? 'stream' : 'json',
         validateStatus: () => true, // 允许处理所有状态码
         signal: abortController.signal
+      }
+      if (options.imageContent) {
+        const origin = new URL(targetUrl).origin
+        requestOptions.maxRedirects = 5
+        requestOptions.beforeRedirect = (redirect) => {
+          const destination = new URL(
+            `${redirect.protocol}//${redirect.hostname}${redirect.port ? `:${redirect.port}` : ''}`
+          )
+          if (destination.origin !== origin) {
+            for (const name of Object.keys(redirect.headers)) {
+              if (['authorization', 'cookie', 'proxy-authorization'].includes(name.toLowerCase())) {
+                delete redirect.headers[name]
+              }
+            }
+          }
+        }
       }
 
       // 配置代理（如果有）
@@ -836,6 +910,24 @@ class OpenAIResponsesRelayService {
       }
 
       // 处理流式响应
+      if (options.imageContent) {
+        const { pipeline } = require('stream/promises')
+        res.status(response.status)
+        for (const name of ['content-type', 'content-disposition']) {
+          if (response.headers?.[name]) {
+            res.setHeader(name, response.headers[name])
+          }
+        }
+        res.setHeader('Cache-Control', 'private, no-store')
+        await pipeline(response.data, res, { signal: abortController.signal })
+        completeUpstreamAttemptTiming(req)
+        return
+      }
+
+      if (options.transformResponse) {
+        response.data = await options.transformResponse(response.data, fullAccount)
+      }
+
       if (req.body?.stream && response.data && typeof response.data.pipe === 'function') {
         this._handleStreamResponse(
           response,
@@ -864,7 +956,7 @@ class OpenAIResponsesRelayService {
       if (clientDisconnected) {
         return
       }
-      return this._handleNormalResponse(
+      return await this._handleNormalResponse(
         response,
         res,
         account,
@@ -914,8 +1006,8 @@ class OpenAIResponsesRelayService {
           return res.status(error.statusCode).json({
             error: {
               message: error.message,
-              type: 'account_concurrency_limit_exceeded',
-              code: 'account_concurrency_limit_exceeded'
+              type: error.code || 'account_concurrency_limit_exceeded',
+              code: error.code || 'account_concurrency_limit_exceeded'
             }
           })
         }
@@ -1521,7 +1613,7 @@ class OpenAIResponsesRelayService {
       responseData?.model || responseData?.response?.model || requestedModel || 'gpt-4'
 
     // 记录使用统计
-    if (usageData) {
+    if (usageData && !req?._skipImageUsage) {
       try {
         // OpenAI-Responses 使用 input_tokens/output_tokens，标准 OpenAI 使用 prompt_tokens/completion_tokens
         const totalInputTokens = usageData.input_tokens || usageData.prompt_tokens || 0

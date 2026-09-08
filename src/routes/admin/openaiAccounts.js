@@ -546,6 +546,8 @@ router.post('/', authenticateAdmin, async (req, res) => {
       priority,
       maxConcurrentTasks,
       supportsImagesGenerations,
+      supportsImagesSync,
+      supportsImagesAsync,
       needsImmediateRefresh, // 是否需要立即刷新
       requireRefreshSuccess // 是否必须刷新成功才能创建
     } = req.body
@@ -577,6 +579,8 @@ router.post('/', authenticateAdmin, async (req, res) => {
         maxConcurrentTasks !== undefined && maxConcurrentTasks !== null
           ? Number(maxConcurrentTasks)
           : 0,
+      supportsImagesSync,
+      supportsImagesAsync,
       supportsImagesGenerations:
         supportsImagesGenerations === true || supportsImagesGenerations === 'true',
       rateLimitDuration:

@@ -1,3 +1,4 @@
+const { supportsImageRequest } = require('../../utils/imageCapabilities')
 /**
  * Admin Routes - OpenAI-Responses 账户管理
  * 处理 OpenAI-Responses 账户的增删改查和状态管理
@@ -782,6 +783,11 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
           success: false,
           error: 'Images generations is not enabled for this account'
         })
+      }
+      if (!supportsImageRequest(account, false)) {
+        return res
+          .status(400)
+          .json({ success: false, error: 'Synchronous images is not enabled for this account' })
       }
       if (!rawPrompt) {
         return res.status(400).json({

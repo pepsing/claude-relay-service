@@ -1,3 +1,4 @@
+const { getImageCapabilities } = require('../../utils/imageCapabilities')
 const { v4: uuidv4 } = require('uuid')
 const crypto = require('crypto')
 const axios = require('axios')
@@ -1063,6 +1064,8 @@ class OpenAIResponsesAccountService {
       dailyQuota = 0, // 每日额度限制（美元），0表示不限制
       quotaResetTime = '00:00', // 额度重置时间（HH:mm格式）
       maxConcurrentTasks = 0, // 最大并发任务数，0表示无限制
+      supportsImagesSync = true,
+      supportsImagesAsync = false,
       supportsImagesGenerations = false, // 是否支持 /v1/images/generations
       rateLimitDuration = 60, // 限流时间（分钟）
       disableAutoProtection = false, // 是否关闭自动防护（429/401/400/529 不自动禁用）
@@ -1134,6 +1137,12 @@ class OpenAIResponsesAccountService {
       zhipuCodingQuotaAutoStopped: '',
       zhipuCodingQuotaStatus: '',
       maxConcurrentTasks: this._normalizeMaxConcurrentTasks(maxConcurrentTasks).toString(),
+      supportsImagesSync: getImageCapabilities({
+        supportsImagesSync
+      }).supportsImagesSync.toString(),
+      supportsImagesAsync: getImageCapabilities({
+        supportsImagesAsync
+      }).supportsImagesAsync.toString(),
       supportsImagesGenerations:
         supportsImagesGenerations === true || supportsImagesGenerations === 'true'
           ? 'true'
@@ -1180,6 +1189,7 @@ class OpenAIResponsesAccountService {
       accountData.maxConcurrentTasks
     )
     accountData.supportsImagesGenerations = accountData.supportsImagesGenerations === 'true'
+    Object.assign(accountData, getImageCapabilities(accountData))
     accountData.supportedModels = this._parseSupportedModels(accountData.supportedModels)
     accountData.modelRestrictionMode = this._normalizeModelRestrictionMode(
       accountData.modelRestrictionMode
@@ -1260,6 +1270,12 @@ class OpenAIResponsesAccountService {
       ).toString()
     }
 
+    for (const field of ['supportsImagesSync', 'supportsImagesAsync']) {
+      if (updates[field] !== undefined) {
+        updates[field] = getImageCapabilities(updates)[field].toString()
+      }
+    }
+
     if (updates.supportsImagesGenerations !== undefined) {
       updates.supportsImagesGenerations =
         updates.supportsImagesGenerations === true || updates.supportsImagesGenerations === 'true'
@@ -1337,6 +1353,7 @@ class OpenAIResponsesAccountService {
         accountData.maxConcurrentTasks
       )
       accountData.supportsImagesGenerations = accountData.supportsImagesGenerations === 'true'
+      Object.assign(accountData, getImageCapabilities(accountData))
       accountData.supportedModels = this._parseSupportedModels(accountData.supportedModels)
       accountData.modelRestrictionMode = this._normalizeModelRestrictionMode(
         accountData.modelRestrictionMode

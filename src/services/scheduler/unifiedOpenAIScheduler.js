@@ -1,3 +1,7 @@
+const {
+  supportsImageRequest,
+  imageCapabilityDescription
+} = require('../../utils/imageCapabilities')
 const openaiAccountService = require('../account/openaiAccountService')
 const openaiResponsesAccountService = require('../account/openaiResponsesAccountService')
 const accountGroupService = require('../accountGroupService')
@@ -300,7 +304,7 @@ class UnifiedOpenAIScheduler {
 
     return (
       (accountType === 'openai' || accountType === 'openai-responses') &&
-      (account?.supportsImagesGenerations === true || account?.supportsImagesGenerations === 'true')
+      supportsImageRequest(account, options.imageAsync === true)
     )
   }
 
@@ -404,7 +408,7 @@ class UnifiedOpenAIScheduler {
 
           if (!this._matchesRequiredCapabilities(boundAccount, accountType, options)) {
             const error = new Error(
-              `Dedicated account ${boundAccount.name} does not support /v1/images/generations`
+              `Dedicated account ${boundAccount.name} does not support ${imageCapabilityDescription(options.imageAsync)}`
             )
             error.statusCode = 400
             throw error
@@ -577,6 +581,7 @@ class UnifiedOpenAIScheduler {
                 requestedModel,
                 requiredProviderEndpoint: options.requiredProviderEndpoint,
                 requireImagesGenerations: options.requireImagesGenerations,
+                imageAsync: options.imageAsync,
                 ignoreConcurrency: true
               }))
             if (isAvailable) {
@@ -659,7 +664,9 @@ class UnifiedOpenAIScheduler {
         }
 
         if (options.requireImagesGenerations) {
-          const error = new Error('No available OpenAI accounts support /v1/images/generations')
+          const error = new Error(
+            `No available OpenAI accounts support ${imageCapabilityDescription(options.imageAsync)}`
+          )
           error.statusCode = 400
           throw error
         }
@@ -1366,6 +1373,7 @@ class UnifiedOpenAIScheduler {
                     requestedModel,
                     requiredProviderEndpoint: options.requiredProviderEndpoint,
                     requireImagesGenerations: options.requireImagesGenerations,
+                    imageAsync: options.imageAsync,
                     ignoreConcurrency: true
                   }
                 ))
@@ -1415,7 +1423,7 @@ class UnifiedOpenAIScheduler {
         ) {
           if (!this._matchesRequiredCapabilities(account, accountType, options)) {
             logger.debug(
-              `⏭️ Skipping group member ${accountType} account ${account.name} - does not support /v1/images/generations`
+              `⏭️ Skipping group member ${accountType} account ${account.name} - does not support ${imageCapabilityDescription(options.imageAsync)}`
             )
             continue
           }
@@ -1510,7 +1518,9 @@ class UnifiedOpenAIScheduler {
         }
 
         const error = options.requireImagesGenerations
-          ? new Error(`No available accounts in group ${group.name} support /v1/images/generations`)
+          ? new Error(
+              `No available accounts in group ${group.name} support ${imageCapabilityDescription(options.imageAsync)}`
+            )
           : new Error(`No available accounts in group ${group.name}`)
         error.statusCode = options.requireImagesGenerations ? 400 : 402
         throw error

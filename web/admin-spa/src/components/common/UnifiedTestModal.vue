@@ -611,7 +611,9 @@ const canTestImages = computed(
     props.mode === 'account' &&
     props.account?.platform === 'openai-responses' &&
     (props.account?.supportsImagesGenerations === true ||
-      props.account?.supportsImagesGenerations === 'true')
+      props.account?.supportsImagesGenerations === 'true') &&
+    ((props.account?.supportsImagesSync ?? true) === true ||
+      props.account.supportsImagesSync === 'true')
 )
 const isImageTest = computed(() => canTestImages.value && testType.value === 'image')
 const maxTokens = ref(1000)

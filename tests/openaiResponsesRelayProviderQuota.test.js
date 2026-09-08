@@ -138,6 +138,7 @@ describe('OpenAI Responses relay provider subscription quota handling', () => {
   it('preserves images generations for accounts configured as Chat Completions providers', async () => {
     const account = {
       id: 'images-chat-provider',
+      supportsImagesGenerations: true,
       name: 'images-chat-provider',
       baseApi: 'https://api.example.com/v1',
       apiKey: 'test-key',

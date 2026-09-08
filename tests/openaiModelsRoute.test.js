@@ -1,15 +1,4 @@
-const mockRouter = {
-  get: jest.fn(),
-  post: jest.fn()
-}
-
-jest.mock(
-  'express',
-  () => ({
-    Router: () => mockRouter
-  }),
-  { virtual: true }
-)
+jest.unmock('express')
 
 jest.mock(
   '../config/config',
@@ -108,12 +97,17 @@ jest.mock('../src/utils/requestDetailHelper', () => ({
   extractOpenAICacheReadTokens: jest.fn(() => 0)
 }))
 
+// Route registration must be observed on a fresh module instance in the full suite.
+jest.resetModules()
+
 const apiKeyService = require('../src/services/apiKeyService')
 const openaiAccountService = require('../src/services/account/openaiAccountService')
 const openaiResponsesAccountService = require('../src/services/account/openaiResponsesAccountService')
 const accountGroupService = require('../src/services/accountGroupService')
 const openaiRoutes = require('../src/routes/openaiRoutes')
-const registeredGetRoutes = [...mockRouter.get.mock.calls]
+const registeredGetRoutes = openaiRoutes.stack
+  .filter((layer) => layer.route?.methods.get)
+  .map((layer) => [layer.route.path, ...layer.route.stack.map((handler) => handler.handle)])
 
 const modelIds = (models) => models.map((model) => model.id)
 

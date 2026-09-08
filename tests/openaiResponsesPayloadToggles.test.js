@@ -1287,7 +1287,7 @@ describe('openai images generations', () => {
       req.apiKey,
       null,
       'gpt-image-2',
-      { requireImagesGenerations: true }
+      { requireImagesGenerations: true, imageAsync: false }
     )
     expect(axios.post.mock.calls[0][1]).toMatchObject({
       model: 'gpt-5.4-mini',
@@ -1353,7 +1353,7 @@ describe('openai images generations', () => {
       req.apiKey,
       createHash('openai-images:shared-session'),
       'gpt-image-2',
-      { requireImagesGenerations: true }
+      { requireImagesGenerations: true, imageAsync: false }
     )
   })
 
@@ -1381,7 +1381,7 @@ describe('openai images generations', () => {
       req.apiKey,
       null,
       'provider-image-model',
-      { requireImagesGenerations: true }
+      { requireImagesGenerations: true, imageAsync: false }
     )
     expect(openaiResponsesRelayService.handleRequest).toHaveBeenCalledWith(
       expect.objectContaining({
