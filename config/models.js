@@ -121,23 +121,7 @@ const OPENAI_MODELS = [
   { value: 'gpt-5.6-terra', label: 'gpt-5.6-terra' },
   { value: 'gpt-5.6-luna', label: 'gpt-5.6-luna' },
   { value: 'gpt-5.5', label: 'gpt-5.5' },
-  { value: 'gpt-5.5-pro', label: 'gpt-5.5-pro' },
-  { value: 'gpt-5.4', label: 'gpt-5.4' },
-  { value: 'gpt-5.4-pro', label: 'gpt-5.4-pro' },
-  { value: 'gpt-5.4-mini', label: 'gpt-5.4-mini' },
-  { value: 'gpt-5.4-nano', label: 'gpt-5.4-nano' },
-  { value: 'gpt-5', label: 'gpt-5' },
-  { value: 'gpt-5-mini', label: 'gpt-5-mini' },
-  { value: 'gpt-5-nano', label: 'gpt-5-nano' },
-  { value: 'gpt-5.1', label: 'gpt-5.1' },
-  { value: 'gpt-5.1-codex', label: 'gpt-5.1-codex' },
-  { value: 'gpt-5.1-codex-max', label: 'gpt-5.1-codex-max' },
-  { value: 'gpt-5.1-codex-mini', label: 'gpt-5.1-codex-mini' },
-  { value: 'gpt-5.2', label: 'gpt-5.2' },
-  { value: 'gpt-5.2-codex', label: 'gpt-5.2-codex' },
-  { value: 'gpt-5.3-codex', label: 'gpt-5.3-codex' },
-  { value: 'gpt-5.3-codex-spark', label: 'gpt-5.3-codex-spark' },
-  { value: 'codex-mini', label: 'codex-mini' }
+  { value: 'gpt-5.3-codex-spark', label: 'gpt-5.3-codex-spark' }
 ]
 
 const BEDROCK_MODELS = [
@@ -197,19 +181,11 @@ const CLAUDE_MAPPING_PRESETS = [
   { label: '+ glm-5.1', from: 'glm-5.1', to: 'glm-5.1' }
 ]
 
-const OPENAI_MAPPING_PRESETS = [
-  { label: '+ gpt-6-astra', from: 'gpt-6-astra', to: 'gpt-6-astra' },
-  { label: '+ gpt-5.6-sol', from: 'gpt-5.6-sol', to: 'gpt-5.6-sol' },
-  { label: '+ gpt-5.6-terra', from: 'gpt-5.6-terra', to: 'gpt-5.6-terra' },
-  { label: '+ gpt-5.6-luna', from: 'gpt-5.6-luna', to: 'gpt-5.6-luna' },
-  { label: '+ gpt-5.5', from: 'gpt-5.5', to: 'gpt-5.5' },
-  { label: '+ gpt-5.5-pro', from: 'gpt-5.5-pro', to: 'gpt-5.5-pro' },
-  { label: '+ gpt-5.4', from: 'gpt-5.4', to: 'gpt-5.4' },
-  { label: '+ gpt-5.4-mini', from: 'gpt-5.4-mini', to: 'gpt-5.4-mini' },
-  { label: '+ gpt-5', from: 'gpt-5', to: 'gpt-5' },
-  { label: '+ gpt-5-mini', from: 'gpt-5-mini', to: 'gpt-5-mini' },
-  { label: '+ gpt-5.3-codex', from: 'gpt-5.3-codex', to: 'gpt-5.3-codex' }
-]
+const OPENAI_MAPPING_PRESETS = OPENAI_MODELS.map(({ value }) => ({
+  label: `+ ${value}`,
+  from: value,
+  to: value
+}))
 
 const GEMINI_MAPPING_PRESETS = [
   {

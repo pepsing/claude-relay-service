@@ -175,12 +175,18 @@ describe('OpenAI models route', () => {
     const models = await openaiRoutes.buildOpenAIModelsList({ permissions: ['openai'] })
     const ids = modelIds(models)
 
-    expect(ids).toContain('gpt-5')
-    expect(ids).toContain('gpt-6-astra')
-    expect(ids).toEqual(expect.arrayContaining(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']))
-    expect(ids).not.toContain('gpt-5.6')
-    expect(ids).toContain('kimi-k2.6')
-    expect(ids).toContain('gpt-custom-responses')
+    expect([...ids].sort()).toEqual(
+      [
+        'gpt-6-astra',
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+        'gpt-5.6-luna',
+        'gpt-5.5',
+        'gpt-5.3-codex-spark',
+        'kimi-k2.6',
+        'gpt-custom-responses'
+      ].sort()
+    )
     expect(models[0]).toEqual(
       expect.objectContaining({
         object: 'model',

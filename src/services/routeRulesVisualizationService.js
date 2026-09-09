@@ -61,32 +61,24 @@ const ENDPOINT_DEFINITIONS = [
     label: 'OpenAI Chat',
     path: '/openai/v1/chat/completions',
     service: 'openai',
-    defaultModel: 'gpt-5',
+    defaultModel: modelsConfig.OPENAI_MODELS[0].value,
     acceptedFormat: 'OpenAI Chat Completions',
     modelSource: 'body.model',
     accountTypes: ['openai-responses'],
     requestDetailMatchers: ['/openai/v1/chat/completions', '/v1/chat/completions'],
-    models: [
-      { id: 'gpt-5', label: 'gpt-5', hint: '默认模型' },
-      { id: 'gpt-4o', label: 'gpt-4o', hint: '兼容模型' },
-      { id: 'o3', label: 'o3', hint: '推理模型' }
-    ]
+    models: modelsConfig.OPENAI_MODELS.map(({ value }) => ({ id: value, label: value }))
   },
   {
     id: 'openai-responses',
     label: 'OpenAI Responses',
     path: '/openai/v1/responses',
     service: 'openai',
-    defaultModel: 'gpt-5',
+    defaultModel: modelsConfig.OPENAI_MODELS[0].value,
     acceptedFormat: 'OpenAI Responses',
     modelSource: 'body.model',
     accountTypes: ['openai-responses'],
     requestDetailMatchers: ['/openai/v1/responses', '/v1/responses', '/responses'],
-    models: [
-      { id: 'gpt-5', label: 'gpt-5', hint: 'Responses 默认模型' },
-      { id: 'gpt-5-mini', label: 'gpt-5-mini', hint: '轻量模型' },
-      { id: 'o3', label: 'o3', hint: '推理模型' }
-    ]
+    models: modelsConfig.OPENAI_MODELS.map(({ value }) => ({ id: value, label: value }))
   },
   {
     id: 'gemini',

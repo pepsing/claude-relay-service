@@ -71,7 +71,7 @@ function getDefaultOpenAIResponsesTestModel(account, providerEndpoint) {
     return extractSupportedModelNames(account?.supportedModels)[0] || 'gpt-4o-mini'
   }
 
-  return 'gpt-4o-mini'
+  return 'gpt-6-astra'
 }
 
 function getOpenAITestFinishReason(data) {

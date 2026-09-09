@@ -571,7 +571,7 @@ const platformFallbackModels = {
   'claude-console': 'claude-sonnet-5',
   gemini: 'gemini-2.5-pro',
   'gemini-api': 'gemini-2.5-flash',
-  'openai-responses': 'gpt-5',
+  'openai-responses': 'gpt-6-astra',
   droid: 'claude-sonnet-5',
   ccr: 'claude-sonnet-5'
 }
@@ -641,19 +641,19 @@ const apikeyServiceConfigs = {
   openai: {
     name: 'OpenAI (Codex)',
     endpoint: '/api-key/test-openai',
-    defaultModel: 'gpt-5',
+    defaultModel: 'gpt-6-astra',
     displayEndpoint: '/openai/responses'
   },
   'openai-responses': {
     name: 'Codex',
     endpoint: '/api-key/test-openai',
-    defaultModel: 'gpt-5',
+    defaultModel: 'gpt-6-astra',
     displayEndpoint: '/openai/responses'
   },
   'openai-chat': {
     name: 'OpenAI Chat',
     endpoint: '/api-key/test-openai-chat',
-    defaultModel: 'gpt-5',
+    defaultModel: 'gpt-6-astra',
     displayEndpoint: '/openai/v1/chat/completions'
   }
 }

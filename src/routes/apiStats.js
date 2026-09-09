@@ -2093,7 +2093,7 @@ router.post('/api-key/test-openai', async (req, res) => {
   const { createOpenAITestPayload } = require('../utils/testPayloadHelper')
 
   try {
-    const { apiKey, model = 'gpt-5', prompt = 'hi' } = req.body
+    const { apiKey, model = 'gpt-6-astra', prompt = 'hi' } = req.body
     const maxTokens = sanitizeMaxTokens(req.body.maxTokens)
 
     if (!apiKey) {
@@ -2251,7 +2251,7 @@ router.post('/api-key/test-openai-chat', async (req, res) => {
   const config = require('../../config/config')
 
   try {
-    const { apiKey, model = 'gpt-5', prompt = 'hi' } = req.body
+    const { apiKey, model = 'gpt-6-astra', prompt = 'hi' } = req.body
     const maxTokens = sanitizeMaxTokens(req.body.maxTokens)
 
     if (!apiKey) {

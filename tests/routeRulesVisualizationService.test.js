@@ -118,6 +118,19 @@ describe('routeRulesVisualizationService', () => {
 
     const result = await routeRulesVisualizationService.getEndpoints()
 
+    for (const id of ['openai', 'openai-responses']) {
+      const endpoint = result.endpoints.find((item) => item.id === id)
+      expect(endpoint.defaultModel).toBe('gpt-6-astra')
+      expect(endpoint.models.map((model) => model.id)).toEqual([
+        'gpt-6-astra',
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+        'gpt-5.6-luna',
+        'gpt-5.5',
+        'gpt-5.3-codex-spark'
+      ])
+    }
+
     expect(result.defaultEndpoint).toBe('claude')
     expect(result.endpoints.map((endpoint) => endpoint.id)).toContain('claude')
     expect(result.endpoints.find((endpoint) => endpoint.id === 'claude')).toMatchObject({

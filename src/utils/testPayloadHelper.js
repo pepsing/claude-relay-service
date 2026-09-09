@@ -316,7 +316,7 @@ function createGeminiTestPayload(_model = 'gemini-2.5-pro', options = {}) {
  * @param {boolean} options.includeMaxOutputTokens - 是否包含 max_output_tokens（默认 true）
  * @returns {object} 测试请求体
  */
-function createOpenAITestPayload(model = 'gpt-5', options = {}) {
+function createOpenAITestPayload(model = 'gpt-6-astra', options = {}) {
   const {
     prompt = 'hi',
     maxTokens = 100,

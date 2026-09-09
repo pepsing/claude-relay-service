@@ -42,8 +42,8 @@ describe('testPayloadHelper', () => {
   })
 
   test('creates the default OpenAI Responses test payload with max_output_tokens', () => {
-    expect(createOpenAITestPayload('gpt-5', { prompt: 'hi', maxTokens: 12 })).toEqual({
-      model: 'gpt-5',
+    expect(createOpenAITestPayload(undefined, { prompt: 'hi', maxTokens: 12 })).toEqual({
+      model: 'gpt-6-astra',
       input: [{ role: 'user', content: 'hi' }],
       stream: true,
       max_output_tokens: 12

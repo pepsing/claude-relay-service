@@ -164,55 +164,58 @@ describe('POST /admin/openai-responses-accounts/:accountId/test', () => {
     expect(axios.post).not.toHaveBeenCalled()
   })
 
-  it('tests Responses accounts with streaming enabled and parses SSE output', async () => {
-    openaiResponsesAccountService.getAccount.mockResolvedValue({
-      id: 'responses-1',
-      name: 'Responses account',
-      apiKey: 'provider-secret',
-      baseApi: 'https://api.example.com/v1',
-      providerEndpoint: 'responses'
-    })
-    axios.post.mockResolvedValue({
-      data: [
-        'event: response.output_text.delta',
-        'data: {"type":"response.output_text.delta","delta":"Hello "}',
-        '',
-        'event: response.output_text.delta',
-        'data: {"type":"response.output_text.delta","delta":"from SSE"}',
-        ''
-      ].join('\n')
-    })
-
-    const response = await request(buildApp())
-      .post('/admin/openai-responses-accounts/responses-1/test')
-      .send({
-        testType: 'text',
-        model: 'gpt-5.6-sol',
-        prompt: 'hi'
+  it.each([undefined, 'gpt-5.6-sol'])(
+    'tests Responses accounts with model %s and parses SSE output',
+    async (model) => {
+      openaiResponsesAccountService.getAccount.mockResolvedValue({
+        id: 'responses-1',
+        name: 'Responses account',
+        apiKey: 'provider-secret',
+        baseApi: 'https://api.example.com/v1',
+        providerEndpoint: 'responses'
+      })
+      axios.post.mockResolvedValue({
+        data: [
+          'event: response.output_text.delta',
+          'data: {"type":"response.output_text.delta","delta":"Hello "}',
+          '',
+          'event: response.output_text.delta',
+          'data: {"type":"response.output_text.delta","delta":"from SSE"}',
+          ''
+        ].join('\n')
       })
 
-    expect(response.status).toBe(200)
-    expect(axios.post).toHaveBeenCalledWith(
-      'https://api.example.com/v1/responses',
-      expect.objectContaining({
-        model: 'gpt-5.6-sol',
-        stream: true,
-        input: [{ role: 'user', content: 'hi' }]
-      }),
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: 'Bearer provider-secret'
+      const response = await request(buildApp())
+        .post('/admin/openai-responses-accounts/responses-1/test')
+        .send({
+          testType: 'text',
+          model,
+          prompt: 'hi'
+        })
+
+      expect(response.status).toBe(200)
+      expect(axios.post).toHaveBeenCalledWith(
+        'https://api.example.com/v1/responses',
+        expect.objectContaining({
+          model: model || 'gpt-6-astra',
+          stream: true,
+          input: [{ role: 'user', content: 'hi' }]
+        }),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer provider-secret'
+          })
+        })
+      )
+      expect(response.body).toEqual({
+        success: true,
+        data: expect.objectContaining({
+          accountId: 'responses-1',
+          accountName: 'Responses account',
+          model: model || 'gpt-6-astra',
+          responseText: 'Hello from SSE'
         })
       })
-    )
-    expect(response.body).toEqual({
-      success: true,
-      data: expect.objectContaining({
-        accountId: 'responses-1',
-        accountName: 'Responses account',
-        model: 'gpt-5.6-sol',
-        responseText: 'Hello from SSE'
-      })
-    })
-  })
+    }
+  )
 })
