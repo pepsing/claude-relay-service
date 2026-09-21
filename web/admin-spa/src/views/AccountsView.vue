@@ -2933,7 +2933,7 @@ const accountToolbarActions = computed(() => {
     )
   }
 
-  return actions
+  return actions.filter((action) => action.key !== 'import-openai')
 })
 const accountToolbarInlineActions = computed(() =>
   accountToolbarActions.value.slice(0, accountToolbarVisibleCount.value)
