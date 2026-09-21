@@ -3520,12 +3520,10 @@ const closeAccountUsageModal = () => {
 const supportedTestPlatforms = [
   'claude',
   'claude-console',
-  'bedrock',
   'gemini',
   'gemini-api',
   'openai-responses',
   'azure-openai',
-  'droid',
   'ccr'
 ]
 

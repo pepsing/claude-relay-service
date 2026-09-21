@@ -860,10 +860,14 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
     const endpointPath = targetPath
     const apiUrl = `${baseUrl}${endpointPath}`
     const model = requestedModel || getDefaultOpenAIResponsesTestModel(account, providerEndpoint)
+    const upstreamModel = openaiResponsesAccountService.getMappedModel(
+      account.supportedModels,
+      model
+    )
     const payload =
       providerEndpoint === PROVIDER_ENDPOINT_CHAT_COMPLETIONS
-        ? createChatCompletionsTestPayload(model, { prompt, maxTokens: 512 })
-        : createOpenAITestPayload(model, {
+        ? createChatCompletionsTestPayload(upstreamModel, { prompt, maxTokens: 512 })
+        : createOpenAITestPayload(upstreamModel, {
             stream: true,
             prompt,
             instructions: OPENAI_CODEX_TEST_INSTRUCTIONS,
@@ -889,6 +893,7 @@ router.post('/openai-responses-accounts/:accountId/test', authenticateAdmin, asy
         accountId,
         accountName: account.name,
         model,
+        upstreamModel,
         latency,
         responseText: responseText.substring(0, 200)
       }

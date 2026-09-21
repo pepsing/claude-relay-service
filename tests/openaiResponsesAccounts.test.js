@@ -164,6 +164,44 @@ describe('POST /admin/openai-responses-accounts/:accountId/test', () => {
     expect(axios.post).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['chat-completions', 'deepseek-flash', 'deepseek-v4-1-flash-260910'],
+    ['responses', 'deepseek-flash', 'deepseek-v4-1-flash-260910'],
+    ['chat-completions', 'custom-model', 'custom-model'],
+    ['responses', 'custom-model', 'custom-model'],
+    ['chat-completions', undefined, 'deepseek-v4-1-flash-260910']
+  ])('maps text test models for %s (%s)', async (providerEndpoint, model, upstreamModel) => {
+    openaiResponsesAccountService.getAccount.mockResolvedValue({
+      id: 'responses-1',
+      name: 'Mapped account',
+      apiKey: 'provider-secret',
+      baseApi: 'https://api.example.com/v1',
+      providerEndpoint,
+      supportedModels: { 'deepseek-flash': 'deepseek-v4-1-flash-260910' }
+    })
+    axios.post.mockResolvedValue({
+      data: { choices: [{ message: { content: 'Hello' } }] }
+    })
+
+    const response = await request(buildApp())
+      .post('/admin/openai-responses-accounts/responses-1/test')
+      .send({ testType: 'text', model, prompt: 'hi' })
+
+    expect(response.status).toBe(200)
+    expect(axios.post).toHaveBeenCalledWith(
+      `https://api.example.com/v1/${providerEndpoint === 'responses' ? 'responses' : 'chat/completions'}`,
+      expect.objectContaining({ model: upstreamModel }),
+      expect.any(Object)
+    )
+    expect(response.body.data).toEqual(
+      expect.objectContaining({
+        model: model || 'deepseek-flash',
+        upstreamModel,
+        responseText: 'Hello'
+      })
+    )
+  })
+
   it.each([undefined, 'gpt-5.6-sol'])(
     'tests Responses accounts with model %s and parses SSE output',
     async (model) => {
