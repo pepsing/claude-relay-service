@@ -127,6 +127,7 @@
                 <ModelSelector
                   v-else
                   v-model="selectedModel"
+                  :allow-custom="!isClaudeConsoleMappingRestricted"
                   :disabled="state.testStatus.value === 'testing'"
                   :models="availableModels"
                 />
@@ -510,6 +511,13 @@ const accountMappingModels = computed(() => {
   return normalizeModelOptions(extractConfiguredSourceModels(props.account?.supportedModels))
 })
 
+const isClaudeConsoleMappingRestricted = computed(
+  () =>
+    props.mode === 'account' &&
+    props.account?.platform === 'claude-console' &&
+    accountMappingModels.value.length > 0
+)
+
 const externalModelOptions = computed(() => {
   const options = props.extraModelOptions
 
@@ -558,7 +566,7 @@ const availableModels = computed(() => {
     baseModels = getApiKeyModeBaseModels()
   }
 
-  if (isOpenAIChatCompletionsAccount.value) {
+  if (isOpenAIChatCompletionsAccount.value || isClaudeConsoleMappingRestricted.value) {
     return mergeModelOptions(accountMappingModels.value)
   }
 

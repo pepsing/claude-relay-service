@@ -2,7 +2,7 @@
   <div class="flex items-center gap-2">
     <!-- 下拉选择模式 -->
     <select
-      v-if="!customMode"
+      v-if="!customMode || !allowCustom"
       class="flex-1 rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300"
       :disabled="disabled"
       :value="modelValue"
@@ -11,7 +11,7 @@
       <option v-for="m in models" :key="m.value" :value="m.value">
         {{ m.value }}
       </option>
-      <option value="__custom__">自定义模型...</option>
+      <option v-if="allowCustom" value="__custom__">自定义模型...</option>
     </select>
 
     <!-- 自定义输入模式 -->
@@ -42,6 +42,7 @@ import { ref } from 'vue'
 const props = defineProps({
   modelValue: { type: String, default: '' },
   models: { type: Array, default: () => [] },
+  allowCustom: { type: Boolean, default: true },
   disabled: { type: Boolean, default: false },
   placeholder: { type: String, default: '输入模型 ID...' }
 })
