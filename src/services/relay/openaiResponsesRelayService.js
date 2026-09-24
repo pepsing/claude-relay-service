@@ -909,6 +909,31 @@ class OpenAIResponsesRelayService {
         )
       }
 
+      // 网关的网页回退可能返回 HTTP 200；不能将 HTML 包装成成功的 SSE 响应。
+      const responseContentType = String(response.headers?.['content-type'] || '')
+        .split(';')[0]
+        .trim()
+        .toLowerCase()
+      if (['text/html', 'application/xhtml+xml'].includes(responseContentType)) {
+        response.data?.destroy?.()
+        completeUpstreamAttemptTiming(req)
+        const errorData = {
+          error: {
+            message:
+              'Upstream returned HTML instead of an API response. Check the account API base URL and endpoint path.',
+            type: 'upstream_invalid_response',
+            code: 'upstream_html_response'
+          }
+        }
+        logger.warn('OpenAI-Responses upstream returned an HTML page', {
+          accountId: account.id,
+          contentType: responseContentType,
+          status: response.status
+        })
+        deferRetryableError(502, errorData)
+        return sendJsonResponse(502, errorData)
+      }
+
       // 处理流式响应
       if (options.imageContent) {
         const { pipeline } = require('stream/promises')

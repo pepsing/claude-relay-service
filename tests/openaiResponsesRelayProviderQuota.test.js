@@ -135,6 +135,85 @@ describe('OpenAI Responses relay provider subscription quota handling', () => {
     upstreamErrorHelper.markTempUnavailable.mockResolvedValue(undefined)
   })
 
+  it.each(['text/html; charset=utf-8', 'Application/XHTML+XML'])(
+    'rejects successful HTML streams (%s) before flushing SSE and releases the lease',
+    async (contentType) => {
+      const account = createStreamingAccount({ maxConcurrentTasks: 1 })
+      const upstream = new FakeUpstream()
+      const req = createStreamingRequest()
+      const res = new FakeResponse()
+      openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+      redis.incrConcurrency.mockResolvedValue(1)
+      redis.decrConcurrency.mockResolvedValue(0)
+      axios.mockResolvedValue({
+        status: 200,
+        headers: { 'content-type': contentType },
+        data: upstream
+      })
+
+      await openaiResponsesRelayService.handleRequest(req, res, account, { id: 'api-key-1' })
+
+      expect(res.statusCode).toBe(502)
+      expect(res.body.error.code).toBe('upstream_html_response')
+      expect(res.flushHeaders).not.toHaveBeenCalled()
+      expect(res.headers['Content-Type']).toBeUndefined()
+      expect(upstream.destroy).toHaveBeenCalledTimes(1)
+      expect(redis.decrConcurrency).toHaveBeenCalledTimes(1)
+      expect(req.listenerCount('aborted')).toBe(0)
+      expect(res.listenerCount('close')).toBe(0)
+    }
+  )
+
+  it('rejects non-streaming HTML without exposing the upstream page', async () => {
+    const account = createStreamingAccount()
+    const req = createStreamingRequest({ body: { model: 'gpt-5', stream: false } })
+    const res = new FakeResponse()
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    axios.mockResolvedValue({
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+      data: '<html>private gateway diagnostics</html>'
+    })
+
+    await openaiResponsesRelayService.handleRequest(req, res, account, { id: 'api-key-1' })
+
+    expect(res.statusCode).toBe(502)
+    expect(res.body.error.code).toBe('upstream_html_response')
+    expect(JSON.stringify(res.body)).not.toContain('private gateway diagnostics')
+  })
+
+  it('defers an HTML response to account failover without committing a downstream response', async () => {
+    const account = createStreamingAccount({ maxConcurrentTasks: 1 })
+    const upstream = new FakeUpstream()
+    const req = createStreamingRequest()
+    const res = new FakeResponse()
+    openaiResponsesAccountService.getAccount.mockResolvedValue(account)
+    redis.incrConcurrency.mockResolvedValue(1)
+    redis.decrConcurrency.mockResolvedValue(0)
+    axios.mockResolvedValue({
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+      data: upstream
+    })
+
+    await expect(
+      openaiResponsesRelayService.handleRequest(
+        req,
+        res,
+        account,
+        { id: 'api-key-1' },
+        {
+          deferRetryableErrors: true
+        }
+      )
+    ).rejects.toMatchObject({ statusCode: 502 })
+
+    expect(res.body).toBeNull()
+    expect(res.flushHeaders).not.toHaveBeenCalled()
+    expect(upstream.destroy).toHaveBeenCalled()
+    expect(redis.decrConcurrency).toHaveBeenCalledTimes(1)
+  })
+
   it('preserves images generations for accounts configured as Chat Completions providers', async () => {
     const account = {
       id: 'images-chat-provider',
