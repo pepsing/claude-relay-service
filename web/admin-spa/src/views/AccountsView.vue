@@ -3070,7 +3070,9 @@ const platformHierarchy = [
     icon: 'fa-openai',
     children: [
       { value: 'openai', label: 'OpenAI 官方', icon: 'fa-openai' },
-      { value: 'openai-responses', label: 'OpenAI-Responses (Codex)', icon: 'fa-server' },
+      { value: 'openai-responses', label: 'OpenAI API（全部）', icon: 'fa-server' },
+      { value: 'openai-responses-codex', label: 'Codex Responses', icon: 'fa-code' },
+      { value: 'openai-chat-completions', label: 'OpenAI Chat Completions', icon: 'fa-comments' },
       { value: 'azure_openai', label: 'Azure OpenAI', icon: 'fab fa-microsoft' }
     ]
   },
@@ -3095,6 +3097,8 @@ const platformHierarchy = [
 const platformGroupMap = {
   'group-claude': ['claude', 'claude-console', 'bedrock', 'ccr'],
   'group-openai': ['openai', 'openai-responses', 'azure_openai'],
+  'openai-responses-codex': ['openai-responses'],
+  'openai-chat-completions': ['openai-responses'],
   'group-gemini': ['gemini', 'gemini-api'],
   'group-droid': ['droid']
 }
@@ -4455,6 +4459,18 @@ const loadAccounts = async (forceReload = false) => {
           return account.groupInfos.some((group) => group.id === groupFilter.value)
         })
       }
+    }
+
+    const providerEndpointFilter = {
+      'openai-responses-codex': 'responses',
+      'openai-chat-completions': 'chat-completions'
+    }[platformFilter.value]
+    if (providerEndpointFilter) {
+      filteredAccounts = filteredAccounts.filter(
+        (account) =>
+          account.platform === 'openai-responses' &&
+          normalizeOpenAIProviderEndpointType(account.providerEndpoint) === providerEndpointFilter
+      )
     }
 
     filteredAccounts = filteredAccounts.map((account) => {
