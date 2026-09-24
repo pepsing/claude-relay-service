@@ -191,6 +191,7 @@
               v-model="form[field.key]"
               class="batch-textarea"
               :disabled="!fieldEnabled[field.key]"
+              :placeholder="field.key === 'proxyText' ? proxyExample : undefined"
               rows="5"
             />
 
@@ -221,6 +222,23 @@
                   :value="groupOption.id"
                 />
               </el-select>
+            </div>
+
+            <div
+              v-if="field.key === 'proxyText'"
+              class="space-y-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-gray-600 dark:border-blue-900 dark:bg-blue-950/30 dark:text-gray-300"
+            >
+              <p class="font-medium text-gray-700 dark:text-gray-200">
+                HTTP 代理示例（本机 Clash，端口请按实际配置填写）
+              </p>
+              <pre class="overflow-x-auto font-mono leading-relaxed">{{ proxyExample }}</pre>
+              <p>type 支持 http、https、socks5；host 只填主机名或 IP，不带协议；port 填数字。</p>
+              <p>需要认证时，可增加 username 和 password 字符串字段；无需认证则省略。</p>
+              <p>
+                127.0.0.1 指 CRS 所在服务器，不是浏览器所在电脑。Docker
+                部署时，请填写容器能访问的代理地址。
+              </p>
+              <p>勾选“覆写”后才会应用；勾选并留空会清除代理，未勾选则保持原配置。</p>
             </div>
 
             <p class="text-xs text-gray-500 dark:text-gray-400">
@@ -292,6 +310,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close', 'submit'])
+const proxyExample = JSON.stringify({ type: 'http', host: '127.0.0.1', port: 7897 }, null, 2)
 
 const PLATFORM_LABELS = {
   claude: 'Claude 官方/OAuth',
