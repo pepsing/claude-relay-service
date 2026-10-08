@@ -2883,24 +2883,24 @@ const accountToolbarActions = computed(() => {
   ]
 
   if (selectedAccounts.value.length > 0) {
+    actions.unshift({
+      key: 'export-selected',
+      label: `导出选中 (${selectedAccounts.value.length})`,
+      tooltip: '导出选中的账户 JSON',
+      icon: 'fa-file-export',
+      iconClass: 'text-amber-600 dark:text-amber-400',
+      glowClass: 'bg-gradient-to-r from-amber-500 to-orange-500',
+      buttonClass:
+        'border border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50',
+      overflowClass:
+        'text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-900/30',
+      disabled: exportingAccountsJson.value,
+      loading: exportingAccountsJson.value,
+      handler: () => {
+        exportAccountsJson('selected')
+      }
+    })
     actions.push(
-      {
-        key: 'export-selected',
-        label: `导出选中 (${selectedAccounts.value.length})`,
-        tooltip: '导出选中的账户 JSON',
-        icon: 'fa-file-export',
-        iconClass: 'text-amber-600 dark:text-amber-400',
-        glowClass: 'bg-gradient-to-r from-amber-500 to-orange-500',
-        buttonClass:
-          'border border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:bg-amber-900/50',
-        overflowClass:
-          'text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-900/30',
-        disabled: exportingAccountsJson.value,
-        loading: exportingAccountsJson.value,
-        handler: () => {
-          exportAccountsJson('selected')
-        }
-      },
       {
         key: 'batch-edit',
         label: `编辑选中 (${selectedAccounts.value.length})`,
