@@ -127,7 +127,6 @@
                 <ModelSelector
                   v-else
                   v-model="selectedModel"
-                  :allow-custom="!isClaudeConsoleMappingRestricted"
                   :disabled="state.testStatus.value === 'testing'"
                   :models="availableModels"
                 />
