@@ -1,8 +1,10 @@
 <template>
   <el-dialog
+    class="account-access-dialog"
     :close-on-click-modal="false"
     :model-value="true"
     title="账户访问授权"
+    top="16px"
     width="min(1100px, 96vw)"
     @close="$emit('close')"
   >
@@ -240,7 +242,7 @@
       </template>
     </div>
     <template #footer
-      ><div class="flex items-center justify-end gap-3">
+      ><div class="flex flex-wrap items-center justify-end gap-3">
         <span v-if="dirty" class="text-sm text-amber-600">有未保存的修改</span
         ><el-button @click="$emit('close')">关闭</el-button
         ><el-button :disabled="loading" @click="load">重新加载</el-button
@@ -407,3 +409,25 @@ async function loadAudit() {
 }
 onMounted(load)
 </script>
+
+<style>
+.account-access-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  margin-bottom: 16px;
+}
+
+.account-access-dialog .el-dialog__header,
+.account-access-dialog .el-dialog__footer {
+  flex: 0 0 auto;
+}
+
+.account-access-dialog .el-dialog__body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+</style>
