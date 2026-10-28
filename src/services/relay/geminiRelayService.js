@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const axios = require('axios')
 const ProxyHelper = require('../../utils/proxyHelper')
 const logger = require('../../utils/logger')
@@ -309,6 +310,7 @@ async function sendGeminiRequest({
 
   try {
     logger.debug('Sending request to Gemini API')
+    await accountAccessService.assertAllowed('gemini', accountId, apiKeyId)
     const response = await axios(axiosConfig)
 
     if (stream) {

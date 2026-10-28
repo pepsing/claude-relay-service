@@ -335,4 +335,21 @@ describe('dedicated (bound) Claude account never silently falls back to the shar
 
     poolSpy.mockRestore()
   })
+  test('forced session binding cannot bypass account authorization', async () => {
+    mockRedisClient.get.mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        revision: 0,
+        groups: [],
+        memberships: {},
+        policies: { [`claude:${BOUND_ID}`]: { mode: 'restricted', keyIds: [], groupIds: [] } }
+      })
+    )
+    await expect(
+      scheduler.selectAccountForApiKey(apiKeyData, 'same-session', 'claude-sonnet-4-6', {
+        accountId: BOUND_ID,
+        accountType: 'claude-official'
+      })
+    ).rejects.toMatchObject({ code: 'ACCOUNT_ACCESS_DENIED' })
+  })
 })

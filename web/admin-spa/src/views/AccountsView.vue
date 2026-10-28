@@ -9,6 +9,7 @@
           <p class="text-sm text-gray-600 dark:text-gray-400 sm:text-base">
             管理 Claude、Gemini、OpenAI 等账户与代理配置
           </p>
+          <el-button class="mt-3" @click="showAccountAccess = true">账户访问授权</el-button>
         </div>
         <div
           ref="accountControlsRef"
@@ -2614,10 +2615,13 @@
       @close="showBatchEditModal = false"
       @submit="handleBatchEditSubmit"
     />
+    <AccountAccessModal v-if="showAccountAccess" @close="showAccountAccess = false" />
   </div>
 </template>
 
 <script setup>
+import AccountAccessModal from '@/components/accounts/AccountAccessModal.vue'
+const showAccountAccess = ref(false)
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, copyText, formatNumber, formatRelativeTime } from '@/utils/tools'

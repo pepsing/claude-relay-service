@@ -1,3 +1,4 @@
+const accountAccessService = require('../services/accountAccessService')
 const express = require('express')
 const claudeRelayService = require('../services/relay/claudeRelayService')
 const claudeConsoleRelayService = require('../services/relay/claudeConsoleRelayService')
@@ -191,9 +192,13 @@ async function loadClaudeConsoleModelSourceAccounts(apiKeyData = {}) {
 }
 
 async function buildAnthropicModelsList(apiKeyData = {}) {
-  const accounts = await loadClaudeConsoleModelSourceAccounts(apiKeyData)
+  const sourceAccounts = await loadClaudeConsoleModelSourceAccounts(apiKeyData)
+  const access = await accountAccessService.getEvaluator(apiKeyData.id)
+  const accounts = sourceAccounts.filter((account) =>
+    access.canAccess('claude-console', account.id)
+  )
   const inboundModelIds = new Set()
-  let includeConfiguredModels = accounts.length === 0
+  let includeConfiguredModels = sourceAccounts.length === 0
 
   accounts.forEach((account) => {
     const accountModelIds = getClaudeConsoleInboundModelIds(account)

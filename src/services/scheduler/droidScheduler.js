@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const droidAccountService = require('../account/droidAccountService')
 const accountGroupService = require('../accountGroupService')
 const redis = require('../../models/redis')
@@ -95,6 +96,7 @@ class DroidScheduler {
   }
 
   async selectAccount(apiKeyData, endpointType, sessionHash) {
+    const access = await accountAccessService.getEvaluator(apiKeyData?.id)
     const normalizedEndpoint = normalizeEndpointType(endpointType)
     const stickyKey = this._composeStickySessionKey(normalizedEndpoint, sessionHash, apiKeyData?.id)
 
@@ -110,6 +112,7 @@ class DroidScheduler {
         )
         candidates = await this._loadGroupAccounts(groupId, normalizedEndpoint)
       } else {
+        access.assert('droid', binding)
         const account = await droidAccountService.getAccount(binding)
         if (account) {
           const isTempUnavailable = await upstreamErrorHelper.isTempUnavailable(account.id, 'droid')
@@ -129,6 +132,7 @@ class DroidScheduler {
       candidates = await droidAccountService.getSchedulableAccounts(normalizedEndpoint)
     }
 
+    candidates = access.filter(candidates, 'droid')
     const syncFiltered = candidates.filter(
       (account) =>
         account &&

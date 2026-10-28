@@ -31,7 +31,9 @@ jest.mock('../src/services/userMessageQueueService', () => ({
 jest.mock('../config/config', () => ({}), {
   virtual: true
 })
-jest.mock('../src/models/redis', () => ({}))
+jest.mock('../src/models/redis', () => ({
+  getClientSafe: () => ({ get: jest.fn().mockResolvedValue(null) })
+}))
 
 jest.mock('../src/utils/testPayloadHelper', () => ({
   createClaudeTestPayload: jest.fn(),
@@ -635,10 +637,9 @@ describe('claudeConsoleRelayService._makeClaudeConsoleStreamRequest', () => {
       jest.fn()
     )
 
-    await Promise.resolve()
-    jest.advanceTimersByTime(60 * 1000)
-
-    await expect(promise).rejects.toThrow('Claude Console stream exceeded max lifetime')
+    const rejection = expect(promise).rejects.toThrow('Claude Console stream exceeded max lifetime')
+    await jest.advanceTimersByTimeAsync(60 * 1000)
+    await rejection
     expect(upstreamStream.destroyed).toBe(true)
   })
 

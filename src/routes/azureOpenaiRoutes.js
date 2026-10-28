@@ -1,3 +1,4 @@
+const accountAccessService = require('../services/accountAccessService')
 const express = require('express')
 const router = express.Router()
 const logger = require('../utils/logger')
@@ -174,6 +175,11 @@ router.post('/chat/completions', authenticateApiKey, async (req, res) => {
     // 获取绑定的 Azure OpenAI 账户
     let account = null
     if (req.apiKey?.azureOpenaiAccountId) {
+      await accountAccessService.assertAllowed(
+        'azure-openai',
+        req.apiKey.azureOpenaiAccountId,
+        req.apiKey.id
+      )
       account = await azureOpenaiAccountService.getAccount(req.apiKey.azureOpenaiAccountId)
       if (account) {
         const isTempUnavailable = await upstreamErrorHelper.isTempUnavailable(
@@ -273,7 +279,7 @@ router.post('/chat/completions', authenticateApiKey, async (req, res) => {
     logger.error(`Azure OpenAI request failed ${requestId}:`, error)
 
     if (!res.headersSent) {
-      const statusCode = error.response?.status || 500
+      const statusCode = error.statusCode || error.response?.status || 500
       const errorMessage =
         error.response?.data?.error?.message || error.message || 'Internal server error'
 
@@ -305,6 +311,11 @@ router.post('/responses', authenticateApiKey, async (req, res) => {
     // 获取绑定的 Azure OpenAI 账户
     let account = null
     if (req.apiKey?.azureOpenaiAccountId) {
+      await accountAccessService.assertAllowed(
+        'azure-openai',
+        req.apiKey.azureOpenaiAccountId,
+        req.apiKey.id
+      )
       account = await azureOpenaiAccountService.getAccount(req.apiKey.azureOpenaiAccountId)
       if (account) {
         const isTempUnavailable = await upstreamErrorHelper.isTempUnavailable(
@@ -404,7 +415,7 @@ router.post('/responses', authenticateApiKey, async (req, res) => {
     logger.error(`Azure OpenAI responses request failed ${requestId}:`, error)
 
     if (!res.headersSent) {
-      const statusCode = error.response?.status || 500
+      const statusCode = error.statusCode || error.response?.status || 500
       const errorMessage =
         error.response?.data?.error?.message || error.message || 'Internal server error'
 
@@ -435,6 +446,11 @@ router.post('/embeddings', authenticateApiKey, async (req, res) => {
     // 获取绑定的 Azure OpenAI 账户
     let account = null
     if (req.apiKey?.azureOpenaiAccountId) {
+      await accountAccessService.assertAllowed(
+        'azure-openai',
+        req.apiKey.azureOpenaiAccountId,
+        req.apiKey.id
+      )
       account = await azureOpenaiAccountService.getAccount(req.apiKey.azureOpenaiAccountId)
       if (account) {
         const isTempUnavailable = await upstreamErrorHelper.isTempUnavailable(
@@ -508,7 +524,7 @@ router.post('/embeddings', authenticateApiKey, async (req, res) => {
     logger.error(`Azure OpenAI embeddings request failed ${requestId}:`, error)
 
     if (!res.headersSent) {
-      const statusCode = error.response?.status || 500
+      const statusCode = error.statusCode || error.response?.status || 500
       const errorMessage =
         error.response?.data?.error?.message || error.message || 'Internal server error'
 

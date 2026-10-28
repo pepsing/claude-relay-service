@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const {
   supportsImageRequest,
   imageCapabilityDescription
@@ -361,6 +362,7 @@ class UnifiedOpenAIScheduler {
     requestedModel = null,
     options = {}
   ) {
+    const access = await accountAccessService.getEvaluator(apiKeyData.id)
     try {
       const excludedAccountIds = new Set(options.excludedAccountIds || [])
 
@@ -372,7 +374,13 @@ class UnifiedOpenAIScheduler {
           logger.info(
             `🎯 API key ${apiKeyData.name} is bound to group ${groupId}, selecting from group`
           )
-          return await this.selectAccountFromGroup(groupId, sessionHash, requestedModel, options)
+          return await this.selectAccountFromGroup(
+            groupId,
+            sessionHash,
+            requestedModel,
+            options,
+            apiKeyData
+          )
         }
 
         // 普通专属账户 - 根据前缀判断是 OpenAI 还是 OpenAI-Responses 类型
@@ -390,6 +398,7 @@ class UnifiedOpenAIScheduler {
           accountType = 'openai'
         }
 
+        access.assert(accountType, apiKeyData.openaiAccountId.replace(/^responses:/, ''))
         const isActiveBoundAccount =
           boundAccount &&
           (boundAccount.isActive === true || boundAccount.isActive === 'true') &&
@@ -584,7 +593,10 @@ class UnifiedOpenAIScheduler {
                 imageAsync: options.imageAsync,
                 ignoreConcurrency: true
               }))
-            if (isAvailable) {
+            if (
+              isAvailable &&
+              access.canAccess(mappedAccount.accountType, mappedAccount.accountId)
+            ) {
               // 🚀 智能会话续期（续期 unified 映射键，按配置）
               await this._extendSessionMappingTTL(sessionHash)
               logger.info(
@@ -616,6 +628,10 @@ class UnifiedOpenAIScheduler {
       availableAccounts = availableAccounts.filter(
         (availableAccount) => !excludedAccountIds.has(availableAccount.accountId)
       )
+      const initialCandidates = availableAccounts
+      availableAccounts = availableAccounts.filter((candidate) =>
+        access.canAccess(candidate.accountType, candidate.accountId)
+      )
       availableAccounts = await this._restrictAccountsToSessionGroup(
         availableAccounts,
         stickySessionGroupId,
@@ -640,6 +656,7 @@ class UnifiedOpenAIScheduler {
         fallbackAccounts = fallbackAccounts.filter(
           (fallbackAccount) => !excludedAccountIds.has(fallbackAccount.accountId)
         )
+        fallbackAccounts = access.filter(fallbackAccounts)
         fallbackAccounts = await this._restrictAccountsToSessionGroup(
           fallbackAccounts,
           stickySessionGroupId,
@@ -656,6 +673,7 @@ class UnifiedOpenAIScheduler {
       }
 
       if (availableAccounts.length === 0) {
+        access.filter(initialCandidates)
         if (excludedAccountIds.size > 0) {
           const error = new Error('No untried OpenAI accounts remain')
           error.statusCode = 503
@@ -1311,7 +1329,14 @@ class UnifiedOpenAIScheduler {
   }
 
   // 👥 从分组中选择账户
-  async selectAccountFromGroup(groupId, sessionHash = null, requestedModel = null, options = {}) {
+  async selectAccountFromGroup(
+    groupId,
+    sessionHash = null,
+    requestedModel = null,
+    options = {},
+    apiKeyData = {}
+  ) {
+    const access = await accountAccessService.getEvaluator(apiKeyData.id)
     try {
       const excludedAccountIds = new Set(options.excludedAccountIds || [])
 
@@ -1377,7 +1402,10 @@ class UnifiedOpenAIScheduler {
                     ignoreConcurrency: true
                   }
                 ))
-              if (isAvailable) {
+              if (
+                isAvailable &&
+                access.canAccess(mappedAccount.accountType, mappedAccount.accountId)
+              ) {
                 // 🚀 智能会话续期（续期 unified 映射键，按配置）
                 await this._extendSessionMappingTTL(sessionHash)
                 logger.info(
@@ -1509,6 +1537,7 @@ class UnifiedOpenAIScheduler {
         }
       }
 
+      availableAccounts = access.filter(availableAccounts)
       if (availableAccounts.length === 0) {
         if (excludedAccountIds.size > 0) {
           const error = new Error(`No untried accounts remain in group ${group.name}`)

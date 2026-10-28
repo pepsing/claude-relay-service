@@ -1,3 +1,6 @@
+jest.mock('../src/models/redis', () => ({
+  getClientSafe: () => ({ get: jest.fn().mockResolvedValue(null) })
+}))
 jest.mock('../src/services/apiKeyService', () => {
   const normalizePermissions = jest.fn((permissions) => {
     if (!permissions) {

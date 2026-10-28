@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const {
   BedrockRuntimeClient,
   InvokeModelCommand,
@@ -73,6 +74,16 @@ class BedrockRelayService {
     }
 
     const client = new BedrockRuntimeClient(clientConfig)
+    // Run inside the SDK retry middleware so every attempt sees revocations.
+    if (bedrockAccount?.id) {
+      client.middlewareStack.addRelativeTo(
+        (next) => async (args) => {
+          await accountAccessService.assertAllowed('bedrock', bedrockAccount.id)
+          return next(args)
+        },
+        { relation: 'after', toMiddleware: 'retryMiddleware', name: 'accountAccessGuard' }
+      )
+    }
 
     // Bedrock API Key (ABSK) 模式：注入 Bearer Token 到 Authorization header
     if (bedrockAccount?.bearerToken) {
@@ -185,6 +196,9 @@ class BedrockRelayService {
       logger.debug(`🚀 Bedrock非流式请求 - 模型: ${modelId}, 区域: ${region}`)
 
       const startTime = Date.now()
+      if (bedrockAccount?.id) {
+        await accountAccessService.assertAllowed('bedrock', bedrockAccount.id)
+      }
       const response = await client.send(command)
       const duration = Date.now() - startTime
 
@@ -338,6 +352,9 @@ class BedrockRelayService {
       }
 
       const startTime = Date.now()
+      if (bedrockAccount?.id) {
+        await accountAccessService.assertAllowed('bedrock', bedrockAccount.id)
+      }
       const response = await client.send(command, { abortSignal: abortController.signal })
 
       // 📬 请求已发送成功，立即释放队列锁（无需等待响应处理完成）

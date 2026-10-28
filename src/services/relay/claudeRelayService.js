@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const https = require('https')
 const zlib = require('zlib')
 const path = require('path')
@@ -1733,6 +1734,7 @@ class ClaudeRelayService {
     let { bodyString } = prepared
     const { headers, isRealClaudeCode, toolNameMap } = prepared
 
+    await accountAccessService.assertAllowed('claude-official', accountId)
     return new Promise((resolve, reject) => {
       // 支持自定义路径（如 count_tokens）
       let requestPath = url.pathname
@@ -2176,6 +2178,7 @@ class ClaudeRelayService {
       toolNameMap
     )
 
+    await accountAccessService.assertAllowed('claude-official', accountId)
     return new Promise((resolve, reject) => {
       const url = new URL(this.claudeApiUrl)
       const options = {

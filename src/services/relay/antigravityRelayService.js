@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const apiKeyService = require('../apiKeyService')
 const { convertMessagesToGemini, convertGeminiResponse } = require('./geminiRelayService')
 const { normalizeAntigravityModelInput } = require('../../utils/antigravityModel')
@@ -139,8 +140,10 @@ async function sendAntigravityRequest({
     sessionId: apiKeyId
   })
 
+  await accountAccessService.assertAllowed('gemini', accountId, apiKeyId)
   const { response } = await antigravityClient.request({
     accessToken,
+    beforeRequest: () => accountAccessService.assertAllowed('gemini', accountId, apiKeyId),
     proxyConfig: proxy,
     requestData,
     projectId,

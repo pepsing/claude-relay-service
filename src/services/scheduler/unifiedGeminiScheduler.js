@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const geminiAccountService = require('../account/geminiAccountService')
 const geminiApiAccountService = require('../account/geminiApiAccountService')
 const accountGroupService = require('../accountGroupService')
@@ -61,12 +62,14 @@ class UnifiedGeminiScheduler {
     const { allowApiAccounts = false, oauthProvider = null } = options
     const normalizedOauthProvider = oauthProvider ? normalizeOauthProvider(oauthProvider) : null
 
+    const access = await accountAccessService.getEvaluator(apiKeyData.id)
     try {
       // 如果API Key绑定了专属账户或分组，优先使用
       if (apiKeyData.geminiAccountId) {
         // 检查是否是 Gemini API 账户（api: 前缀）
         if (apiKeyData.geminiAccountId.startsWith('api:')) {
           const accountId = apiKeyData.geminiAccountId.replace('api:', '')
+          access.assert('gemini-api', accountId)
           const boundAccount = await geminiApiAccountService.getAccount(accountId)
           if (boundAccount && isActive(boundAccount.isActive) && boundAccount.status !== 'error') {
             logger.info(
@@ -100,6 +103,7 @@ class UnifiedGeminiScheduler {
         }
         // 普通 Gemini OAuth 专属账户
         else {
+          access.assert('gemini', apiKeyData.geminiAccountId)
           const boundAccount = await geminiAccountService.getAccount(apiKeyData.geminiAccountId)
           if (
             boundAccount &&
@@ -141,7 +145,7 @@ class UnifiedGeminiScheduler {
             mappedAccount.accountId,
             mappedAccount.accountType
           )
-          if (isAvailable) {
+          if (isAvailable && access.canAccess(mappedAccount.accountType, mappedAccount.accountId)) {
             // 🚀 智能会话续期（续期 unified 映射键，按配置）
             await this._extendSessionMappingTTL(sessionHash, normalizedOauthProvider)
             logger.info(
@@ -164,11 +168,12 @@ class UnifiedGeminiScheduler {
       }
 
       // 获取所有可用账户
-      const availableAccounts = await this._getAllAvailableAccounts(apiKeyData, requestedModel, {
+      let availableAccounts = await this._getAllAvailableAccounts(apiKeyData, requestedModel, {
         allowApiAccounts,
         oauthProvider: normalizedOauthProvider
       })
 
+      availableAccounts = access.filter(availableAccounts)
       if (availableAccounts.length === 0) {
         // 提供更详细的错误信息
         if (requestedModel) {
@@ -696,7 +701,13 @@ class UnifiedGeminiScheduler {
   }
 
   // 👥 从分组中选择账户（支持 Gemini OAuth 和 Gemini API 两种账户类型）
-  async selectAccountFromGroup(groupId, sessionHash = null, requestedModel = null) {
+  async selectAccountFromGroup(
+    groupId,
+    sessionHash = null,
+    requestedModel = null,
+    apiKeyData = {}
+  ) {
+    const access = await accountAccessService.getEvaluator(apiKeyData.id)
     try {
       // 获取分组信息
       const group = await accountGroupService.getGroup(groupId)
@@ -721,7 +732,10 @@ class UnifiedGeminiScheduler {
               mappedAccount.accountId,
               mappedAccount.accountType
             )
-            if (isAvailable) {
+            if (
+              isAvailable &&
+              access.canAccess(mappedAccount.accountType, mappedAccount.accountId)
+            ) {
               // 🚀 智能会话续期（续期 unified 映射键，按配置）
               await this._extendSessionMappingTTL(sessionHash)
               logger.info(
@@ -747,7 +761,7 @@ class UnifiedGeminiScheduler {
         throw new Error(`Group ${group.name} has no members`)
       }
 
-      const availableAccounts = []
+      let availableAccounts = []
 
       // 获取所有成员账户的详细信息（支持 Gemini OAuth 和 Gemini API 两种类型）
       for (const memberId of memberIds) {
@@ -820,6 +834,7 @@ class UnifiedGeminiScheduler {
         }
       }
 
+      availableAccounts = access.filter(availableAccounts)
       if (availableAccounts.length === 0) {
         throw new Error(`No available accounts in Gemini group ${group.name}`)
       }

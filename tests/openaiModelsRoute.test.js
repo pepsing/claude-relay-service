@@ -52,6 +52,7 @@ jest.mock('../src/services/apiKeyService', () => ({
 }))
 
 jest.mock('../src/models/redis', () => ({
+  getClientSafe: () => ({ get: jest.fn().mockResolvedValue(null) }),
   getUsageStats: jest.fn(),
   incrConcurrency: jest.fn(),
   decrConcurrency: jest.fn(),

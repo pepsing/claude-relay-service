@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const axios = require('axios')
 const ProxyHelper = require('../../utils/proxyHelper')
 const logger = require('../../utils/logger')
@@ -134,6 +135,7 @@ async function handleAzureOpenAIRequest({
     logger.debug(`🔄 Starting Azure OpenAI HTTP request at ${new Date().toISOString()}`)
 
     // 发送请求
+    await accountAccessService.assertAllowed('azure-openai', account.id)
     const response = await axios(axiosConfig)
 
     const requestDuration = Date.now() - requestStartTime
@@ -150,6 +152,9 @@ async function handleAzureOpenAIRequest({
 
     return response
   } catch (error) {
+    if (accountAccessService.isAccessError(error)) {
+      throw error
+    }
     const errorDetails = {
       message: error.message,
       code: error.code,

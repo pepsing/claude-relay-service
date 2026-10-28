@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const https = require('https')
 const axios = require('axios')
 const ProxyHelper = require('../../utils/proxyHelper')
@@ -332,6 +333,7 @@ class DroidRelayService {
           })
         }
 
+        await accountAccessService.assertAllowed('droid', account.id, apiKeyData.id)
         const response = await axios(requestOptions)
 
         logger.info(`✅ Factory.ai response status: ${response.status}`)
@@ -348,6 +350,13 @@ class DroidRelayService {
         )
       }
     } catch (error) {
+      if (accountAccessService.isAccessError(error)) {
+        return {
+          statusCode: error.statusCode,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ error: { code: error.code, message: error.message } })
+        }
+      }
       // 客户端主动断开连接是正常情况，使用 INFO 级别
       if (error.message === 'Client disconnected') {
         logger.info(`🔌 Droid relay ended: Client disconnected`)
@@ -428,6 +437,7 @@ class DroidRelayService {
     sessionHash = null,
     clientApiKeyId = null
   ) {
+    await accountAccessService.assertAllowed('droid', account.id, apiKeyData.id)
     return new Promise((resolve, reject) => {
       const url = new URL(apiUrl)
       const keyId = apiKeyData?.id

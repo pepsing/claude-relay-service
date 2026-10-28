@@ -825,4 +825,95 @@ describe('UnifiedOpenAIScheduler', () => {
       })
     })
   })
+  describe('account authorization', () => {
+    const restricted = { mode: 'restricted', keyIds: [], groupIds: ['team'] }
+    const config = () => ({
+      version: 1,
+      revision: 0,
+      groups: [{ id: 'team', name: 'Team' }],
+      memberships: { allowed: ['team'] },
+      policies: { 'openai-responses:private': restricted }
+    })
+    const candidate = (id) => ({ accountId: id, accountType: 'openai-responses', name: id })
+    const account = (id) => ({
+      id,
+      name: id,
+      accountType: 'shared',
+      isActive: true,
+      schedulable: true,
+      status: 'active',
+      supportedModels: {}
+    })
+
+    beforeEach(() => {
+      mockRedisClient.get.mockImplementation(async (key) =>
+        key === 'account_access:configuration' ? JSON.stringify(config()) : null
+      )
+    })
+    afterEach(() => jest.restoreAllMocks())
+
+    test('filters private accounts from shared pool but authorized keys retain public access', async () => {
+      jest
+        .spyOn(unifiedOpenAIScheduler, '_getAllAvailableAccounts')
+        .mockResolvedValue([candidate('private'), candidate('public')])
+      expect(await unifiedOpenAIScheduler.selectAccountForApiKey({ id: 'ordinary' })).toMatchObject(
+        { accountId: 'public' }
+      )
+      expect(await unifiedOpenAIScheduler.selectAccountForApiKey({ id: 'allowed' })).toMatchObject({
+        accountId: 'private'
+      })
+    })
+
+    test('rejects unauthorized dedicated binding before considering fallback', async () => {
+      openaiResponsesAccountService.getAccount.mockResolvedValue(account('private'))
+      const pool = jest.spyOn(unifiedOpenAIScheduler, '_getAllAvailableAccounts')
+      await expect(
+        unifiedOpenAIScheduler.selectAccountForApiKey({
+          id: 'ordinary',
+          openaiAccountId: 'responses:private'
+        })
+      ).rejects.toMatchObject({ statusCode: 403 })
+      expect(pool).not.toHaveBeenCalled()
+    })
+
+    test('revalidates a sticky account and chooses an authorized replacement', async () => {
+      jest
+        .spyOn(unifiedOpenAIScheduler, '_getSessionMapping')
+        .mockResolvedValue(candidate('private'))
+      jest.spyOn(unifiedOpenAIScheduler, '_isAccountAvailable').mockResolvedValue(true)
+      jest.spyOn(unifiedOpenAIScheduler, '_resolveStickySessionMode').mockResolvedValue('fallback')
+      jest.spyOn(unifiedOpenAIScheduler, '_setSessionMapping').mockResolvedValue()
+      jest
+        .spyOn(unifiedOpenAIScheduler, '_getAllAvailableAccounts')
+        .mockResolvedValue([candidate('private'), candidate('public')])
+      expect(
+        await unifiedOpenAIScheduler.selectAccountForApiKey({ id: 'ordinary' }, 'same-session')
+      ).toMatchObject({ accountId: 'public' })
+    })
+
+    test('group selection receives the real key identity', async () => {
+      const groups = require('../src/services/accountGroupService')
+      groups.getGroup.mockResolvedValue({ platform: 'openai', name: 'mixed' })
+      groups.getGroupMembers.mockResolvedValue(['private', 'public'])
+      openaiAccountService.getAccount.mockResolvedValue(null)
+      openaiResponsesAccountService.getAccount.mockImplementation(async (id) => account(id))
+      const result = await unifiedOpenAIScheduler.selectAccountForApiKey({
+        id: 'ordinary',
+        openaiAccountId: 'group:mixed'
+      })
+      expect(result.accountId).toBe('public')
+    })
+
+    test('provider endpoint fallback also filters restricted candidates', async () => {
+      jest
+        .spyOn(unifiedOpenAIScheduler, '_getAllAvailableAccounts')
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([candidate('private')])
+      await expect(
+        unifiedOpenAIScheduler.selectAccountForApiKey({ id: 'ordinary' }, null, 'glm-5.2', {
+          requiredProviderEndpoint: 'responses'
+        })
+      ).rejects.toMatchObject({ statusCode: 403 })
+    })
+  })
 })

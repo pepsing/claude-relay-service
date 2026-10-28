@@ -1,3 +1,4 @@
+const accountAccessService = require('../services/accountAccessService')
 const { v4: uuidv4 } = require('uuid')
 const config = require('../../config/config')
 const apiKeyService = require('../services/apiKeyService')
@@ -1747,6 +1748,7 @@ const authenticateApiKey = async (req, res, next) => {
       claudeAccountId: validation.keyData.claudeAccountId,
       claudeConsoleAccountId: validation.keyData.claudeConsoleAccountId, // 添加 Claude Console 账号ID
       geminiAccountId: validation.keyData.geminiAccountId,
+      azureOpenaiAccountId: validation.keyData.azureOpenaiAccountId,
       openaiAccountId: validation.keyData.openaiAccountId, // 添加 OpenAI 账号ID
       bedrockAccountId: validation.keyData.bedrockAccountId, // 添加 Bedrock 账号ID
       droidAccountId: validation.keyData.droidAccountId,
@@ -1794,7 +1796,7 @@ const authenticateApiKey = async (req, res, next) => {
     )
     logger.api(`   User-Agent: "${userAgent}"`)
 
-    return next()
+    return accountAccessService.runWithApiKey(validation.keyData.id, next)
   } catch (error) {
     authErrored = true
     const authDuration = Date.now() - startTime
@@ -1925,7 +1927,7 @@ const authenticateAdminSession = async (req, res, next) => {
     req._authInfo = `${adminSession.username} ${authDuration}ms`
     logger.security(`Admin authenticated: ${adminSession.username} in ${authDuration}ms`)
 
-    return next()
+    return accountAccessService.runAsAdministrator(next)
   } catch (error) {
     const authDuration = Date.now() - startTime
     logger.error(`❌ Admin authentication error (${authDuration}ms):`, {
@@ -1985,7 +1987,7 @@ const authenticateAdmin = async (req, res, next) => {
     logger.security(
       `Management API key authenticated: ${validation.keyData.id} scope=${requiredScope}`
     )
-    return next()
+    return accountAccessService.runAsAdministrator(next)
   } catch (error) {
     logger.error('❌ Management API key authentication error:', {
       error: error.message,

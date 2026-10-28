@@ -9,6 +9,7 @@
           <p class="text-sm text-gray-600 dark:text-gray-400 sm:text-base">
             管理和监控您的 API 密钥
           </p>
+          <el-button class="mt-3" @click="showAccountAccess = true">账户访问授权</el-button>
         </div>
 
         <!-- Tab Navigation -->
@@ -2214,10 +2215,13 @@
       @cancel="handleCancel"
       @confirm="handleConfirm"
     />
+    <AccountAccessModal v-if="showAccountAccess" @close="showAccountAccess = false" />
   </div>
 </template>
 
 <script setup>
+import AccountAccessModal from '@/components/accounts/AccountAccessModal.vue'
+const showAccountAccess = ref(false)
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, copyText, formatNumber, formatDate } from '@/utils/tools'

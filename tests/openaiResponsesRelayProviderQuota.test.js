@@ -12,6 +12,7 @@ jest.mock('../src/utils/logger', () => ({
   isBrokenPipeError: jest.fn(() => false)
 }))
 jest.mock('../src/models/redis', () => ({
+  getClientSafe: () => ({ get: jest.fn().mockResolvedValue(null) }),
   incrConcurrency: jest.fn(),
   decrConcurrency: jest.fn(),
   refreshConcurrencyLease: jest.fn()

@@ -1,3 +1,4 @@
+const accountAccessService = require('./accountAccessService')
 const crypto = require('crypto')
 const { EventEmitter } = require('events')
 const redis = require('../models/redis')
@@ -141,6 +142,7 @@ async function getTask(req) {
 }
 
 async function getTaskAccount(task, apiKey) {
+  await accountAccessService.assertAllowed(task.accountType, task.accountId, apiKey.id)
   const service =
     task.accountType === 'openai' ? openaiAccountService : openaiResponsesAccountService
   const account = await service.getAccount(task.accountId)

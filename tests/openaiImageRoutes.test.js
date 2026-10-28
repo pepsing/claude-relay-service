@@ -85,8 +85,12 @@ beforeEach(() => {
   redisClient = {
     eval: jest.fn(async (_script, _count, key, value, _ttl, operation) => {
       const previous = records.get(key)
-      if (!previous && operation !== 'create') return null
-      if (previous && ['completed', 'failed'].includes(JSON.parse(previous).status)) return previous
+      if (!previous && operation !== 'create') {
+        return null
+      }
+      if (previous && ['completed', 'failed'].includes(JSON.parse(previous).status)) {
+        return previous
+      }
       records.set(key, value)
       return value
     }),
@@ -326,7 +330,7 @@ test('OAuth async editing continues after acceptance and exposes a persisted dow
     image_url: 'data:image/png;base64,b3JpZ2luYWw='
   })
   expect(axios.post.mock.calls[0][2].signal.aborted).toBe(false)
-  const id = created.body.id
+  const { id } = created.body
   const bytes = Buffer.from('final image bytes')
   upstream.end(
     `data: ${JSON.stringify({
@@ -533,4 +537,46 @@ test('disabling creation modes does not reroute or block an existing task', asyn
   await request(app).get(`/openai/v1/images/${id}/content`).set('x-api-key', 'owner').expect(200)
   expect(scheduler.selectAccountForApiKey).not.toHaveBeenCalled()
   expect(axios.mock.calls.at(-1)[0].url).toBe('https://a.example/v1/images/img_same/content')
+})
+
+test('revoking access blocks existing async task polling and content without contacting upstream', async () => {
+  const id = await createTask()
+  const policy = {
+    version: 1,
+    revision: 1,
+    groups: [],
+    memberships: {},
+    policies: { 'openai-responses:account-a': { mode: 'restricted', keyIds: [], groupIds: [] } }
+  }
+  records.set('account_access:configuration', JSON.stringify(policy))
+  axios.mockClear()
+  for (const path of [`/openai/v1/images/${id}`, `/openai/v1/images/${id}/content`]) {
+    await request(app).get(path).set('x-api-key', 'owner').expect(403)
+  }
+  expect(axios).not.toHaveBeenCalled()
+})
+
+test('revocation during concurrency waiting aborts dispatch and releases the acquired slot', async () => {
+  const redis = require('../src/models/redis')
+  redis.incrConcurrency.mockImplementationOnce(async () => {
+    records.set(
+      'account_access:configuration',
+      JSON.stringify({
+        version: 1,
+        revision: 1,
+        groups: [],
+        memberships: {},
+        policies: { 'openai-responses:account-a': { mode: 'restricted', keyIds: [], groupIds: [] } }
+      })
+    )
+    return 1
+  })
+  await request(app)
+    .post('/openai/v1/images/generations')
+    .set('x-api-key', 'owner')
+    .send({ prompt: 'test', async: true })
+    .expect(403)
+  expect(axios).not.toHaveBeenCalled()
+  expect(redis.decrConcurrency).toHaveBeenCalled()
+  expect(accounts.handleProviderQuotaError).not.toHaveBeenCalled()
 })

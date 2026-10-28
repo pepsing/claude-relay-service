@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const redisClient = require('../../models/redis')
 const { v4: uuidv4 } = require('uuid')
 const crypto = require('crypto')
@@ -384,6 +385,7 @@ function isSubscriptionExpired(account) {
 
 // 选择可用账户
 async function selectAvailableAccount(sessionId = null) {
+  const access = await accountAccessService.getEvaluator()
   // 如果有会话ID，尝试获取之前分配的账户
   if (sessionId) {
     const client = redisClient.getClientSafe()
@@ -392,7 +394,12 @@ async function selectAvailableAccount(sessionId = null) {
 
     if (accountId) {
       const account = await getAccount(accountId)
-      if (account && account.isActive === 'true' && account.schedulable === 'true') {
+      if (
+        account &&
+        account.isActive === 'true' &&
+        account.schedulable === 'true' &&
+        access.canAccess('azure-openai', account.id)
+      ) {
         const isTempUnavail = await upstreamErrorHelper.isTempUnavailable(accountId, 'azure-openai')
         if (!isTempUnavail) {
           logger.debug(`Reusing Azure OpenAI account ${accountId} for session ${sessionId}`)
@@ -406,7 +413,7 @@ async function selectAvailableAccount(sessionId = null) {
   }
 
   // 获取所有共享账户
-  const sharedAccounts = await getSharedAccounts()
+  const sharedAccounts = access.filter(await getSharedAccounts(), 'azure-openai')
 
   // 过滤出可用的账户（异步过滤，包含临时不可用检查）
   const availableAccounts = []

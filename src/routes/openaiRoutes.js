@@ -1,3 +1,4 @@
+const accountAccessService = require('../services/accountAccessService')
 const { supportsImageRequest, imageCapabilityDescription } = require('../utils/imageCapabilities')
 const express = require('express')
 const axios = require('axios')
@@ -362,7 +363,10 @@ async function buildOpenAIModelsList(apiKeyData = {}) {
   const modelIds = new Set()
   const accounts = await loadOpenAIModelSourceAccounts(apiKeyData)
 
-  accounts.forEach(({ account }) => addAccountModelIds(modelIds, account))
+  const access = await accountAccessService.getEvaluator(apiKeyData.id)
+  accounts
+    .filter(({ account, accountType }) => access.canAccess(accountType, account.id))
+    .forEach(({ account }) => addAccountModelIds(modelIds, account))
 
   return [...modelIds]
     .filter((modelId) => !isModelRestrictedByApiKey(apiKeyData, modelId))
@@ -1021,6 +1025,7 @@ const handleResponses = async (req, res) => {
       ? 'https://chatgpt.com/backend-api/codex/responses/compact'
       : 'https://chatgpt.com/backend-api/codex/responses'
 
+    await accountAccessService.assertAllowed('openai', accountId, req.apiKey.id)
     // 根据 stream 参数决定请求类型
     if (isStream) {
       // 流式请求
@@ -1875,6 +1880,7 @@ async function handleImages(req, res, imageContext = {}) {
       axiosConfig.proxy = false
     }
 
+    await accountAccessService.assertAllowed('openai', account.id, req.apiKey.id)
     const upstream = await axios.post(
       'https://chatgpt.com/backend-api/codex/responses',
       payload,

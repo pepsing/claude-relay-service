@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const redisClient = require('../../models/redis')
 const { v4: uuidv4 } = require('uuid')
 const crypto = require('crypto')
@@ -1250,6 +1251,8 @@ async function forwardToCodeAssist(client, apiMethod, requestBody, proxyConfig =
     logger.debug(`🌐 No proxy configured for ${apiMethod}`)
   }
 
+  await accountAccessService.assertClientAccess(client)
+
   const response = await axios(axiosConfig)
 
   logger.info(`✅ ${apiMethod} API调用成功`)
@@ -1359,6 +1362,8 @@ async function loadCodeAssist(client, projectId = null, proxyConfig = null) {
     logger.debug('🌐 No proxy configured for Gemini loadCodeAssist')
   }
 
+  await accountAccessService.assertClientAccess(client)
+
   const response = await axios(axiosConfig)
 
   logger.info('📋 loadCodeAssist API调用成功')
@@ -1443,6 +1448,7 @@ async function onboardUser(client, tierId, projectId, clientMetadata, proxyConfi
   })
 
   // 轮询onboardUser直到长运行操作完成
+  await accountAccessService.assertClientAccess(client)
   let lroRes = await axios(baseAxiosConfig)
 
   let attempts = 0
@@ -1451,6 +1457,8 @@ async function onboardUser(client, tierId, projectId, clientMetadata, proxyConfi
   while (!lroRes.data.done && attempts < maxAttempts) {
     logger.info(`⏳ 等待onboardUser完成... (${attempts + 1}/${maxAttempts})`)
     await new Promise((resolve) => setTimeout(resolve, 5000))
+
+    await accountAccessService.assertClientAccess(client)
 
     lroRes = await axios(baseAxiosConfig)
     attempts++
@@ -1568,6 +1576,8 @@ async function countTokens(client, contents, model = 'gemini-2.0-flash-exp', pro
     logger.debug('🌐 No proxy configured for Gemini countTokens')
   }
 
+  await accountAccessService.assertClientAccess(client)
+
   const response = await axios(axiosConfig)
 
   logger.info('✅ countTokens API调用成功', { totalTokens: response.data.totalTokens })
@@ -1647,6 +1657,8 @@ async function generateContent(
     logger.debug('🌐 Using keepAlive agent for Gemini generateContent')
   }
 
+  await accountAccessService.assertClientAccess(client)
+
   const response = await axios(axiosConfig)
 
   logger.info('✅ generateContent API调用成功')
@@ -1679,6 +1691,7 @@ async function generateContentAntigravity(
 
   const { response } = await antigravityClient.request({
     accessToken: token,
+    beforeRequest: () => accountAccessService.assertClientAccess(client),
     proxyConfig,
     requestData,
     projectId,
@@ -1768,6 +1781,8 @@ async function generateContentStream(
     axiosConfig.signal = signal
   }
 
+  await accountAccessService.assertClientAccess(client)
+
   const response = await axios(axiosConfig)
 
   logger.info('✅ streamGenerateContent API调用成功，开始流式传输')
@@ -1801,6 +1816,7 @@ async function generateContentStreamAntigravity(
 
   const { response } = await antigravityClient.request({
     accessToken: token,
+    beforeRequest: () => accountAccessService.assertClientAccess(client),
     proxyConfig,
     requestData,
     projectId,

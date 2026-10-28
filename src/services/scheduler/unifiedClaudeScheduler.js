@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const claudeAccountService = require('../account/claudeAccountService')
 const claudeConsoleAccountService = require('../account/claudeConsoleAccountService')
 const bedrockAccountService = require('../account/bedrockAccountService')
@@ -305,6 +306,7 @@ class UnifiedClaudeScheduler {
     requestedModel = null,
     forcedAccount = null
   ) {
+    const access = await accountAccessService.getEvaluator(apiKeyData.id)
     try {
       // 🔒 如果有强制绑定的账户（全局会话绑定），仅 claude-official 类型受影响
       if (forcedAccount && forcedAccount.accountId && forcedAccount.accountType) {
@@ -316,6 +318,7 @@ class UnifiedClaudeScheduler {
           )
           // 不使用 forcedAccount，继续走下面的正常调度逻辑
         } else {
+          access.assert(forcedAccount.accountType, forcedAccount.accountId)
           // claude-official 类型需要检查可用性并强制使用
           logger.info(
             `🔗 Forced session binding detected: ${forcedAccount.accountId} (${forcedAccount.accountType})`
@@ -376,10 +379,12 @@ class UnifiedClaudeScheduler {
             groupId,
             sessionHash,
             effectiveModel,
-            vendor === 'ccr'
+            vendor === 'ccr',
+            apiKeyData
           )
         }
 
+        access.assert('claude-official', apiKeyData.claudeAccountId)
         // 普通专属账户
         //
         // 专属账号一旦不可用，必须显式报错，绝不能静默回退到共享池，否则
@@ -478,6 +483,7 @@ class UnifiedClaudeScheduler {
 
       // 2. 检查Claude Console账户绑定
       if (apiKeyData.claudeConsoleAccountId) {
+        access.assert('claude-console', apiKeyData.claudeConsoleAccountId)
         const boundConsoleAccount = await claudeConsoleAccountService.getAccount(
           apiKeyData.claudeConsoleAccountId
         )
@@ -514,6 +520,7 @@ class UnifiedClaudeScheduler {
 
       // 3. 检查Bedrock账户绑定
       if (apiKeyData.bedrockAccountId) {
+        access.assert('bedrock', apiKeyData.bedrockAccountId)
         const boundBedrockAccountResult = await bedrockAccountService.getAccount(
           apiKeyData.bedrockAccountId
         )
@@ -594,7 +601,10 @@ class UnifiedClaudeScheduler {
                 effectiveModel,
                 { ignoreConcurrency: true }
               ))
-            if (isAvailable) {
+            if (
+              isAvailable &&
+              access.canAccess(mappedAccount.accountType, mappedAccount.accountId)
+            ) {
               // 🚀 智能会话续期：剩余时间少于14天时自动续期到15天（续期正确的 unified 映射键）
               await this._extendSessionMappingTTL(sessionHash)
               logger.info(
@@ -623,6 +633,7 @@ class UnifiedClaudeScheduler {
         false, // 仅前缀才走 CCR：默认池不包含 CCR 账户
         { ignoreConcurrencyAccountIds: stickyGroupMemberIds }
       )
+      availableAccounts = access.filter(availableAccounts)
       availableAccounts = await this._restrictAccountsToSessionGroup(
         availableAccounts,
         stickySessionGroupId,
@@ -1728,8 +1739,10 @@ class UnifiedClaudeScheduler {
     groupId,
     sessionHash = null,
     requestedModel = null,
-    allowCcr = false
+    allowCcr = false,
+    apiKeyData = {}
   ) {
+    const access = await accountAccessService.getEvaluator(apiKeyData.id)
     try {
       // 获取分组信息
       const group = await accountGroupService.getGroup(groupId)
@@ -1779,7 +1792,10 @@ class UnifiedClaudeScheduler {
                   requestedModel,
                   { ignoreConcurrency: true }
                 )
-                if (isAvailable) {
+                if (
+                  isAvailable &&
+                  access.canAccess(mappedAccount.accountType, mappedAccount.accountId)
+                ) {
                   // 🚀 智能会话续期：续期 unified 映射键
                   await this._extendSessionMappingTTL(sessionHash)
                   logger.info(
@@ -1913,6 +1929,7 @@ class UnifiedClaudeScheduler {
         }
       }
 
+      availableAccounts = access.filter(availableAccounts)
       if (availableAccounts.length === 0) {
         throw new Error(`No available accounts in group ${group.name}`)
       }
@@ -1974,6 +1991,7 @@ class UnifiedClaudeScheduler {
 
   // 🎯 专门选择CCR账户（仅限CCR前缀路由使用）
   async _selectCcrAccount(apiKeyData, sessionHash = null, effectiveModel = null) {
+    const access = await accountAccessService.getEvaluator(apiKeyData.id)
     try {
       // 1. 检查会话粘性
       if (sessionHash) {
@@ -1992,7 +2010,10 @@ class UnifiedClaudeScheduler {
               mappedAccount.accountType,
               effectiveModel
             )
-            if (isAvailable) {
+            if (
+              isAvailable &&
+              access.canAccess(mappedAccount.accountType, mappedAccount.accountId)
+            ) {
               // 🚀 智能会话续期：续期 unified 映射键
               await this._extendSessionMappingTTL(sessionHash)
               logger.info(
@@ -2010,7 +2031,9 @@ class UnifiedClaudeScheduler {
       }
 
       // 2. 获取所有可用的CCR账户
-      const availableCcrAccounts = await this._getAvailableCcrAccounts(effectiveModel)
+      const availableCcrAccounts = access.filter(
+        await this._getAvailableCcrAccounts(effectiveModel)
+      )
 
       if (availableCcrAccounts.length === 0) {
         throw new Error(

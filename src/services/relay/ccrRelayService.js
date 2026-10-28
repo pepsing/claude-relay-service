@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const axios = require('axios')
 const ccrAccountService = require('../account/ccrAccountService')
 const logger = require('../../utils/logger')
@@ -222,6 +223,7 @@ class CcrRelayService {
         '📤 Sending request to CCR API with headers:',
         JSON.stringify(requestConfig.headers, null, 2)
       )
+      await accountAccessService.assertAllowed('ccr', accountId, apiKeyData.id)
       const response = await axios(requestConfig)
 
       // 📬 请求已发送成功，立即释放队列锁（无需等待响应处理完成）
@@ -570,6 +572,7 @@ class CcrRelayService {
     requestOptions = {},
     onResponseHeaderReceived = null
   ) {
+    await accountAccessService.assertAllowed('ccr', accountId)
     return new Promise((resolve, reject) => {
       let aborted = false
 

@@ -1,3 +1,4 @@
+const accountAccessService = require('./accountAccessService')
 const apiKeyService = require('./apiKeyService')
 const requestDetailService = require('./requestDetailService')
 const claudeRelayConfigService = require('./claudeRelayConfigService')
@@ -1087,6 +1088,7 @@ function getRouteReason(status, reasons, bindingScope) {
 
   const reasonLabels = {
     api_key_disabled: 'API Key 已停用',
+    account_access_denied: 'API Key 无此账户访问权限',
     api_key_permission_denied: 'API Key 无该 endpoint 权限',
     endpoint_pool_mismatch: '不属于当前 endpoint 账户池',
     model_not_supported: '模型不匹配',
@@ -1165,7 +1167,11 @@ async function normalizeAccount(account, sourceType, context) {
   const rateLimit = getRateLimitState(account)
   const tempUnavailable = await upstreamErrorHelper.isTempUnavailable(account.id, routeAccountType)
 
+  const accountAccess = context.access.explain(sourceType, account.id)
   const excludedReasons = []
+  if (context.apiKey && !accountAccess.allowed) {
+    excludedReasons.push('account_access_denied')
+  }
   if (!apiKeyEnabled) {
     excludedReasons.push('api_key_disabled')
   }
@@ -1239,6 +1245,7 @@ async function normalizeAccount(account, sourceType, context) {
     routeReason: getRouteReason(routeStatus, excludedReasons, binding.scope),
     excludedReasons,
     binding,
+    accountAccess,
     permissionAllowed,
     routePoolMatched,
     modelSupported,
@@ -1308,7 +1315,7 @@ async function loadAccountsForEndpoint(endpoint, model) {
   return results.flat()
 }
 
-function buildModelRoutes(endpoint, accounts, apiKey) {
+function buildModelRoutes(endpoint, accounts, apiKey, access) {
   return buildAcceptedModelOptions(endpoint, accounts).map((model) => {
     const routeTypes = getRouteAccountTypes(endpoint, model.id)
     let routableCount = 0
@@ -1324,6 +1331,7 @@ function buildModelRoutes(endpoint, accounts, apiKey) {
         !apiKey || apiKeyService.hasPermission(apiKey.permissions, endpoint.service)
       const binding = evaluateApiKeyBinding(apiKey, account, sourceType)
       if (
+        (!apiKey || access.canAccess(sourceType, account.id)) &&
         permissionAllowed &&
         binding.matched &&
         health.isActive &&
@@ -1398,6 +1406,7 @@ const routeRulesVisualizationService = {
     const endpoint = withConfiguredEndpointModels(baseEndpoint, config.modelEndpointConfigs || {})
     const model = params.model || endpoint.defaultModel
     const apiKey = await resolveApiKey(params.apiKeyId)
+    const access = await accountAccessService.getEvaluator(apiKey?.id)
     const live = await buildLiveSnapshot({
       endpoint,
       model,
@@ -1415,13 +1424,14 @@ const routeRulesVisualizationService = {
           apiKey,
           live,
           routeAccountTypes,
+          access,
           globalConfig: config
         })
       )
     )
 
     const sortedAccounts = sortAccounts(accounts)
-    const modelRoutes = buildModelRoutes(endpoint, rawAccounts, apiKey).map((item) => ({
+    const modelRoutes = buildModelRoutes(endpoint, rawAccounts, apiKey, access).map((item) => ({
       ...item,
       selected: item.id === model
     }))

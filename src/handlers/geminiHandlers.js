@@ -1,3 +1,4 @@
+const accountAccessService = require('../services/accountAccessService')
 /**
  * Gemini API 处理函数模块
  *
@@ -445,6 +446,9 @@ async function handleMessages(req, res) {
       )
       ;({ accountId, accountType } = schedulerResult)
     } catch (error) {
+      if (accountAccessService.respondIfDenied(res, error)) {
+        return
+      }
       logger.error('Failed to select Gemini account:', error)
       return res.status(503).json({
         error: {
@@ -548,6 +552,11 @@ async function handleMessages(req, res) {
       }
 
       try {
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         const apiResponse = await axios(axiosConfig)
         if (stream) {
           geminiResponse = apiResponse.data
@@ -598,6 +607,9 @@ async function handleMessages(req, res) {
           }
         }
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         logger.error('Gemini API request failed:', {
           status: error.response?.status,
           statusText: error.response?.statusText,
@@ -609,6 +621,7 @@ async function handleMessages(req, res) {
       // OAuth 账户：使用现有的 sendGeminiRequest
       // 智能处理项目ID：优先使用配置的 projectId，降级到临时 tempProjectId
       const effectiveProjectId = account.projectId || account.tempProjectId || null
+      await accountAccessService.assertAllowed('gemini', account.id, req.apiKey.id)
       const oauthProvider = account.oauthProvider || 'gemini-cli'
 
       if (oauthProvider === 'antigravity') {
@@ -700,6 +713,9 @@ async function handleMessages(req, res) {
               }
             }
           } catch (error) {
+            if (accountAccessService.respondIfDenied(res, error)) {
+              return
+            }
             logger.error('Error processing stream chunk:', error)
           }
         })
@@ -768,6 +784,9 @@ async function handleMessages(req, res) {
     const duration = Date.now() - startTime
     logger.info(`Gemini request completed in ${duration}ms`)
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     logger.error('Gemini request error:', error)
 
     // 处理速率限制
@@ -822,6 +841,7 @@ async function handleMessages(req, res) {
 /**
  * 获取可用模型列表
  */
+
 async function handleModels(req, res) {
   try {
     const apiKeyData = req.apiKey
@@ -853,6 +873,9 @@ async function handleModels(req, res) {
         account = await geminiAccountService.getAccount(accountSelection.accountId)
       }
     } catch (error) {
+      if (accountAccessService.respondIfDenied(res, error)) {
+        return
+      }
       logger.warn('Failed to select Gemini account for models endpoint:', error)
     }
 
@@ -889,6 +912,11 @@ async function handleModels(req, res) {
           axiosConfig.httpsAgent = ProxyHelper.createProxyAgent(proxyConfig)
           axiosConfig.httpAgent = ProxyHelper.createProxyAgent(proxyConfig)
         }
+        await accountAccessService.assertAllowed(
+          isApiAccount ? 'gemini-api' : 'gemini',
+          account.id,
+          req.apiKey.id
+        )
         const response = await axios(axiosConfig)
         models = (response.data.models || []).map((m) => ({
           id: m.name?.replace('models/', '') || m.name,
@@ -897,6 +925,9 @@ async function handleModels(req, res) {
           owned_by: 'google'
         }))
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         logger.warn('Failed to fetch models from Gemini API:', error.message)
         // 返回默认模型列表
         models = [
@@ -910,6 +941,7 @@ async function handleModels(req, res) {
       }
     } else {
       // OAuth 账户：根据 OAuth provider 选择上游
+      await accountAccessService.assertAllowed('gemini', account.id, req.apiKey.id)
       const oauthProvider = account.oauthProvider || 'gemini-cli'
       models =
         oauthProvider === 'antigravity'
@@ -926,6 +958,9 @@ async function handleModels(req, res) {
       data: models
     })
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     logger.error('Failed to get Gemini models:', error)
     res.status(500).json({
       error: {
@@ -966,6 +1001,7 @@ function handleModelDetails(req, res) {
 /**
  * 获取使用情况统计
  */
+
 async function handleUsage(req, res) {
   try {
     const keyData = req.apiKey
@@ -1096,6 +1132,7 @@ function handleSimpleEndpoint(apiMethod) {
         proxyConfig,
         account.oauthProvider
       )
+      client.relayAccountId = accountId
 
       // 直接转发请求体，不做特殊处理
       const response = await geminiAccountService.forwardToCodeAssist(
@@ -1107,6 +1144,9 @@ function handleSimpleEndpoint(apiMethod) {
 
       res.json(response)
     } catch (error) {
+      if (accountAccessService.respondIfDenied(res, error)) {
+        return
+      }
       const version = req.path.includes('v1beta') ? 'v1beta' : 'v1internal'
       logger.error(`Error in ${apiMethod} endpoint (${version})`, { error: error.message })
       res.status(500).json({
@@ -1179,6 +1219,7 @@ async function handleLoadCodeAssist(req, res) {
       proxyConfig,
       account.oauthProvider
     )
+    client.relayAccountId = accountId
 
     // 智能处理项目ID
     const effectiveProjectId = projectId || cloudaicompanionProject || null
@@ -1194,6 +1235,11 @@ async function handleLoadCodeAssist(req, res) {
           : '不使用项目ID'
     })
 
+    await accountAccessService.assertAllowed(
+      typeof accountType === 'undefined' ? 'gemini' : accountType,
+      accountId,
+      req.apiKey.id
+    )
     const response = await geminiAccountService.loadCodeAssist(
       client,
       effectiveProjectId,
@@ -1210,6 +1256,9 @@ async function handleLoadCodeAssist(req, res) {
 
     res.json(response)
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1internal'
     logger.error(`Error in loadCodeAssist endpoint (${version})`, { error: error.message })
     res.status(500).json({
@@ -1222,6 +1271,7 @@ async function handleLoadCodeAssist(req, res) {
 /**
  * 处理 onboardUser 请求
  */
+
 async function handleOnboardUser(req, res) {
   try {
     if (!ensureGeminiPermission(req, res)) {
@@ -1282,6 +1332,7 @@ async function handleOnboardUser(req, res) {
       proxyConfig,
       account.oauthProvider
     )
+    client.relayAccountId = accountId
 
     // 智能处理项目ID
     const effectiveProjectId = projectId || cloudaicompanionProject || null
@@ -1320,6 +1371,9 @@ async function handleOnboardUser(req, res) {
       res.json(response)
     }
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1internal'
     logger.error(`Error in onboardUser endpoint (${version})`, { error: error.message })
     res.status(500).json({
@@ -1337,6 +1391,7 @@ async function handleOnboardUser(req, res) {
  * 请求体：{ "project": "项目ID" }
  * 响应：{ "buckets": [...] }
  */
+
 async function handleRetrieveUserQuota(req, res) {
   try {
     // 1. 权限检查
@@ -1413,6 +1468,12 @@ async function handleRetrieveUserQuota(req, res) {
     }
 
     // 11. 调用底层服务转发请求
+    await accountAccessService.assertAllowed(
+      typeof accountType === 'undefined' ? 'gemini' : accountType,
+      accountId,
+      req.apiKey.id
+    )
+    client.relayAccountId = accountId
     const response = await geminiAccountService.forwardToCodeAssist(
       client,
       'retrieveUserQuota',
@@ -1422,6 +1483,9 @@ async function handleRetrieveUserQuota(req, res) {
 
     res.json(response)
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1internal'
     logger.error(`Error in retrieveUserQuota endpoint (${version})`, {
       error: error.message
@@ -1436,6 +1500,7 @@ async function handleRetrieveUserQuota(req, res) {
 /**
  * 处理 countTokens 请求
  */
+
 async function handleCountTokens(req, res) {
   try {
     if (!ensureGeminiPermission(req, res)) {
@@ -1518,6 +1583,11 @@ async function handleCountTokens(req, res) {
       }
 
       try {
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         const apiResponse = await axios(axiosConfig)
         response = {
           totalTokens: apiResponse.data.totalTokens || 0,
@@ -1525,6 +1595,9 @@ async function handleCountTokens(req, res) {
           ...apiResponse.data
         }
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         logger.error('Gemini API countTokens request failed:', {
           status: error.response?.status,
           data: error.response?.data
@@ -1540,11 +1613,20 @@ async function handleCountTokens(req, res) {
         proxyConfig,
         account.oauthProvider
       )
+      client.relayAccountId = accountId
+      await accountAccessService.assertAllowed(
+        typeof accountType === 'undefined' ? 'gemini' : accountType,
+        accountId,
+        req.apiKey.id
+      )
       response = await geminiAccountService.countTokens(client, contents, model, proxyConfig)
     }
 
     res.json(response)
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1'
     logger.error(`Error in countTokens endpoint (${version})`, { error: error.message })
     res.status(500).json({
@@ -1560,6 +1642,7 @@ async function handleCountTokens(req, res) {
 /**
  * 处理 generateContent 请求（v1internal 格式）
  */
+
 async function handleGenerateContent(req, res) {
   let accountId = null
   let accountType = null
@@ -1659,6 +1742,7 @@ async function handleGenerateContent(req, res) {
       proxyConfig,
       account.oauthProvider
     )
+    client.relayAccountId = accountId
 
     // 智能处理项目ID：优先使用配置的 projectId，降级到临时 tempProjectId
     let effectiveProjectId = account.projectId || account.tempProjectId || null
@@ -1669,6 +1753,11 @@ async function handleGenerateContent(req, res) {
     if (!effectiveProjectId && oauthProvider !== 'antigravity') {
       try {
         logger.info('📋 No projectId available, attempting to fetch from loadCodeAssist...')
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         const loadResponse = await geminiAccountService.loadCodeAssist(client, null, proxyConfig)
 
         if (loadResponse.cloudaicompanionProject) {
@@ -1709,6 +1798,12 @@ async function handleGenerateContent(req, res) {
           ? '使用临时项目ID'
           : '从loadCodeAssist获取'
     })
+
+    await accountAccessService.assertAllowed(
+      typeof accountType === 'undefined' ? 'gemini' : accountType,
+      accountId,
+      req.apiKey.id
+    )
 
     const response =
       oauthProvider === 'antigravity'
@@ -1769,12 +1864,18 @@ async function handleGenerateContent(req, res) {
           geminiNonStreamCosts
         )
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         logger.error('Failed to record Gemini usage:', error)
       }
     }
 
     res.json(version === 'v1beta' ? response.response : response)
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1internal'
     logger.error(`Error in generateContent endpoint (${version})`, {
       message: error.message,
@@ -1806,6 +1907,7 @@ async function handleGenerateContent(req, res) {
 /**
  * 处理 streamGenerateContent 请求（v1internal 格式）
  */
+
 async function handleStreamGenerateContent(req, res) {
   let abortController = null
   let accountId = null
@@ -1917,6 +2019,7 @@ async function handleStreamGenerateContent(req, res) {
       proxyConfig,
       account.oauthProvider
     )
+    client.relayAccountId = accountId
 
     // 智能处理项目ID：优先使用配置的 projectId，降级到临时 tempProjectId
     let effectiveProjectId = account.projectId || account.tempProjectId || null
@@ -1927,6 +2030,11 @@ async function handleStreamGenerateContent(req, res) {
     if (!effectiveProjectId && oauthProvider !== 'antigravity') {
       try {
         logger.info('📋 No projectId available, attempting to fetch from loadCodeAssist...')
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         const loadResponse = await geminiAccountService.loadCodeAssist(client, null, proxyConfig)
 
         if (loadResponse.cloudaicompanionProject) {
@@ -1966,6 +2074,12 @@ async function handleStreamGenerateContent(req, res) {
           ? '使用临时项目ID'
           : '从loadCodeAssist获取'
     })
+
+    await accountAccessService.assertAllowed(
+      typeof accountType === 'undefined' ? 'gemini' : accountType,
+      accountId,
+      req.apiKey.id
+    )
 
     const streamResponse =
       oauthProvider === 'antigravity'
@@ -2072,9 +2186,15 @@ async function handleStreamGenerateContent(req, res) {
             }
           }
         } catch (error) {
+          if (accountAccessService.respondIfDenied(res, error)) {
+            return
+          }
           logger.warn('⚠️ Error extracting usage data:', error.message)
         }
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         logger.error('Error processing stream chunk:', error)
       }
     })
@@ -2170,6 +2290,9 @@ async function handleStreamGenerateContent(req, res) {
       }
     })
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1internal'
     logger.error(`Error in streamGenerateContent endpoint (${version})`, {
       message: error.message,
@@ -2212,6 +2335,7 @@ async function handleStreamGenerateContent(req, res) {
 /**
  * 处理标准 Gemini API 格式的 generateContent（支持 OAuth 和 API 账户）
  */
+
 async function handleStandardGenerateContent(req, res) {
   let account = null
   let sessionHash = null
@@ -2360,9 +2484,17 @@ async function handleStandardGenerateContent(req, res) {
       }
 
       try {
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         const apiResponse = await axios(axiosConfig)
         response = { response: apiResponse.data }
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         logger.error('Gemini API request failed:', {
           status: error.response?.status,
           statusText: error.response?.statusText,
@@ -2373,6 +2505,7 @@ async function handleStandardGenerateContent(req, res) {
     } else {
       // OAuth 账户
       const { accessToken, refreshToken } = account
+      await accountAccessService.assertAllowed('gemini', account.id, req.apiKey.id)
       const oauthProvider = account.oauthProvider || 'gemini-cli'
       const client = await geminiAccountService.getOauthClient(
         accessToken,
@@ -2380,6 +2513,7 @@ async function handleStandardGenerateContent(req, res) {
         proxyConfig,
         oauthProvider
       )
+      client.relayAccountId = accountId
 
       let effectiveProjectId = account.projectId || account.tempProjectId || null
 
@@ -2392,6 +2526,11 @@ async function handleStandardGenerateContent(req, res) {
       } else if (!effectiveProjectId) {
         try {
           logger.info('📋 No projectId available, attempting to fetch from loadCodeAssist...')
+          await accountAccessService.assertAllowed(
+            typeof accountType === 'undefined' ? 'gemini' : accountType,
+            accountId,
+            req.apiKey.id
+          )
           const loadResponse = await geminiAccountService.loadCodeAssist(client, null, proxyConfig)
 
           if (loadResponse.cloudaicompanionProject) {
@@ -2428,6 +2567,11 @@ async function handleStandardGenerateContent(req, res) {
       const userPromptId = `${crypto.randomUUID()}########0`
 
       if (oauthProvider === 'antigravity') {
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         response = await geminiAccountService.generateContentAntigravity(
           client,
           { model, request: actualRequestData },
@@ -2437,6 +2581,11 @@ async function handleStandardGenerateContent(req, res) {
           proxyConfig
         )
       } else {
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         response = await geminiAccountService.generateContent(
           client,
           { model, request: actualRequestData },
@@ -2475,12 +2624,18 @@ async function handleStandardGenerateContent(req, res) {
           `📊 Recorded Gemini usage - Input: ${usage.promptTokenCount}, Output: ${usage.candidatesTokenCount}, Total: ${usage.totalTokenCount}`
         )
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         logger.error('Failed to record Gemini usage:', error)
       }
     }
 
     res.json(response.response || response)
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     logger.error(`Error in standard generateContent endpoint`, {
       message: error.message,
       status: error.response?.status,
@@ -2509,6 +2664,7 @@ async function handleStandardGenerateContent(req, res) {
 /**
  * 处理标准 Gemini API 格式的 streamGenerateContent（支持 OAuth 和 API 账户）
  */
+
 async function handleStandardStreamGenerateContent(req, res) {
   let abortController = null
   let account = null
@@ -2685,9 +2841,17 @@ async function handleStandardStreamGenerateContent(req, res) {
       }
 
       try {
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         const apiResponse = await axios(axiosConfig)
         streamResponse = apiResponse.data
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         logger.error('Gemini API stream request failed:', {
           status: error.response?.status,
           statusText: error.response?.statusText,
@@ -2704,9 +2868,11 @@ async function handleStandardStreamGenerateContent(req, res) {
         proxyConfig,
         account.oauthProvider
       )
+      client.relayAccountId = accountId
 
       let effectiveProjectId = account.projectId || account.tempProjectId || null
 
+      await accountAccessService.assertAllowed('gemini', account.id, req.apiKey.id)
       const oauthProvider = account.oauthProvider || 'gemini-cli'
 
       if (oauthProvider === 'antigravity') {
@@ -2717,6 +2883,11 @@ async function handleStandardStreamGenerateContent(req, res) {
       } else if (!effectiveProjectId) {
         try {
           logger.info('📋 No projectId available, attempting to fetch from loadCodeAssist...')
+          await accountAccessService.assertAllowed(
+            typeof accountType === 'undefined' ? 'gemini' : accountType,
+            accountId,
+            req.apiKey.id
+          )
           const loadResponse = await geminiAccountService.loadCodeAssist(client, null, proxyConfig)
 
           if (loadResponse.cloudaicompanionProject) {
@@ -2753,6 +2924,11 @@ async function handleStandardStreamGenerateContent(req, res) {
       const userPromptId = `${crypto.randomUUID()}########0`
 
       if (oauthProvider === 'antigravity') {
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         streamResponse = await geminiAccountService.generateContentStreamAntigravity(
           client,
           { model, request: actualRequestData },
@@ -2763,6 +2939,11 @@ async function handleStandardStreamGenerateContent(req, res) {
           proxyConfig
         )
       } else {
+        await accountAccessService.assertAllowed(
+          typeof accountType === 'undefined' ? 'gemini' : accountType,
+          accountId,
+          req.apiKey.id
+        )
         streamResponse = await geminiAccountService.generateContentStream(
           client,
           { model, request: actualRequestData },
@@ -2862,6 +3043,9 @@ async function handleStandardStreamGenerateContent(req, res) {
           logger.debug('📊 Captured Gemini usage data (async):', totalUsage)
         }
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         // 提取用量失败时忽略
       }
     }
@@ -2878,6 +3062,9 @@ async function handleStandardStreamGenerateContent(req, res) {
           handleEventBlock(evt)
         }
       } catch (error) {
+        if (accountAccessService.respondIfDenied(res, error)) {
+          return
+        }
         logger.error('Error processing stream chunk:', error)
       }
     })
@@ -2970,6 +3157,9 @@ async function handleStandardStreamGenerateContent(req, res) {
       }
     })
   } catch (error) {
+    if (accountAccessService.respondIfDenied(res, error)) {
+      return
+    }
     const normalizedError = await normalizeAxiosStreamError(error)
 
     logger.error(`Error in standard streamGenerateContent endpoint`, {

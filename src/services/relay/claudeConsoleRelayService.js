@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const axios = require('axios')
 const { v4: uuidv4 } = require('uuid')
 const claudeConsoleAccountService = require('../account/claudeConsoleAccountService')
@@ -296,6 +297,7 @@ class ClaudeConsoleRelayService {
         '📤 Sending request to Claude Console API with headers:',
         JSON.stringify(requestConfig.headers, null, 2)
       )
+      await accountAccessService.assertAllowed('claude-console', accountId, apiKeyData.id)
       const response = await axios(requestConfig)
 
       // 📬 请求已发送成功，立即释放队列锁（无需等待响应处理完成）
@@ -836,6 +838,7 @@ class ClaudeConsoleRelayService {
     requestOptions = {},
     onResponseHeaderReceived = null
   ) {
+    await accountAccessService.assertAllowed('claude-console', accountId)
     return new Promise((resolve, reject) => {
       let aborted = false
       let settled = false

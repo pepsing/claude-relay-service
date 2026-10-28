@@ -1,3 +1,4 @@
+const accountAccessService = require('../accountAccessService')
 const {
   supportsImageRequest,
   imageCapabilityDescription
@@ -723,7 +724,7 @@ class OpenAIResponsesRelayService {
         signal: abortController.signal
       }
       if (options.imageContent) {
-        const origin = new URL(targetUrl).origin
+        const { origin } = new URL(targetUrl)
         requestOptions.maxRedirects = 5
         requestOptions.beforeRedirect = (redirect) => {
           const destination = new URL(
@@ -765,6 +766,7 @@ class OpenAIResponsesRelayService {
 
       // 排队已结束，从真正发起本次上游请求开始计时；重试会覆盖为最后一次尝试。
       startUpstreamAttemptTiming(req)
+      await accountAccessService.assertAllowed('openai-responses', account.id, apiKeyData.id)
       const response = await axios(requestOptions)
       upstreamResponse = response
       ensureRequestTiming(req).upstreamResponseHeadersAt = Date.now()
@@ -1021,6 +1023,9 @@ class OpenAIResponsesRelayService {
       removeClientListeners()
       logger.error('OpenAI-Responses relay error:', errorInfo)
 
+      if (accountAccessService.respondIfDenied(res, error)) {
+        return
+      }
       if (error.statusCode) {
         deferRetryableError(error.statusCode, {
           error: {

@@ -1,3 +1,6 @@
+jest.mock('../src/models/redis', () => ({
+  getClientSafe: () => ({ get: jest.fn().mockResolvedValue(null) })
+}))
 const mockRouter = {
   get: jest.fn(),
   post: jest.fn()

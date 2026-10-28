@@ -266,7 +266,8 @@ async function request({
   stream = false,
   signal = null,
   params = null,
-  timeoutMs = null
+  timeoutMs = null,
+  beforeRequest = null
 }) {
   const { model, envelope } = buildAntigravityEnvelope({
     requestData,
@@ -405,6 +406,9 @@ async function request({
           headers: axiosConfig.headers,
           envelope
         }).catch(() => {})
+        if (beforeRequest) {
+          await beforeRequest()
+        }
         const response = await axios(axiosConfig)
         return { model, response }
       } catch (error) {

@@ -42,6 +42,7 @@ const createManagementV1Router = require('./managementV1')
 router.use('/management/v1', createManagementV1Router())
 
 // 使用完整路径的模块（直接挂载到根路径）
+router.use('/', require('./accountAccess'))
 router.use('/', apiKeysRoutes)
 router.use('/', claudeAccountsRoutes)
 router.use('/', claudeConsoleAccountsRoutes)
