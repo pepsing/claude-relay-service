@@ -185,28 +185,32 @@ class PricingService {
   // 获取远端哈希值
   fetchRemoteHash() {
     return new Promise((resolve, reject) => {
-      const request = https.get(this.hashUrl, (response) => {
-        if (response.statusCode !== 200) {
-          reject(new Error(`哈希文件获取失败：HTTP ${response.statusCode}`))
-          return
-        }
-
-        let data = ''
-        response.on('data', (chunk) => {
-          data += chunk
-        })
-
-        response.on('end', () => {
-          const hash = data.trim().split(/\s+/)[0]
-
-          if (!hash) {
-            reject(new Error('哈希文件内容为空'))
+      const request = https.get(
+        this.hashUrl,
+        { signal: AbortSignal.timeout(30000) },
+        (response) => {
+          if (response.statusCode !== 200) {
+            reject(new Error(`哈希文件获取失败：HTTP ${response.statusCode}`))
             return
           }
 
-          resolve(hash)
-        })
-      })
+          let data = ''
+          response.on('data', (chunk) => {
+            data += chunk
+          })
+
+          response.on('end', () => {
+            const hash = data.trim().split(/\s+/)[0]
+
+            if (!hash) {
+              reject(new Error('哈希文件内容为空'))
+              return
+            }
+
+            resolve(hash)
+          })
+        }
+      )
 
       request.on('error', (error) => {
         reject(new Error(`网络错误：${error.message}`))
@@ -247,43 +251,47 @@ class PricingService {
   // 实际的下载逻辑
   _downloadFromRemote() {
     return new Promise((resolve, reject) => {
-      const request = https.get(this.pricingUrl, (response) => {
-        if (response.statusCode !== 200) {
-          reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`))
-          return
-        }
-
-        const chunks = []
-        response.on('data', (chunk) => {
-          const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-          chunks.push(bufferChunk)
-        })
-
-        response.on('end', () => {
-          try {
-            const buffer = Buffer.concat(chunks)
-            const rawContent = buffer.toString('utf8')
-            const jsonData = JSON.parse(rawContent)
-
-            // 保存到文件并更新哈希
-            fs.writeFileSync(this.pricingFile, rawContent)
-            this.persistLocalHash(buffer)
-
-            // 更新内存中的数据
-            this.pricingData = jsonData
-            this.lastUpdated = new Date()
-
-            logger.success(`Downloaded pricing data for ${Object.keys(jsonData).length} models`)
-
-            // 设置或重新设置文件监听器
-            this.setupFileWatcher()
-
-            resolve()
-          } catch (error) {
-            reject(new Error(`Failed to parse pricing data: ${error.message}`))
+      const request = https.get(
+        this.pricingUrl,
+        { signal: AbortSignal.timeout(30000) },
+        (response) => {
+          if (response.statusCode !== 200) {
+            reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`))
+            return
           }
-        })
-      })
+
+          const chunks = []
+          response.on('data', (chunk) => {
+            const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+            chunks.push(bufferChunk)
+          })
+
+          response.on('end', () => {
+            try {
+              const buffer = Buffer.concat(chunks)
+              const rawContent = buffer.toString('utf8')
+              const jsonData = JSON.parse(rawContent)
+
+              // 保存到文件并更新哈希
+              fs.writeFileSync(this.pricingFile, rawContent)
+              this.persistLocalHash(buffer)
+
+              // 更新内存中的数据
+              this.pricingData = jsonData
+              this.lastUpdated = new Date()
+
+              logger.success(`Downloaded pricing data for ${Object.keys(jsonData).length} models`)
+
+              // 设置或重新设置文件监听器
+              this.setupFileWatcher()
+
+              resolve()
+            } catch (error) {
+              reject(new Error(`Failed to parse pricing data: ${error.message}`))
+            }
+          })
+        }
+      )
 
       request.on('error', (error) => {
         reject(new Error(`Network error: ${error.message}`))
