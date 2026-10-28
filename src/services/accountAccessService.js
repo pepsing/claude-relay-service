@@ -247,7 +247,8 @@ async function getCatalog() {
   const accounts = (
     await Promise.all(
       Object.entries(services).map(async ([type, module]) => {
-        const result = await require(`./account/${module}`).getAllAccounts()
+        // Include paused accounts so administrators can grant access before enabling them.
+        const result = await require(`./account/${module}`).getAllAccounts(true)
         const values = Array.isArray(result) ? result : result.data || []
         return values.map((account) => ({
           ref: accountRef(type, account.id),
